@@ -4,6 +4,12 @@ export type FrameColorInspection = {
     codedHeight: number;
     displayWidth: number;
     displayHeight: number;
+    visibleRect: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | null;
     timestamp: number;
     duration: number | null;
     colorSpace: {

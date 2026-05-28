@@ -23,6 +23,12 @@ function inspectFrame(frame) {
     codedHeight: frame.codedHeight,
     displayWidth: frame.displayWidth,
     displayHeight: frame.displayHeight,
+    visibleRect: frame.visibleRect ? {
+      x: frame.visibleRect.x,
+      y: frame.visibleRect.y,
+      width: frame.visibleRect.width,
+      height: frame.visibleRect.height
+    } : null,
     timestamp: frame.timestamp,
     duration: frame.duration ?? null,
     colorSpace: {
@@ -94,16 +100,17 @@ async function resizeFrameRaw(frame, options) {
   if (!format) throw new Error("Cannot raw-resize a VideoFrame with unknown format");
   const descriptor = describePlanarFormat(format);
   if (!descriptor) throw new Error(`Raw resize does not support VideoFrame format ${format}`);
-  const sourceLayout = await getNativeLayout(frame);
-  const source = new Uint8Array(frame.allocationSize());
-  await frame.copyTo(source, { layout: sourceLayout });
+  const sourceRect = visibleRectForCopy(frame);
+  const sourceLayout = await getNativeLayout(frame, sourceRect);
+  const source = new Uint8Array(frame.allocationSize({ rect: sourceRect }));
+  await frame.copyTo(source, { layout: sourceLayout, rect: sourceRect });
   const destinationLayout = makeDestinationLayout(descriptor, options.width, options.height);
   const destination = new Uint8Array(allocationFromLayout(destinationLayout, descriptor, options.width, options.height));
   const algorithm = options.algorithm ?? "bilinear";
   for (let planeIndex = 0; planeIndex < descriptor.planes.length; planeIndex++) {
     const plane = descriptor.planes[planeIndex];
-    const srcWidth = planeDimension(frame.codedWidth, plane.subsampleX);
-    const srcHeight = planeDimension(frame.codedHeight, plane.subsampleY);
+    const srcWidth = planeDimension(sourceRect.width, plane.subsampleX);
+    const srcHeight = planeDimension(sourceRect.height, plane.subsampleY);
     const dstWidth = planeDimension(options.width, plane.subsampleX);
     const dstHeight = planeDimension(options.height, plane.subsampleY);
     resizePlane({
@@ -116,6 +123,7 @@ async function resizeFrameRaw(frame, options) {
       destinationWidth: dstWidth,
       destinationHeight: dstHeight,
       bytesPerSample: descriptor.bytesPerSample,
+      samplesPerPixel: plane.samplesPerPixel ?? 1,
       algorithm
     });
   }
@@ -147,6 +155,8 @@ function copyArrayBuffer(data) {
 }
 function describePlanarFormat(format) {
   switch (format) {
+    case "NV12":
+      return { bytesPerSample: 1, planes: [{ subsampleX: 1, subsampleY: 1 }, { subsampleX: 2, subsampleY: 2, samplesPerPixel: 2 }] };
     case "I420":
       return { bytesPerSample: 1, planes: [{ subsampleX: 1, subsampleY: 1 }, { subsampleX: 2, subsampleY: 2 }, { subsampleX: 2, subsampleY: 2 }] };
     case "I422":
@@ -163,16 +173,25 @@ function describePlanarFormat(format) {
       return null;
   }
 }
-async function getNativeLayout(frame) {
-  const scratch = new Uint8Array(frame.allocationSize());
-  return frame.copyTo(scratch);
+async function getNativeLayout(frame, rect) {
+  const scratch = new Uint8Array(frame.allocationSize({ rect }));
+  return frame.copyTo(scratch, { rect });
+}
+function visibleRectForCopy(frame) {
+  const rect = frame.visibleRect;
+  return {
+    x: rect?.x ?? 0,
+    y: rect?.y ?? 0,
+    width: rect?.width ?? frame.codedWidth,
+    height: rect?.height ?? frame.codedHeight
+  };
 }
 function makeDestinationLayout(descriptor, width, height) {
   let offset = 0;
   return descriptor.planes.map((plane) => {
     const planeWidth = planeDimension(width, plane.subsampleX);
     const planeHeight = planeDimension(height, plane.subsampleY);
-    const stride = planeWidth * descriptor.bytesPerSample;
+    const stride = planeWidth * (plane.samplesPerPixel ?? 1) * descriptor.bytesPerSample;
     const layout = { offset, stride };
     offset += stride * planeHeight;
     return layout;
@@ -191,44 +210,50 @@ function resizePlane(options) {
     const sourceY = mapPixelCenter(y, options.destinationHeight, options.sourceHeight);
     for (let x = 0; x < options.destinationWidth; x++) {
       const sourceX = mapPixelCenter(x, options.destinationWidth, options.sourceWidth);
-      const value = options.algorithm === "nearest" ? sampleNearest(options, sourceX, sourceY) : sampleBilinear(options, sourceX, sourceY);
-      writeSample(options.destination, options.destinationLayout, x, y, options.bytesPerSample, value);
+      const value = options.algorithm === "nearest" ? sampleNearest(options, sourceX, sourceY, 0) : sampleBilinear(options, sourceX, sourceY, 0);
+      writeSample(options.destination, options.destinationLayout, x, y, options.bytesPerSample, options.samplesPerPixel, 0, value);
+      if (options.samplesPerPixel === 2) {
+        const secondValue = options.algorithm === "nearest" ? sampleNearest(options, sourceX, sourceY, 1) : sampleBilinear(options, sourceX, sourceY, 1);
+        writeSample(options.destination, options.destinationLayout, x, y, options.bytesPerSample, options.samplesPerPixel, 1, secondValue);
+      }
     }
   }
 }
 function mapPixelCenter(position, destinationSize, sourceSize) {
   return (position + 0.5) * sourceSize / destinationSize - 0.5;
 }
-function sampleNearest(options, x, y) {
+function sampleNearest(options, x, y, component) {
   return readSample(
     options.source,
     options.sourceLayout,
     clamp(Math.round(x), 0, options.sourceWidth - 1),
     clamp(Math.round(y), 0, options.sourceHeight - 1),
-    options.bytesPerSample
+    options.bytesPerSample,
+    options.samplesPerPixel,
+    component
   );
 }
-function sampleBilinear(options, x, y) {
+function sampleBilinear(options, x, y, component) {
   const x0 = clamp(Math.floor(x), 0, options.sourceWidth - 1);
   const y0 = clamp(Math.floor(y), 0, options.sourceHeight - 1);
   const x1 = clamp(x0 + 1, 0, options.sourceWidth - 1);
   const y1 = clamp(y0 + 1, 0, options.sourceHeight - 1);
   const tx = clamp(x - x0, 0, 1);
   const ty = clamp(y - y0, 0, 1);
-  const a = readSample(options.source, options.sourceLayout, x0, y0, options.bytesPerSample);
-  const b = readSample(options.source, options.sourceLayout, x1, y0, options.bytesPerSample);
-  const c = readSample(options.source, options.sourceLayout, x0, y1, options.bytesPerSample);
-  const d = readSample(options.source, options.sourceLayout, x1, y1, options.bytesPerSample);
+  const a = readSample(options.source, options.sourceLayout, x0, y0, options.bytesPerSample, options.samplesPerPixel, component);
+  const b = readSample(options.source, options.sourceLayout, x1, y0, options.bytesPerSample, options.samplesPerPixel, component);
+  const c = readSample(options.source, options.sourceLayout, x0, y1, options.bytesPerSample, options.samplesPerPixel, component);
+  const d = readSample(options.source, options.sourceLayout, x1, y1, options.bytesPerSample, options.samplesPerPixel, component);
   return Math.round(
     a * (1 - tx) * (1 - ty) + b * tx * (1 - ty) + c * (1 - tx) * ty + d * tx * ty
   );
 }
-function readSample(data, layout, x, y, bytesPerSample) {
-  const offset = layout.offset + y * layout.stride + x * bytesPerSample;
+function readSample(data, layout, x, y, bytesPerSample, samplesPerPixel, component) {
+  const offset = layout.offset + y * layout.stride + (x * samplesPerPixel + component) * bytesPerSample;
   return bytesPerSample === 1 ? data[offset] : data[offset] | data[offset + 1] << 8;
 }
-function writeSample(data, layout, x, y, bytesPerSample, value) {
-  const offset = layout.offset + y * layout.stride + x * bytesPerSample;
+function writeSample(data, layout, x, y, bytesPerSample, samplesPerPixel, component, value) {
+  const offset = layout.offset + y * layout.stride + (x * samplesPerPixel + component) * bytesPerSample;
   data[offset] = value;
   if (bytesPerSample === 2) data[offset + 1] = value >> 8;
 }

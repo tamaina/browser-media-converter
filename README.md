@@ -10,6 +10,8 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-avif-lab/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
 - `@browser-avif-lab/mediabunny-hls`: converts MP4/MOV input into HLS `m3u8` plus MPEG-TS segments with Mediabunny.
 - `@browser-avif-lab/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the shared minimal muxer.
+- `@browser-avif-lab/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, limited EXIF policies, and color-aware raw resize.
+- `@browser-avif-lab/browser-movie-converter`: movie converter using Mediabunny for container/codec work, with WebCodecs color-aware raw resize and scene-keyframe planning.
 
 ## Commands
 
@@ -21,6 +23,9 @@ pnpm --filter @browser-avif-lab/webcodecs-color test:electron
 node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 pnpm --filter @browser-avif-lab/mediabunny-hls test:electron
 pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
+pnpm --filter @browser-avif-lab/browser-image-resizer-ex build
+pnpm --filter @browser-avif-lab/browser-movie-converter build
+pnpm --filter @browser-avif-lab/browser-movie-converter test:electron
 ```
 
 `P2180334.jpg` is used by the AVIF smoke script when present; otherwise it falls back to `fujioka.jpg`.
@@ -38,6 +43,7 @@ Verified outputs:
 
 - HLS assets: `playground-output/hls-electron`
 - Scene-keyframe transcode: `playground-output/scene-keyframes-electron/scene-keyframes.mp4`
+- Raw-resized movie conversion: `playground-output/movie-converter-electron/resized.mp4`
 
 ## HDR and wide-gamut resize
 
@@ -46,7 +52,8 @@ Verified outputs:
 - `decodeImageToVideoFrame` decodes `hdrrec2020.avif` with `ImageDecoder`.
 - `inspectFrame` reads `VideoFrame.format` and `VideoFrame.colorSpace`.
 - `resizeFrameRaw` uses `VideoFrame.copyTo()` plus a self-managed planar resizer, then creates a new `VideoFrame` from the resized buffer.
-- Supported raw resize formats are `I420`, `I422`, `I444`, and Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`.
+- `resizeFrameRaw` reads `visibleRect` rather than coded padding, avoiding padded bottom/right rows in raw output.
+- Supported raw resize formats are `NV12`, `I420`, `I422`, `I444`, and Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`.
 - `resizeFrameWithCanvas` remains only as a comparison path.
 
 Current Electron result for `hdrrec2020.avif`:

@@ -37,7 +37,7 @@ console.log(resized.inspection);
 resized.frame.close();
 ```
 
-`resizeFrameRaw` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from resized planar data. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
+`resizeFrameRaw` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from resized planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into the resize. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
 
 ## Comparison Helpers
 
@@ -50,7 +50,7 @@ const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 })
 
 ## Supported Raw Resize Formats
 
-- `I420`, `I422`, `I444`
+- `NV12`, `I420`, `I422`, `I444`
 - Chromium 10-bit formats observed via WebCodecs: `I420P10`, `I422P10`, `I444P10`
 
 ## Commands

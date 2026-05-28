@@ -113,7 +113,7 @@ Implemented `@browser-avif-lab/webcodecs-color`.
 - Provides `copyFrameToRgba` for `VideoFrame.copyTo({ format, colorSpace })`.
 - Provides `resizeFrameRaw` for Canvas-free planar resize through `VideoFrame.copyTo()` and `new VideoFrame(buffer, init)`.
 - `resizeFrameRaw` currently uses CPU-side nearest/bilinear sampling per plane; no Canvas, WebGL, or WebGPU is involved.
-- Keeps native planar formats for supported YUV inputs (`I420`, `I422`, `I444`, and 10-bit `I420P10`/`I422P10`/`I444P10` in Chromium).
+- Keeps native planar formats for supported YUV inputs (`NV12`, `I420`, `I422`, `I444`, and 10-bit `I420P10`/`I422P10`/`I444P10` in Chromium).
 - Provides `resizeFrameWithCanvas` as a comparison path, not the HDR-preserving path.
 
 Verified with `hdrrec2020.avif` in Electron:
@@ -127,4 +127,50 @@ Command:
 
 ```sh
 pnpm --filter @browser-avif-lab/webcodecs-color test:electron
+```
+
+## 6. Browser Image Resizer EX
+
+Implemented `@browser-avif-lab/browser-image-resizer-ex`.
+
+- Provides `resizeAndConvertImage` and `resizeImageToAvif`.
+- Decodes image bytes to `VideoFrame` with `ImageDecoder`.
+- Uses `webcodecs-color` to inspect color space and choose raw planar resize for HDR-like frames when available.
+- Encodes AVIF with `webcodecs-avif`; JPEG/WebP currently use `OffscreenCanvas.convertToBlob`.
+- Supports limited EXIF policy: `keep`, `drop`, and byte-level `drop-gps` through `exif-transplant`.
+
+Current limitation:
+
+- JPEG/WebP output is Canvas-based and is not a strict HDR-preserving path.
+- AVIF EXIF write uses the minimal AVIF remuxer, so nonessential source AVIF boxes are not preserved.
+
+## 7. Browser Movie Converter
+
+Implemented `@browser-avif-lab/browser-movie-converter`.
+
+- Provides `convertMovie` on top of Mediabunny `Conversion` for container/codec work.
+- Supports MP4/MOV/WebM input formats.
+- Uses `mediabunny-scene-keyframes` to build a scene plan and recommended `keyFrameInterval`.
+- Re-exports an HLS conversion helper through `convertMovieToHls`.
+- Reports input video color metadata with `inspectVideoTrackColor`/`inspectMovie`.
+- Uses `webcodecs-color.resizeFrameRaw` inside `Conversion.video.process` when `resize` is set, so resizing can keep planar YUV sample data on a non-Canvas path.
+- Movie resize dimensions default to 2-pixel alignment to avoid odd-size 4:2:0/NV12 artifacts and common encoder constraints.
+- `resize.path: 'mediabunny'` is available as an explicit fallback to Mediabunny's built-in resize.
+- `colorMetadata: 'copy'` copies the source sample `VideoColorSpace` metadata onto raw-resized samples. This is metadata preservation, not a color-correction step.
+
+Current limitation:
+
+- Raw resize requires a `VideoFrame` format supported by `webcodecs-color` (`NV12`, `I420`, `I422`, `I444`, and Chromium 10-bit variants). Unsupported formats fail unless `resize.path: 'mediabunny'` is selected.
+- `resize.path: 'mediabunny'` may still lose or rewrite color metadata because it uses Mediabunny's built-in resize path.
+- Mediabunny exposes `keyFrameInterval` here, not exact per-frame keyframe forcing. Scene timestamps are returned in the plan for callers and future hooks.
+
+Verified with Electron's Chromium build:
+
+- `bbb.mov` converted to `playground-output/movie-converter-electron/resized.mp4`.
+- `resize: { width: 320, path: 'raw' }` produced `320x180`.
+
+Command:
+
+```sh
+pnpm --filter @browser-avif-lab/browser-movie-converter test:electron
 ```
