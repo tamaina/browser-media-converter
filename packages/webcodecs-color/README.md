@@ -39,6 +39,12 @@ resized.frame.close();
 
 `resizeFrameRaw` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from resized planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into the resize. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
 
+### Why Not WebGPU?
+
+This package intentionally keeps the raw resize path on CPU for now. A WebGPU compute path still needs `VideoFrame.copyTo()` to get planar bytes, then CPU-side packing/unpacking, GPU upload, compute dispatch, readback, and finally `new VideoFrame(buffer, init)`. For still images and short animation frames, that transfer/readback cost can easily dominate the resize itself.
+
+WebGPU may become useful if the pipeline can keep frames on the GPU for several operations in a row, or if browsers expose a practical zero-copy `VideoFrame` to writable planar output path. Until then, the CPU planar path is simpler, easier to test, and preserves WebCodecs color metadata without pretending to be a full HDR color-management pipeline.
+
 ## Comparison Helpers
 
 ```ts

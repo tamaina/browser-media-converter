@@ -135,7 +135,7 @@ export async function resizeFrameForColor(
   const warnings: string[] = [];
   const requestedPath = options.resizePath ?? 'auto';
   const color = classifyFrameColor(frame);
-  const shouldTryRaw = requestedPath === 'raw' || (requestedPath === 'auto' && color.recommendedPath === 'raw-or-webgpu-hdr');
+  const shouldTryRaw = requestedPath === 'raw' || (requestedPath === 'auto' && color.recommendedPath === 'raw-hdr');
 
   if (shouldTryRaw) {
     try {
@@ -151,7 +151,7 @@ export async function resizeFrameForColor(
   }
 
   const resized = resizeFrameWithCanvas(frame, size);
-  if (color.recommendedPath === 'raw-or-webgpu-hdr') {
+  if (color.recommendedPath === 'raw-hdr') {
     warnings.push('Canvas fallback may collapse HDR/BT.2020 content to sRGB or Display P3.');
   }
   return { frame: resized.frame, path: 'canvas', warnings };

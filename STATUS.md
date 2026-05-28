@@ -111,17 +111,18 @@ Implemented `@browser-avif-lab/webcodecs-color`.
 
 - Decodes image bytes to `VideoFrame` with `ImageDecoder`.
 - Inspects `VideoFrame.format`, dimensions, and `VideoColorSpace`.
-- Classifies frames into SDR Canvas, Display P3 Canvas, or raw/WebGPU HDR-like paths.
+- Classifies frames into SDR Canvas, Display P3 Canvas, or raw HDR-like paths.
 - Provides `copyFrameToRgba` for `VideoFrame.copyTo({ format, colorSpace })`.
 - Provides `resizeFrameRaw` for Canvas-free planar resize through `VideoFrame.copyTo()` and `new VideoFrame(buffer, init)`.
 - `resizeFrameRaw` currently uses CPU-side nearest/bilinear sampling per plane; no Canvas, WebGL, or WebGPU is involved.
+- WebGPU resize was not kept: with the current WebCodecs APIs it still requires CPU `copyTo()`, planar packing/unpacking, GPU upload, GPU readback, and `new VideoFrame(buffer, init)`, so transfer overhead is likely to dominate unless a larger GPU-resident pipeline is built.
 - Keeps native planar formats for supported YUV inputs (`NV12`, `I420`, `I422`, `I444`, and 10-bit `I420P10`/`I422P10`/`I444P10` in Chromium).
 - Provides `resizeFrameWithCanvas` as a comparison path, not the HDR-preserving path.
 
 Verified with `hdrrec2020.avif` in Electron:
 
 - Decoded frame: `I444P10`, `2048x1365`, `primaries: bt2020`, `matrix: bt2020-ncl`, `fullRange: true`.
-- Classification: HDR-like, recommended path `raw-or-webgpu-hdr`.
+- Classification: HDR-like, recommended path `raw-hdr`.
 - Raw resize result: `I444P10`, `1024x682`, `primaries: bt2020`, `matrix: bt2020-ncl`, showing a Canvas-free resize path can keep the decoded planar format and color metadata.
 - Canvas resize comparison becomes `BGRA` with `primaries: smpte432`, showing that Canvas resize is not a lossless BT.2020/HDR round trip.
 

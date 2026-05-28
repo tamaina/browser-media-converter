@@ -79,7 +79,7 @@ const result = await page.evaluate(async ({ port }) => {
 assert.equal(result.inspection.displayWidth > 0, true);
 assert.equal(result.inspection.displayHeight > 0, true);
 assert.equal(result.classification.isHdrLike, true);
-assert.equal(result.classification.recommendedPath, 'raw-or-webgpu-hdr');
+assert.equal(result.classification.recommendedPath, 'raw-hdr');
 assert.equal(result.rawResize.format, result.inspection.format);
 assert.equal(result.resizedInspection.displayWidth, Math.max(1, Math.floor(result.inspection.displayWidth / 2)));
 assert.equal(result.resizedInspection.displayHeight, Math.max(1, Math.floor(result.inspection.displayHeight / 2)));

@@ -25,7 +25,7 @@ export type FrameColorClassification = {
   isWideGamut: boolean;
   isHdrLike: boolean;
   canvasColorSpace: PredefinedColorSpace;
-  recommendedPath: 'canvas-sdr' | 'canvas-display-p3' | 'raw-or-webgpu-hdr';
+  recommendedPath: 'canvas-sdr' | 'canvas-display-p3' | 'raw-hdr';
   notes: string[];
 };
 
@@ -126,7 +126,7 @@ export function classifyFrameColor(frameOrInspection: VideoFrame | FrameColorIns
   const isSimpleSdr = isBt709OrUnknown && !isHdrTransfer;
   const canvasColorSpace: PredefinedColorSpace = isWideGamut ? 'display-p3' : 'srgb';
   const recommendedPath = isHdrLike
-    ? 'raw-or-webgpu-hdr'
+    ? 'raw-hdr'
     : (isWideGamut ? 'canvas-display-p3' : 'canvas-sdr');
   const notes = [];
 
