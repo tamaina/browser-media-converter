@@ -112,6 +112,7 @@ Implemented `@browser-avif-lab/webcodecs-color`.
 - Classifies frames into SDR Canvas, Display P3 Canvas, or raw/WebGPU HDR-like paths.
 - Provides `copyFrameToRgba` for `VideoFrame.copyTo({ format, colorSpace })`.
 - Provides `resizeFrameRaw` for Canvas-free planar resize through `VideoFrame.copyTo()` and `new VideoFrame(buffer, init)`.
+- `resizeFrameRaw` currently uses CPU-side nearest/bilinear sampling per plane; no Canvas, WebGL, or WebGPU is involved.
 - Keeps native planar formats for supported YUV inputs (`I420`, `I422`, `I444`, and 10-bit `I420P10`/`I422P10`/`I444P10` in Chromium).
 - Provides `resizeFrameWithCanvas` as a comparison path, not the HDR-preserving path.
 

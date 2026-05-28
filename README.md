@@ -38,3 +38,19 @@ Verified outputs:
 
 - HLS assets: `playground-output/hls-electron`
 - Scene-keyframe transcode: `playground-output/scene-keyframes-electron/scene-keyframes.mp4`
+
+## HDR and wide-gamut resize
+
+`@browser-avif-lab/webcodecs-color` is the current experiment for handling non-sRGB `VideoFrame`s without forcing them through Canvas.
+
+- `decodeImageToVideoFrame` decodes `hdrrec2020.avif` with `ImageDecoder`.
+- `inspectFrame` reads `VideoFrame.format` and `VideoFrame.colorSpace`.
+- `resizeFrameRaw` uses `VideoFrame.copyTo()` plus a self-managed planar resizer, then creates a new `VideoFrame` from the resized buffer.
+- Supported raw resize formats are `I420`, `I422`, `I444`, and Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`.
+- `resizeFrameWithCanvas` remains only as a comparison path.
+
+Current Electron result for `hdrrec2020.avif`:
+
+- Input: `I444P10`, `2048x1365`, `primaries: bt2020`, `matrix: bt2020-ncl`, `fullRange: true`
+- Raw resize: `I444P10`, `1024x682`, `primaries: bt2020`, `matrix: bt2020-ncl`
+- Canvas comparison: converts to `BGRA` with `primaries: smpte432`
