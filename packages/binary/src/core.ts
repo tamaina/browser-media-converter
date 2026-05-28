@@ -19,7 +19,9 @@ export function startsWith(data: Uint8Array, prefix: Uint8Array) {
 }
 
 export function readAscii(data: Uint8Array, offset: number, length: number) {
-  return String.fromCharCode(...data.subarray(offset, offset + length));
+  let result = '';
+  for (let i = offset; i < offset + length; i++) result += String.fromCharCode(data[i]);
+  return result;
 }
 
 export function writeAscii(data: Uint8Array, offset: number, text: string) {
@@ -42,6 +44,10 @@ export function readU16(data: Uint8Array, offset: number) {
 
 export function readU16le(data: Uint8Array, offset: number) {
   return data[offset] | (data[offset + 1] << 8);
+}
+
+export function readU24le(data: Uint8Array, offset: number) {
+  return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16);
 }
 
 export function writeU16(data: Uint8Array, offset: number, value: number) {
@@ -83,7 +89,7 @@ export function readU32(data: Uint8Array, offset: number) {
 }
 
 export function readU32le(data: Uint8Array, offset: number) {
-  return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] * 0x1000000);
+  return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16)) + data[offset + 3] * 0x1000000;
 }
 
 export function writeU32(data: Uint8Array, offset: number, value: number) {

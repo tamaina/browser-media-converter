@@ -187,9 +187,8 @@ export async function resizeFrameRaw(frame: VideoFrame, options: ResizeRawOption
   if (!descriptor) throw new Error(`Raw resize does not support VideoFrame format ${format}`);
   const sourceRect = visibleRectForCopy(frame);
 
-  const sourceLayout = await getNativeLayout(frame, sourceRect);
   const source = new Uint8Array(frame.allocationSize({ rect: sourceRect }));
-  await frame.copyTo(source, { layout: sourceLayout, rect: sourceRect });
+  const sourceLayout = await frame.copyTo(source, { rect: sourceRect });
 
   const destinationLayout = makeDestinationLayout(descriptor, options.width, options.height);
   const destination = new Uint8Array(allocationFromLayout(destinationLayout, descriptor, options.width, options.height));
@@ -271,10 +270,6 @@ function describePlanarFormat(format: string): PlanarFormatDescriptor | null {
   }
 }
 
-async function getNativeLayout(frame: VideoFrame, rect: DOMRectInit) {
-  const scratch = new Uint8Array(frame.allocationSize({ rect }));
-  return frame.copyTo(scratch, { rect });
-}
 
 function visibleRectForCopy(frame: VideoFrame): Required<Pick<DOMRectInit, 'x' | 'y' | 'width' | 'height'>> {
   const rect = frame.visibleRect;

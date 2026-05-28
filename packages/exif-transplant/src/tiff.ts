@@ -78,12 +78,17 @@ function valueByteLength(type: number, count: number) {
 }
 
 const TYPE_SIZES: Record<number, number> = {
-  1: 1,
-  2: 1,
-  3: 2,
-  4: 4,
-  5: 8,
-  7: 1,
-  9: 4,
-  10: 8,
+  1: 1,   // BYTE
+  2: 1,   // ASCII
+  3: 2,   // SHORT
+  4: 4,   // LONG
+  5: 8,   // RATIONAL
+  6: 1,   // SBYTE
+  7: 1,   // UNDEFINED
+  8: 2,   // SSHORT
+  9: 4,   // SLONG
+  10: 8,  // SRATIONAL
+  11: 4,  // FLOAT
+  12: 8,  // DOUBLE
+  13: 4,  // IFD
 };

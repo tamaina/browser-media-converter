@@ -181,7 +181,10 @@ export function findSequenceHeaderObu(data: Uint8Array) {
     const extensionFlag = (header >> 2) & 1;
     const hasSizeField = (header >> 1) & 1;
     if (extensionFlag) offset++;
-    if (!hasSizeField) return null;
+    if (!hasSizeField) {
+      if (obuType === 1) return data.slice(obuStart);
+      return null;
+    }
     const size = readLeb128(data, offset);
     offset = size.nextOffset;
     const payloadStart = offset;
@@ -242,7 +245,11 @@ function parseSequenceHeaderObu(obu: Uint8Array) {
     bits.skip(1 + 1 + 1 + 1);
     const enableOrderHint = bits.read(1);
     if (enableOrderHint) bits.skip(1 + 1);
-    if (bits.read(1) || bits.read(1)) bits.skip(1);
+    const chooseScreenContent = bits.read(1);
+    const forceScreenContent = chooseScreenContent ? 2 : bits.read(1);
+    if (forceScreenContent > 0) {
+      if (!bits.read(1)) bits.skip(1);
+    }
     if (enableOrderHint) bits.skip(3);
   }
   bits.skip(1 + 1 + 1);

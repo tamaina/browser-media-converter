@@ -13,6 +13,6 @@
   "scripts": {
     "build": "esbuild src/index.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/index.js && tsc -p tsconfig.json --emitDeclarationOnly",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build"
+    "test": "pnpm build && node --test test/core.test.mjs"
   }
 }

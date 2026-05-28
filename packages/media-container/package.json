@@ -15,7 +15,7 @@
     "build": "esbuild src/index.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/index.js && tsc -p tsconfig.json --emitDeclarationOnly",
     "pretypecheck": "pnpm --filter @browser-avif-lab/binary build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build"
+    "test": "pnpm build && node --test test/avif.test.mjs"
   },
   "dependencies": {
     "@browser-avif-lab/binary": "workspace:*"
