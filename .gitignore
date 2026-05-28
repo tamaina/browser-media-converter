@@ -1,3 +1,10 @@
-/node_modules
-/packages/*/node_modules
-/playground-output
+node_modules/
+**/node_modules/
+
+dist/
+**/dist/
+
+playground-output/
+
+.DS_Store
+*.log

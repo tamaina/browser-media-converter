@@ -8,11 +8,28 @@ import {
 } from '@browser-avif-lab/exif-transplant';
 import { encodeImageToAvif, type EncodeAvifOptions } from '@browser-avif-lab/webcodecs-avif';
 import {
+  copyArrayBuffer,
+  decodeFirstImageFrame,
+  encodeFrameWithCanvas,
+  inspectImageTrack,
+  resizeFrameForColor,
+  resolveTargetSize,
+  toUint8Array,
+  type BrowserImageResizeFit,
+  type BrowserImageResizePath,
+  type ImageInputInspection,
+} from './frame-utils.js';
+import {
+  resizeAnimatedImageToWebp as resizeAnimatedImageToWebpInternal,
+  muxAnimatedWebp,
+  type BrowserAnimatedImageResizerOptions,
+  type BrowserAnimatedImageResizerResult,
+  type AnimatedWebpFrame,
+  type AnimatedWebpMuxOptions,
+} from './animated-webp.js';
+import {
   classifyFrameColor,
-  decodeImageToVideoFrame,
   inspectFrame,
-  resizeFrameRaw,
-  resizeFrameWithCanvas,
   type FrameColorClassification,
   type FrameColorInspection,
   type ResizeRawOptions,
@@ -20,11 +37,19 @@ import {
 
 export type BrowserImageOutputMime = 'image/avif' | 'image/jpeg' | 'image/webp';
 
-export type BrowserImageResizeFit = 'contain' | 'cover' | 'fill';
-
 export type BrowserImageExifPolicy = 'keep' | 'drop' | 'drop-gps';
 
-export type BrowserImageResizePath = 'none' | 'raw' | 'canvas';
+export type BrowserImageAnimationPolicy = 'preserve' | 'first-frame' | 'error';
+
+export type {
+  AnimatedWebpFrame,
+  AnimatedWebpMuxOptions,
+  BrowserAnimatedImageResizerOptions,
+  BrowserAnimatedImageResizerResult,
+  BrowserImageResizeFit,
+  BrowserImageResizePath,
+  ImageInputInspection,
+};
 
 export type BrowserImageResizerOptions = {
   input: Blob | ArrayBuffer | Uint8Array;
@@ -34,6 +59,7 @@ export type BrowserImageResizerOptions = {
   height?: number;
   fit?: BrowserImageResizeFit;
   exif?: BrowserImageExifPolicy;
+  animation?: BrowserImageAnimationPolicy;
   colorSpaceConversion?: ColorSpaceConversion;
   resizePath?: 'auto' | 'raw' | 'canvas';
   rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
@@ -42,6 +68,7 @@ export type BrowserImageResizerOptions = {
 };
 
 export type BrowserImageResizerResult = {
+  kind: 'still';
   data: Uint8Array;
   blob: Blob;
   mime: BrowserImageOutputMime;
@@ -59,13 +86,51 @@ export type BrowserImageResizerResult = {
   warnings: string[];
 };
 
-export async function resizeAndConvertImage(options: BrowserImageResizerOptions): Promise<BrowserImageResizerResult> {
+export type BrowserImageConversionResult = BrowserImageResizerResult | BrowserAnimatedImageResizerResult;
+
+export async function inspectImageInput(
+  input: Blob | ArrayBuffer | Uint8Array,
+  inputMime?: string,
+  options: Pick<BrowserImageResizerOptions, 'colorSpaceConversion'> = {},
+): Promise<ImageInputInspection & { mime: string }> {
+  const inputBytes = await toUint8Array(input);
+  const mime = inputMime ?? detectInputMime(inputBytes, input);
+  return {
+    mime,
+    ...await inspectImageTrack(inputBytes, mime, {
+      colorSpaceConversion: options.colorSpaceConversion ?? 'none',
+    }),
+  };
+}
+
+export async function resizeAndConvertImage(options: BrowserImageResizerOptions): Promise<BrowserImageConversionResult> {
   const inputBytes = await toUint8Array(options.input);
   const inputMime = options.inputMime ?? detectInputMime(inputBytes, options.input);
-  const outputMime = options.outputMime ?? defaultOutputMime(inputMime);
+  const inputInfo = await inspectImageTrack(inputBytes, inputMime, {
+    colorSpaceConversion: options.colorSpaceConversion ?? 'none',
+  });
+  const outputMime = options.outputMime ?? defaultOutputMime(inputMime, inputInfo);
+  if (inputInfo.animated && (options.animation ?? 'preserve') !== 'first-frame') {
+    if ((options.animation ?? 'preserve') === 'error') throw new Error('Animated image input is not accepted by this conversion');
+    if (outputMime !== 'image/webp') {
+      throw new Error('Animated image conversion currently only supports image/webp output');
+    }
+    return resizeAnimatedImageToWebpInternal({
+      input: inputBytes,
+      inputMime,
+      width: options.width,
+      height: options.height,
+      fit: options.fit,
+      resizePath: options.resizePath,
+      rawResizeAlgorithm: options.rawResizeAlgorithm,
+      quality: options.quality,
+      colorSpaceConversion: options.colorSpaceConversion,
+    });
+  }
+
   const exifPolicy = options.exif ?? 'keep';
   const sourceExif = readSourceExif(inputBytes);
-  const frame = await decodeImageToVideoFrame(inputBytes, inputMime, {
+  const frame = await decodeFirstImageFrame(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
   });
 
@@ -73,7 +138,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const inputInspection = inspectFrame(frame);
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
-    const resized = await resizeForColor(frame, size, options);
+    const resized = await resizeFrameForColor(frame, size, options);
 
     try {
       const encoded = await encodeFrame(resized.frame, outputMime, {
@@ -83,6 +148,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
       const withExif = applyExifPolicy(encoded, outputMime, sourceExif, exifPolicy);
       const blob = new Blob([copyArrayBuffer(withExif)], { type: outputMime });
       return {
+        kind: 'still',
         data: withExif,
         blob,
         mime: outputMime,
@@ -108,8 +174,19 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
 }
 
 export async function resizeImageToAvif(input: Blob | ArrayBuffer | Uint8Array, options: Omit<BrowserImageResizerOptions, 'input' | 'outputMime'> = {}) {
-  return resizeAndConvertImage({ ...options, input, outputMime: 'image/avif' });
+  const result = await resizeAndConvertImage({ ...options, input, outputMime: 'image/avif' });
+  if (result.kind !== 'still') throw new Error('resizeImageToAvif does not support animated output');
+  return result;
 }
+
+export async function resizeAnimatedImageToWebp(
+  input: Blob | ArrayBuffer | Uint8Array,
+  options: Omit<BrowserAnimatedImageResizerOptions, 'input'> = {},
+): Promise<BrowserAnimatedImageResizerResult> {
+  return resizeAnimatedImageToWebpInternal({ ...options, input });
+}
+
+export { muxAnimatedWebp };
 
 function readSourceExif(data: Uint8Array) {
   try {
@@ -128,68 +205,11 @@ function detectInputMime(data: Uint8Array, input: Blob | ArrayBuffer | Uint8Arra
   }
 }
 
-function defaultOutputMime(inputMime: string): BrowserImageOutputMime {
+function defaultOutputMime(inputMime: string, inputInfo?: Pick<ImageInputInspection, 'animated'>): BrowserImageOutputMime {
+  if (inputInfo?.animated) return 'image/webp';
   return inputMime === 'image/webp' || inputMime === 'image/jpeg' || inputMime === 'image/avif'
     ? inputMime
     : 'image/avif';
-}
-
-function resolveTargetSize(sourceWidth: number, sourceHeight: number, options: Pick<BrowserImageResizerOptions, 'width' | 'height' | 'fit'>) {
-  if (options.width === undefined && options.height === undefined) {
-    return { width: sourceWidth, height: sourceHeight };
-  }
-  if (options.width !== undefined && options.height === undefined) {
-    return { width: options.width, height: Math.max(1, Math.round(sourceHeight * options.width / sourceWidth)) };
-  }
-  if (options.height !== undefined && options.width === undefined) {
-    return { width: Math.max(1, Math.round(sourceWidth * options.height / sourceHeight)), height: options.height };
-  }
-
-  const boxWidth = options.width ?? sourceWidth;
-  const boxHeight = options.height ?? sourceHeight;
-  if ((options.fit ?? 'contain') === 'fill') return { width: boxWidth, height: boxHeight };
-
-  const scale = (options.fit ?? 'contain') === 'cover'
-    ? Math.max(boxWidth / sourceWidth, boxHeight / sourceHeight)
-    : Math.min(boxWidth / sourceWidth, boxHeight / sourceHeight);
-  return {
-    width: Math.max(1, Math.round(sourceWidth * scale)),
-    height: Math.max(1, Math.round(sourceHeight * scale)),
-  };
-}
-
-async function resizeForColor(
-  frame: VideoFrame,
-  size: { width: number; height: number },
-  options: Pick<BrowserImageResizerOptions, 'resizePath' | 'rawResizeAlgorithm'>,
-): Promise<{ frame: VideoFrame; path: BrowserImageResizePath; warnings: string[] }> {
-  if (size.width === frame.displayWidth && size.height === frame.displayHeight) {
-    return { frame, path: 'none', warnings: [] };
-  }
-
-  const warnings: string[] = [];
-  const requestedPath = options.resizePath ?? 'auto';
-  const color = classifyFrameColor(frame);
-  const shouldTryRaw = requestedPath === 'raw' || (requestedPath === 'auto' && color.recommendedPath === 'raw-or-webgpu-hdr');
-
-  if (shouldTryRaw) {
-    try {
-      const resized = await resizeFrameRaw(frame, {
-        ...size,
-        algorithm: options.rawResizeAlgorithm ?? 'bilinear',
-      });
-      return { frame: resized.frame, path: 'raw', warnings };
-    } catch (error) {
-      if (requestedPath === 'raw') throw error;
-      warnings.push(`raw resize was not available and Canvas fallback was used: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  const resized = resizeFrameWithCanvas(frame, size);
-  if (color.recommendedPath === 'raw-or-webgpu-hdr') {
-    warnings.push('Canvas fallback may collapse HDR/BT.2020 content to sRGB or Display P3.');
-  }
-  return { frame: resized.frame, path: 'canvas', warnings };
 }
 
 async function encodeFrame(
@@ -208,29 +228,8 @@ async function encodeFrame(
   return encodeFrameWithCanvas(frame, mime, options.quality);
 }
 
-async function encodeFrameWithCanvas(frame: VideoFrame, mime: Exclude<BrowserImageOutputMime, 'image/avif'>, quality = 0.85) {
-  const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
-  const context = canvas.getContext('2d', { colorSpace: classifyFrameColor(frame).canvasColorSpace });
-  if (!context) throw new Error('Could not create 2D canvas context');
-  context.drawImage(frame, 0, 0);
-  const blob = await canvas.convertToBlob({ type: mime, quality });
-  return toUint8Array(blob);
-}
-
 function applyExifPolicy(data: Uint8Array, mime: ImageMime, sourceExif: ExifPayload | null, policy: BrowserImageExifPolicy) {
   if (policy === 'drop' || !sourceExif) return data;
   const exifBytes = policy === 'drop-gps' ? stripGpsFromExif(sourceExif.bytes) : sourceExif.bytes;
   return writeExif(data, exifBytes, mime);
-}
-
-function copyArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(data.byteLength);
-  copy.set(data);
-  return copy.buffer;
-}
-
-async function toUint8Array(input: Blob | ArrayBuffer | Uint8Array): Promise<Uint8Array> {
-  if (input instanceof Uint8Array) return input;
-  if (input instanceof ArrayBuffer) return new Uint8Array(input);
-  return new Uint8Array(await input.arrayBuffer());
 }

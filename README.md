@@ -6,11 +6,12 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 
 - `@browser-avif-lab/webcodecs-avif`: encodes a still image with `VideoEncoder` AV1 and muxes a minimal AVIF ISOBMFF file, including optional metadata items.
 - `@browser-avif-lab/webcodecs-color`: inspects `VideoFrame` color spaces and experiments with raw-copy and self-managed planar resize paths for SDR, wide-gamut, and HDR-like frames.
-- `@browser-avif-lab/binary`: shared byte, integer, ASCII, and ISOBMFF box helpers.
+- `@browser-avif-lab/binary`: shared byte, integer, and ASCII helpers.
+- `@browser-avif-lab/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
 - `@browser-avif-lab/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
 - `@browser-avif-lab/mediabunny-hls`: converts MP4/MOV input into HLS `m3u8` plus MPEG-TS segments with Mediabunny.
-- `@browser-avif-lab/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the shared minimal muxer.
-- `@browser-avif-lab/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, limited EXIF policies, and color-aware raw resize.
+- `@browser-avif-lab/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
+- `@browser-avif-lab/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware raw resize.
 - `@browser-avif-lab/browser-movie-converter`: movie converter using Mediabunny for container/codec work, with WebCodecs color-aware raw resize and scene-keyframe planning.
 
 ## Commands
@@ -18,12 +19,13 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 ```sh
 pnpm build
 pnpm typecheck
+pnpm --filter @browser-avif-lab/media-container build
 pnpm --filter @browser-avif-lab/exif-transplant test
 pnpm --filter @browser-avif-lab/webcodecs-color test:electron
 node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 pnpm --filter @browser-avif-lab/mediabunny-hls test:electron
 pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
-pnpm --filter @browser-avif-lab/browser-image-resizer-ex build
+pnpm --filter @browser-avif-lab/browser-image-resizer-ex test:electron
 pnpm --filter @browser-avif-lab/browser-movie-converter build
 pnpm --filter @browser-avif-lab/browser-movie-converter test:electron
 ```
@@ -43,6 +45,7 @@ Verified outputs:
 
 - HLS assets: `playground-output/hls-electron`
 - Scene-keyframe transcode: `playground-output/scene-keyframes-electron/scene-keyframes.mp4`
+- Browser image animated WebP smoke output: `playground-output/browser-image-resizer-ex`
 - Raw-resized movie conversion: `playground-output/movie-converter-electron/resized.mp4`
 
 ## HDR and wide-gamut resize

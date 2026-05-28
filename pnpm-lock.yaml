@@ -49,6 +49,9 @@ importers:
       '@browser-avif-lab/exif-transplant':
         specifier: workspace:*
         version: link:../exif-transplant
+      '@browser-avif-lab/media-container':
+        specifier: workspace:*
+        version: link:../media-container
       '@browser-avif-lab/webcodecs-avif':
         specifier: workspace:*
         version: link:../webcodecs-avif
@@ -76,9 +79,15 @@ importers:
       '@browser-avif-lab/binary':
         specifier: workspace:*
         version: link:../binary
-      '@browser-avif-lab/webcodecs-avif':
+      '@browser-avif-lab/media-container':
         specifier: workspace:*
-        version: link:../webcodecs-avif
+        version: link:../media-container
+
+  packages/media-container:
+    dependencies:
+      '@browser-avif-lab/binary':
+        specifier: workspace:*
+        version: link:../binary
 
   packages/mediabunny-hls:
     dependencies:
@@ -97,6 +106,9 @@ importers:
       '@browser-avif-lab/binary':
         specifier: workspace:*
         version: link:../binary
+      '@browser-avif-lab/media-container':
+        specifier: workspace:*
+        version: link:../media-container
 
   packages/webcodecs-color: {}
 

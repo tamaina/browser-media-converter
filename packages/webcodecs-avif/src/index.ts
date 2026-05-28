@@ -4,18 +4,18 @@ import {
   makeAv1Config,
   muxStillAvif,
   type EncodedStillAv1,
-} from './mux.js';
+} from '@browser-avif-lab/media-container';
 
 export type {
   AvifMetadataItem,
   EncodedStillAv1,
   MuxStillAvifOptions,
-} from './mux.js';
+} from '@browser-avif-lab/media-container';
 export {
   findSequenceHeaderObu,
   makeAv1Config,
   muxStillAvif,
-} from './mux.js';
+} from '@browser-avif-lab/media-container';
 
 export type EncodeAvifOptions = {
   quality?: number;

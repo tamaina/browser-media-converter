@@ -1,5 +1,5 @@
-import { concat, boxes, readAscii, readBox, readSized, readU16, readU32, u32 } from '@browser-avif-lab/binary';
-import { findSequenceHeaderObu, makeAv1Config, muxStillAvif, type EncodedStillAv1 } from '@browser-avif-lab/webcodecs-avif';
+import { concat, readAscii, readSized, readU16, readU32, u32 } from '@browser-avif-lab/binary';
+import { boxes, findSequenceHeaderObu, makeAv1Config, muxStillAvif, readBox, type EncodedStillAv1 } from '@browser-avif-lab/media-container';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 

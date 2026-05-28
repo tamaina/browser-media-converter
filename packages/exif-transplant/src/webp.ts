@@ -1,4 +1,5 @@
-import { concat, makeRiffChunk, readAscii, riffChunks, writeAscii, writeU32le } from '@browser-avif-lab/binary';
+import { concat, readAscii, writeAscii, writeU32le } from '@browser-avif-lab/binary';
+import { makeRiffChunk, riffChunks } from '@browser-avif-lab/media-container';
 import { normalizeJpegExif } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 

@@ -1,6 +1,6 @@
 # @browser-avif-lab/webcodecs-avif
 
-WebCodecs AV1 still-image encoder plus a minimal AVIF muxer.
+WebCodecs AV1 still-image encoder plus a minimal AVIF muxer re-exported from `@browser-avif-lab/media-container`.
 
 ## Encode A Canvas Source To AVIF
 
@@ -64,3 +64,4 @@ node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 - Requires WebCodecs for encoding/decoding.
 - Alpha is rejected until auxiliary alpha item muxing is implemented.
 - The muxer writes a minimal still-image AVIF and does not preserve arbitrary source AVIF boxes.
+- Container-specific mux helpers live in `@browser-avif-lab/media-container`; this package re-exports the AVIF helpers for convenience.

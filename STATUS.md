@@ -93,7 +93,8 @@ Implemented `@browser-avif-lab/exif-transplant`.
 
 - JPEG: read, remove, write.
 - WebP: read, remove, write `EXIF` RIFF chunks.
-- AVIF: reads item-addressed `Exif` metadata and rewrites to a minimal AVIF through `@browser-avif-lab/webcodecs-avif`'s shared muxer. Original nonessential AVIF boxes/properties are intentionally not preserved.
+- AVIF: reads item-addressed `Exif` metadata and rewrites to a minimal AVIF through `@browser-avif-lab/media-container`'s shared muxer. Original nonessential AVIF boxes/properties are intentionally not preserved.
+- `exif-transplant` does not depend on WebCodecs AVIF encoding code for AVIF metadata rewrite.
 - GPS removal is byte-level and ExifReader-free: it clears the TIFF `GPSInfoIFDPointer`, zeroes the GPS IFD, and zeroes GPS value data referenced from that IFD.
 
 Verified with:
@@ -135,15 +136,30 @@ pnpm --filter @browser-avif-lab/webcodecs-color test:electron
 Implemented `@browser-avif-lab/browser-image-resizer-ex`.
 
 - Provides `resizeAndConvertImage` and `resizeImageToAvif`.
+- Provides `resizeAnimatedImageToWebp` and animated WebP muxing through `@browser-avif-lab/media-container`.
 - Decodes image bytes to `VideoFrame` with `ImageDecoder`.
+- Decodes animated image inputs through `ImageDecoder` with `preferAnimation: true`.
 - Uses `webcodecs-color` to inspect color space and choose raw planar resize for HDR-like frames when available.
 - Encodes AVIF with `webcodecs-avif`; JPEG/WebP currently use `OffscreenCanvas.convertToBlob`.
+- Muxes animated WebP as RIFF `WEBP` with `VP8X`, `ANIM`, and `ANMF` chunks.
 - Supports limited EXIF policy: `keep`, `drop`, and byte-level `drop-gps` through `exif-transplant`.
 
 Current limitation:
 
 - JPEG/WebP output is Canvas-based and is not a strict HDR-preserving path.
+- Animated WebP currently writes full-canvas frames and does not yet optimize changed rectangles.
 - AVIF EXIF write uses the minimal AVIF remuxer, so nonessential source AVIF boxes are not preserved.
+
+Verified with Electron's Chromium build:
+
+- Internal animated WebP muxing creates a two-frame `VP8X`/`ANIM`/`ANMF` file that `ImageDecoder` recognizes as animated WebP.
+- `resizeAnimatedImageToWebp` resizes that generated animation from `80x48` to `40x24` while preserving both frames.
+
+Command:
+
+```sh
+pnpm --filter @browser-avif-lab/browser-image-resizer-ex test:electron
+```
 
 ## 7. Browser Movie Converter
 

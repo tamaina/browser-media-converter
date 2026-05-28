@@ -49,9 +49,32 @@ export function writeU16(data: Uint8Array, offset: number, value: number) {
   data[offset + 1] = value;
 }
 
+export function writeU16le(data: Uint8Array, offset: number, value: number) {
+  data[offset] = value;
+  data[offset + 1] = value >> 8;
+}
+
 export function u16(value: number) {
   const result = new Uint8Array(2);
   writeU16(result, 0, value);
+  return result;
+}
+
+export function u16le(value: number) {
+  const result = new Uint8Array(2);
+  writeU16le(result, 0, value);
+  return result;
+}
+
+export function writeU24le(data: Uint8Array, offset: number, value: number) {
+  data[offset] = value;
+  data[offset + 1] = value >> 8;
+  data[offset + 2] = value >> 16;
+}
+
+export function u24le(value: number) {
+  const result = new Uint8Array(3);
+  writeU24le(result, 0, value);
   return result;
 }
 
@@ -80,6 +103,12 @@ export function writeU32le(data: Uint8Array, offset: number, value: number) {
 export function u32(value: number) {
   const result = new Uint8Array(4);
   writeU32(result, 0, value);
+  return result;
+}
+
+export function u32le(value: number) {
+  const result = new Uint8Array(4);
+  writeU32le(result, 0, value);
   return result;
 }
 

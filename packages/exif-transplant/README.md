@@ -44,7 +44,7 @@ GPS removal is byte-level and ExifReader-free. It clears the TIFF `GPSInfoIFDPoi
 
 - JPEG: read, remove, write, GPS-only remove.
 - WebP: read, remove, write `EXIF` RIFF chunks, GPS-only remove.
-- AVIF: reads item-addressed `Exif` metadata and rewrites AVIF through `@browser-avif-lab/webcodecs-avif`'s minimal muxer. Nonessential original AVIF boxes/properties are not preserved.
+- AVIF: reads item-addressed `Exif` metadata and rewrites AVIF through `@browser-avif-lab/media-container`'s minimal AVIF muxer. Nonessential original AVIF boxes/properties are not preserved.
 
 ## Commands
 
