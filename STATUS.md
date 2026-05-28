@@ -47,16 +47,17 @@ Implemented `@browser-avif-lab/mediabunny-scene-keyframes`.
 
 - Samples decoded frames with `VideoSampleSink`.
 - Computes mean RGB frame difference at a configurable sampling rate.
+- Provides sensitivity presets: `low`, `medium`, and `high`; explicit options override preset values.
 - Derives a recommended `keyFrameInterval`.
 - Plans scene-derived key-frame timestamps with `minKeyFrameDistance` suppression and optional `maxKeyFrameInterval` fallback.
-- Provides `transcodeWithSceneKeyFrames` for Mediabunny `Conversion`.
-- Supports MP4 and QuickTime/MOV input formats.
+- Does not wrap Mediabunny `Conversion`; conversion/transcoding is handled by `@browser-avif-lab/browser-movie-converter`.
+- `planSceneKeyFrames` works with any Mediabunny `InputVideoTrack`.
 
 Verified with Electron's Chromium build:
 
 - `bbb.mov` scene changes detected at 1s, 2s, 12s, 16s, and 24s with the current smoke settings.
 - Recommended key-frame interval: 4 seconds.
-- Re-encoded output written to `playground-output/scene-keyframes-electron/scene-keyframes.mp4`.
+- Scene plan generation verified against `bbb.mov`.
 
 Command:
 

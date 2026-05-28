@@ -1,20 +1,6 @@
 import {
-  BlobSource,
-  BufferSource,
-  BufferTarget,
-  Conversion,
-  HlsOutputFormat,
-  Input,
-  MpegTsOutputFormat,
-  Mp4InputFormat,
-  Mp4OutputFormat,
-  Output,
-  QuickTimeInputFormat,
   VideoSampleSink,
-  type ConversionVideoOptions,
   type InputVideoTrack,
-  type OutputFormat,
-  type Source,
   type VideoSample,
 } from 'mediabunny';
 
@@ -23,7 +9,10 @@ export type SceneChange = {
   score: number;
 };
 
+export type SceneDetectionSensitivity = 'low' | 'medium' | 'high';
+
 export type SceneDetectionOptions = {
+  sensitivity?: SceneDetectionSensitivity;
   sampleRate?: number;
   threshold?: number;
   width?: number;
@@ -44,101 +33,85 @@ export type FrameFingerprint = {
   data: Uint8ClampedArray;
 };
 
+export type ResolvedSceneDetectionOptions = Required<Omit<SceneDetectionOptions, 'sensitivity' | 'minKeyFrameDistance' | 'maxKeyFrameInterval'>> & {
+  sensitivity: SceneDetectionSensitivity;
+  minKeyFrameDistance?: number;
+  maxKeyFrameInterval?: number;
+};
+
+export const sceneDetectionPresets = {
+  low: {
+    sampleRate: 1,
+    threshold: 0.25,
+    width: 96,
+    height: 54,
+    minSceneDuration: 1.5,
+  },
+  medium: {
+    sampleRate: 2,
+    threshold: 0.18,
+    width: 96,
+    height: 54,
+    minSceneDuration: 0.8,
+  },
+  high: {
+    sampleRate: 3,
+    threshold: 0.12,
+    width: 128,
+    height: 72,
+    minSceneDuration: 0.5,
+  },
+} satisfies Record<SceneDetectionSensitivity, Pick<ResolvedSceneDetectionOptions, 'sampleRate' | 'threshold' | 'width' | 'height' | 'minSceneDuration'>>;
+
+export function resolveSceneDetectionOptions(options: SceneDetectionOptions = {}): ResolvedSceneDetectionOptions {
+  const sensitivity = options.sensitivity ?? 'medium';
+  const preset = sceneDetectionPresets[sensitivity];
+  return {
+    sensitivity,
+    sampleRate: options.sampleRate ?? preset.sampleRate,
+    threshold: options.threshold ?? preset.threshold,
+    width: options.width ?? preset.width,
+    height: options.height ?? preset.height,
+    minSceneDuration: options.minSceneDuration ?? preset.minSceneDuration,
+    minKeyFrameDistance: options.minKeyFrameDistance,
+    maxKeyFrameInterval: options.maxKeyFrameInterval,
+  };
+}
+
 export async function detectSceneChanges(track: InputVideoTrack, options: SceneDetectionOptions = {}): Promise<SceneChange[]> {
-  const sampleRate = options.sampleRate ?? 2;
-  const width = options.width ?? 96;
-  const height = options.height ?? 54;
+  const resolved = resolveSceneDetectionOptions(options);
   const sink = new VideoSampleSink(track);
   const duration = await track.computeDuration();
   const timestamps = [];
-  for (let time = 0; time < duration; time += 1 / sampleRate) timestamps.push(time);
+  for (let time = 0; time < duration; time += 1 / resolved.sampleRate) timestamps.push(time);
 
   const fingerprints: FrameFingerprint[] = [];
   for await (const sample of sink.samplesAtTimestamps(timestamps)) {
     if (!sample) continue;
-    const data = sampleFingerprint(sample, width, height);
+    const data = sampleFingerprint(sample, resolved.width, resolved.height);
     fingerprints.push({ timestamp: sample.timestamp, data });
     sample.close();
   }
-  return detectSceneChangesInFingerprints(fingerprints, options);
+  return detectSceneChangesInFingerprints(fingerprints, resolved);
 }
 
 export async function planSceneKeyFrames(track: InputVideoTrack, options: SceneDetectionOptions = {}): Promise<SceneKeyFramePlan> {
-  const changes = await detectSceneChanges(track, options);
+  const resolved = resolveSceneDetectionOptions(options);
+  const changes = await detectSceneChanges(track, resolved);
   const duration = await track.computeDuration();
   const keyFrameTimestamps = planKeyFrameTimestamps(changes, {
     duration,
-    minKeyFrameDistance: options.minKeyFrameDistance ?? options.minSceneDuration,
-    maxKeyFrameInterval: options.maxKeyFrameInterval,
+    minKeyFrameDistance: resolved.minKeyFrameDistance ?? resolved.minSceneDuration,
+    maxKeyFrameInterval: resolved.maxKeyFrameInterval,
   });
   const intervals = changes.slice(1).map((change, index) => change.timestamp - changes[index].timestamp);
-  const recommendedKeyFrameInterval = clamp(percentile(intervals, 0.35) || options.minSceneDuration || 2, 0.5, 5);
+  const recommendedKeyFrameInterval = clamp(percentile(intervals, 0.35) || resolved.minSceneDuration || 2, 0.5, 5);
   return { changes, keyFrameTimestamps, recommendedKeyFrameInterval };
 }
 
-export async function conversionVideoOptionsWithSceneKeyFrames(track: InputVideoTrack, options: SceneDetectionOptions = {}): Promise<ConversionVideoOptions> {
-  const plan = await planSceneKeyFrames(track, options);
-  return {
-    forceTranscode: true,
-    keyFrameInterval: plan.recommendedKeyFrameInterval,
-    process: (sample) => sample,
-  };
-}
-
-export type TranscodeWithSceneKeyFramesOptions = {
-  input: Blob | ArrayBuffer | Uint8Array | Source;
-  outputFormat?: OutputFormat;
-  detection?: SceneDetectionOptions;
-  video?: Omit<ConversionVideoOptions, 'keyFrameInterval' | 'forceTranscode' | 'process'>;
-};
-
-export async function transcodeWithSceneKeyFrames(options: TranscodeWithSceneKeyFramesOptions): Promise<{
-  buffer: ArrayBuffer;
-  scenePlan: SceneKeyFramePlan | null;
-}> {
-  const input = new Input({
-    source: toSource(options.input),
-    formats: [new Mp4InputFormat(), new QuickTimeInputFormat()],
-  });
-  const target = new BufferTarget();
-  const output = new Output({
-    target,
-    format: options.outputFormat ?? new Mp4OutputFormat({ fastStart: 'in-memory' }),
-  });
-  const primaryVideo = await input.getPrimaryVideoTrack();
-  const scenePlan = primaryVideo ? await planSceneKeyFrames(primaryVideo, options.detection) : null;
-
-  const conversion = await Conversion.init({
-    input,
-    output,
-    video: scenePlan
-      ? {
-          ...options.video,
-          forceTranscode: true,
-          keyFrameInterval: scenePlan.recommendedKeyFrameInterval,
-          process: (sample) => sample,
-        }
-      : options.video,
-    audio: {},
-  });
-  if (!conversion.isValid) {
-    throw new Error(`Mediabunny could not create a valid scene-keyframe conversion: ${conversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
-  }
-  await conversion.execute();
-  if (!target.buffer) throw new Error('Mediabunny did not produce an output buffer');
-  return { buffer: target.buffer, scenePlan };
-}
-
-export function mpegTsHlsOutputFormat(targetDuration = 2) {
-  return new HlsOutputFormat({
-    segmentFormat: new MpegTsOutputFormat(),
-    targetDuration,
-  });
-}
-
 export function detectSceneChangesInFingerprints(fingerprints: FrameFingerprint[], options: SceneDetectionOptions = {}): SceneChange[] {
-  const threshold = options.threshold ?? 0.18;
-  const minSceneDuration = options.minSceneDuration ?? 0.8;
+  const resolved = resolveSceneDetectionOptions(options);
+  const { threshold, minSceneDuration } = resolved;
   let previous: Uint8ClampedArray | null = null;
   let lastChange = -Infinity;
   const changes: SceneChange[] = [];
@@ -229,10 +202,4 @@ function percentile(values: number[], p: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function toSource(input: Blob | ArrayBuffer | Uint8Array | Source) {
-  if (input instanceof Blob) return new BlobSource(input);
-  if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) return new BufferSource(input);
-  return input;
 }

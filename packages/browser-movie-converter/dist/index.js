@@ -33,14 +33,14 @@ var readSignedExpGolomb = (bitstream) => {
   const codeNum = readExpGolomb(bitstream);
   return (codeNum & 1) === 0 ? -(codeNum >> 1) : codeNum + 1 >> 1;
 };
-var writeBits = (bytes4, start, end, value) => {
+var writeBits = (bytes3, start, end, value) => {
   for (let i = start; i < end; i++) {
     const byteIndex = Math.floor(i / 8);
-    let byte = bytes4[byteIndex];
+    let byte = bytes3[byteIndex];
     const bitIndex = 7 - (i & 7);
     byte &= ~(1 << bitIndex);
     byte |= (value & 1 << end - i - 1) >> end - i - 1 << bitIndex;
-    bytes4[byteIndex] = byte;
+    bytes3[byteIndex] = byte;
   }
 };
 var toUint8Array = (source) => {
@@ -139,16 +139,16 @@ var AsyncMutex = class {
   }
 };
 var HEX_STRING_REGEX = /^[0-9a-fA-F]+$/;
-var bytesToHexString = (bytes4) => {
-  return [...bytes4].map((x) => x.toString(16).padStart(2, "0")).join("");
+var bytesToHexString = (bytes3) => {
+  return [...bytes3].map((x) => x.toString(16).padStart(2, "0")).join("");
 };
 var hexStringToBytes = (hexString) => {
   assert(hexString.length % 2 === 0);
-  const bytes4 = new Uint8Array(hexString.length / 2);
+  const bytes3 = new Uint8Array(hexString.length / 2);
   for (let i = 0; i < hexString.length; i += 2) {
-    bytes4[i / 2] = parseInt(hexString.slice(i, i + 2), 16);
+    bytes3[i / 2] = parseInt(hexString.slice(i, i + 2), 16);
   }
-  return bytes4;
+  return bytes3;
 };
 var reverseBitsU32 = (x) => {
   x = x >> 1 & 1431655765 | (x & 1431655765) << 1;
@@ -234,38 +234,38 @@ var validateAnyIterable = (iterable) => {
 var assertNever = (x) => {
   throw new Error(`Unexpected value: ${x}`);
 };
-var getUint24 = (view4, byteOffset, littleEndian) => {
-  const byte1 = view4.getUint8(byteOffset);
-  const byte2 = view4.getUint8(byteOffset + 1);
-  const byte3 = view4.getUint8(byteOffset + 2);
+var getUint24 = (view3, byteOffset, littleEndian) => {
+  const byte1 = view3.getUint8(byteOffset);
+  const byte2 = view3.getUint8(byteOffset + 1);
+  const byte3 = view3.getUint8(byteOffset + 2);
   if (littleEndian) {
     return byte1 | byte2 << 8 | byte3 << 16;
   } else {
     return byte1 << 16 | byte2 << 8 | byte3;
   }
 };
-var getInt24 = (view4, byteOffset, littleEndian) => {
-  return getUint24(view4, byteOffset, littleEndian) << 8 >> 8;
+var getInt24 = (view3, byteOffset, littleEndian) => {
+  return getUint24(view3, byteOffset, littleEndian) << 8 >> 8;
 };
-var setUint24 = (view4, byteOffset, value, littleEndian) => {
+var setUint24 = (view3, byteOffset, value, littleEndian) => {
   value = value >>> 0;
   value = value & 16777215;
   if (littleEndian) {
-    view4.setUint8(byteOffset, value & 255);
-    view4.setUint8(byteOffset + 1, value >>> 8 & 255);
-    view4.setUint8(byteOffset + 2, value >>> 16 & 255);
+    view3.setUint8(byteOffset, value & 255);
+    view3.setUint8(byteOffset + 1, value >>> 8 & 255);
+    view3.setUint8(byteOffset + 2, value >>> 16 & 255);
   } else {
-    view4.setUint8(byteOffset, value >>> 16 & 255);
-    view4.setUint8(byteOffset + 1, value >>> 8 & 255);
-    view4.setUint8(byteOffset + 2, value & 255);
+    view3.setUint8(byteOffset, value >>> 16 & 255);
+    view3.setUint8(byteOffset + 1, value >>> 8 & 255);
+    view3.setUint8(byteOffset + 2, value & 255);
   }
 };
-var setInt24 = (view4, byteOffset, value, littleEndian) => {
+var setInt24 = (view3, byteOffset, value, littleEndian) => {
   value = clamp(value, -8388608, 8388607);
   if (value < 0) {
     value = value + 16777216 & 16777215;
   }
-  setUint24(view4, byteOffset, value, littleEndian);
+  setUint24(view3, byteOffset, value, littleEndian);
 };
 var clamp = (value, min, max) => {
   return Math.max(min, Math.min(max, value));
@@ -669,8 +669,8 @@ var validateTrackDisposition = (disposition) => {
 
 // ../../node_modules/.pnpm/mediabunny@1.45.4/node_modules/mediabunny/dist/modules/shared/bitstream.js
 var Bitstream = class _Bitstream3 {
-  constructor(bytes4) {
-    this.bytes = bytes4;
+  constructor(bytes3) {
+    this.bytes = bytes3;
     this.pos = 0;
   }
   seekToByte(byteOffset) {
@@ -746,11 +746,11 @@ var aacFrequencyTable = [
   7350
 ];
 var aacChannelMap = [-1, 1, 2, 3, 4, 5, 6, 8];
-var parseAacAudioSpecificConfig = (bytes4) => {
-  if (!bytes4 || bytes4.byteLength < 2) {
+var parseAacAudioSpecificConfig = (bytes3) => {
+  if (!bytes3 || bytes3.byteLength < 2) {
     throw new TypeError("AAC description must be at least 2 bytes long.");
   }
-  const bitstream = new Bitstream(bytes4);
+  const bitstream = new Bitstream(bytes3);
   let objectType = bitstream.readBits(5);
   if (objectType === 31) {
     objectType = 32 + bitstream.readBits(6);
@@ -796,8 +796,8 @@ var buildAacAudioSpecificConfig = (config) => {
     bitCount += 24;
   }
   const byteCount = Math.ceil(bitCount / 8);
-  const bytes4 = new Uint8Array(byteCount);
-  const bitstream = new Bitstream(bytes4);
+  const bytes3 = new Uint8Array(byteCount);
+  const bitstream = new Bitstream(bytes3);
   if (config.objectType < 32) {
     bitstream.writeBits(5, config.objectType);
   } else {
@@ -809,7 +809,7 @@ var buildAacAudioSpecificConfig = (config) => {
     bitstream.writeBits(24, customSampleRate);
   }
   bitstream.writeBits(4, channelConfiguration);
-  return bytes4;
+  return bytes3;
 };
 
 // ../../node_modules/.pnpm/mediabunny@1.45.4/node_modules/mediabunny/dist/modules/src/codec.js
@@ -1103,12 +1103,12 @@ var extractVideoCodecString = (trackInfo) => {
   if (codec === "avc") {
     assert(trackInfo.avcType !== null);
     if (avcCodecInfo) {
-      const bytes4 = new Uint8Array([
+      const bytes3 = new Uint8Array([
         avcCodecInfo.avcProfileIndication,
         avcCodecInfo.profileCompatibility,
         avcCodecInfo.avcLevelIndication
       ]);
-      return `avc${trackInfo.avcType}.${bytesToHexString(bytes4)}`;
+      return `avc${trackInfo.avcType}.${bytesToHexString(bytes3)}`;
     }
     if (!codecDescription || codecDescription.byteLength < 4) {
       throw new TypeError("AVC decoder description is not provided or is not at least 4 bytes long.");
@@ -1132,16 +1132,16 @@ var extractVideoCodecString = (trackInfo) => {
       if (!codecDescription || codecDescription.byteLength < 23) {
         throw new TypeError("HEVC decoder description is not provided or is not at least 23 bytes long.");
       }
-      const view4 = toDataView(codecDescription);
-      const profileByte = view4.getUint8(1);
+      const view3 = toDataView(codecDescription);
+      const profileByte = view3.getUint8(1);
       generalProfileSpace = profileByte >> 6 & 3;
       generalProfileIdc = profileByte & 31;
-      compatibilityFlags = reverseBitsU32(view4.getUint32(2));
+      compatibilityFlags = reverseBitsU32(view3.getUint32(2));
       generalTierFlag = profileByte >> 5 & 1;
-      generalLevelIdc = view4.getUint8(12);
+      generalLevelIdc = view3.getUint8(12);
       constraintFlags = [];
       for (let i = 0; i < 6; i++) {
-        constraintFlags.push(view4.getUint8(6 + i));
+        constraintFlags.push(view3.getUint8(6 + i));
       }
     }
     let codecString = "hev1.";
@@ -1663,8 +1663,8 @@ var iterateNalUnitsInLengthPrefixed = function* (packetData, lengthSize) {
 };
 var iterateAvcNalUnits = (packetData, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes4 = toUint8Array(decoderConfig.description);
-    const lengthSizeMinusOne = bytes4[4] & 3;
+    const bytes3 = toUint8Array(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[4] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
   } else {
@@ -1728,8 +1728,8 @@ var concatNalUnitsInLengthPrefixed = (nalUnits, lengthSize) => {
 };
 var concatAvcNalUnits = (nalUnits, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes4 = toUint8Array(decoderConfig.description);
-    const lengthSizeMinusOne = bytes4[4] & 3;
+    const bytes3 = toUint8Array(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[4] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return concatNalUnitsInLengthPrefixed(nalUnits, lengthSize);
   } else {
@@ -1782,28 +1782,28 @@ var extractAvcDecoderConfigurationRecord = (packetData) => {
   }
 };
 var serializeAvcDecoderConfigurationRecord = (record) => {
-  const bytes4 = [];
-  bytes4.push(record.configurationVersion);
-  bytes4.push(record.avcProfileIndication);
-  bytes4.push(record.profileCompatibility);
-  bytes4.push(record.avcLevelIndication);
-  bytes4.push(252 | record.lengthSizeMinusOne & 3);
-  bytes4.push(224 | record.sequenceParameterSets.length & 31);
+  const bytes3 = [];
+  bytes3.push(record.configurationVersion);
+  bytes3.push(record.avcProfileIndication);
+  bytes3.push(record.profileCompatibility);
+  bytes3.push(record.avcLevelIndication);
+  bytes3.push(252 | record.lengthSizeMinusOne & 3);
+  bytes3.push(224 | record.sequenceParameterSets.length & 31);
   for (const sps of record.sequenceParameterSets) {
     const length = sps.byteLength;
-    bytes4.push(length >> 8);
-    bytes4.push(length & 255);
+    bytes3.push(length >> 8);
+    bytes3.push(length & 255);
     for (let i = 0; i < length; i++) {
-      bytes4.push(sps[i]);
+      bytes3.push(sps[i]);
     }
   }
-  bytes4.push(record.pictureParameterSets.length);
+  bytes3.push(record.pictureParameterSets.length);
   for (const pps of record.pictureParameterSets) {
     const length = pps.byteLength;
-    bytes4.push(length >> 8);
-    bytes4.push(length & 255);
+    bytes3.push(length >> 8);
+    bytes3.push(length & 255);
     for (let i = 0; i < length; i++) {
-      bytes4.push(pps[i]);
+      bytes3.push(pps[i]);
     }
   }
   if (record.avcProfileIndication === 100 || record.avcProfileIndication === 110 || record.avcProfileIndication === 122 || record.avcProfileIndication === 144) {
@@ -1811,42 +1811,42 @@ var serializeAvcDecoderConfigurationRecord = (record) => {
     assert(record.bitDepthLumaMinus8 !== null);
     assert(record.bitDepthChromaMinus8 !== null);
     assert(record.sequenceParameterSetExt !== null);
-    bytes4.push(252 | record.chromaFormat & 3);
-    bytes4.push(248 | record.bitDepthLumaMinus8 & 7);
-    bytes4.push(248 | record.bitDepthChromaMinus8 & 7);
-    bytes4.push(record.sequenceParameterSetExt.length);
+    bytes3.push(252 | record.chromaFormat & 3);
+    bytes3.push(248 | record.bitDepthLumaMinus8 & 7);
+    bytes3.push(248 | record.bitDepthChromaMinus8 & 7);
+    bytes3.push(record.sequenceParameterSetExt.length);
     for (const spsExt of record.sequenceParameterSetExt) {
       const length = spsExt.byteLength;
-      bytes4.push(length >> 8);
-      bytes4.push(length & 255);
+      bytes3.push(length >> 8);
+      bytes3.push(length & 255);
       for (let i = 0; i < length; i++) {
-        bytes4.push(spsExt[i]);
+        bytes3.push(spsExt[i]);
       }
     }
   }
-  return new Uint8Array(bytes4);
+  return new Uint8Array(bytes3);
 };
 var deserializeAvcDecoderConfigurationRecord = (data) => {
   try {
-    const view4 = toDataView(data);
+    const view3 = toDataView(data);
     let offset = 0;
-    const configurationVersion = view4.getUint8(offset++);
-    const avcProfileIndication = view4.getUint8(offset++);
-    const profileCompatibility = view4.getUint8(offset++);
-    const avcLevelIndication = view4.getUint8(offset++);
-    const lengthSizeMinusOne = view4.getUint8(offset++) & 3;
-    const numOfSequenceParameterSets = view4.getUint8(offset++) & 31;
+    const configurationVersion = view3.getUint8(offset++);
+    const avcProfileIndication = view3.getUint8(offset++);
+    const profileCompatibility = view3.getUint8(offset++);
+    const avcLevelIndication = view3.getUint8(offset++);
+    const lengthSizeMinusOne = view3.getUint8(offset++) & 3;
+    const numOfSequenceParameterSets = view3.getUint8(offset++) & 31;
     const sequenceParameterSets = [];
     for (let i = 0; i < numOfSequenceParameterSets; i++) {
-      const length = view4.getUint16(offset, false);
+      const length = view3.getUint16(offset, false);
       offset += 2;
       sequenceParameterSets.push(data.subarray(offset, offset + length));
       offset += length;
     }
-    const numOfPictureParameterSets = view4.getUint8(offset++);
+    const numOfPictureParameterSets = view3.getUint8(offset++);
     const pictureParameterSets = [];
     for (let i = 0; i < numOfPictureParameterSets; i++) {
-      const length = view4.getUint16(offset, false);
+      const length = view3.getUint16(offset, false);
       offset += 2;
       pictureParameterSets.push(data.subarray(offset, offset + length));
       offset += length;
@@ -1865,16 +1865,16 @@ var deserializeAvcDecoderConfigurationRecord = (data) => {
       sequenceParameterSetExt: null
     };
     if ((avcProfileIndication === 100 || avcProfileIndication === 110 || avcProfileIndication === 122 || avcProfileIndication === 144) && offset + 4 <= data.length) {
-      const chromaFormat = view4.getUint8(offset++) & 3;
-      const bitDepthLumaMinus8 = view4.getUint8(offset++) & 7;
-      const bitDepthChromaMinus8 = view4.getUint8(offset++) & 7;
-      const numOfSequenceParameterSetExt = view4.getUint8(offset++);
+      const chromaFormat = view3.getUint8(offset++) & 3;
+      const bitDepthLumaMinus8 = view3.getUint8(offset++) & 7;
+      const bitDepthChromaMinus8 = view3.getUint8(offset++) & 7;
+      const numOfSequenceParameterSetExt = view3.getUint8(offset++);
       record.chromaFormat = chromaFormat;
       record.bitDepthLumaMinus8 = bitDepthLumaMinus8;
       record.bitDepthChromaMinus8 = bitDepthChromaMinus8;
       const sequenceParameterSetExt = [];
       for (let i = 0; i < numOfSequenceParameterSetExt; i++) {
-        const length = view4.getUint16(offset, false);
+        const length = view3.getUint16(offset, false);
         offset += 2;
         sequenceParameterSetExt.push(data.subarray(offset, offset + length));
         offset += length;
@@ -2127,8 +2127,8 @@ var skipAvcHrdParameters = (bitstream) => {
 };
 var concatHevcNalUnits = (nalUnits, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes4 = toUint8Array(decoderConfig.description);
-    const lengthSizeMinusOne = bytes4[21] & 3;
+    const bytes3 = toUint8Array(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[21] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return concatNalUnitsInLengthPrefixed(nalUnits, lengthSize);
   } else {
@@ -2137,8 +2137,8 @@ var concatHevcNalUnits = (nalUnits, decoderConfig) => {
 };
 var iterateHevcNalUnits = (packetData, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes4 = toUint8Array(decoderConfig.description);
-    const lengthSizeMinusOne = bytes4[21] & 3;
+    const bytes3 = toUint8Array(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[21] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return iterateNalUnitsInLengthPrefixed(packetData, lengthSize);
   } else {
@@ -2624,38 +2624,38 @@ var skipSubLayerHrdParameters = (bitstream, CpbCnt, sub_pic_hrd_params_present_f
   }
 };
 var serializeHevcDecoderConfigurationRecord = (record) => {
-  const bytes4 = [];
-  bytes4.push(record.configurationVersion);
-  bytes4.push((record.generalProfileSpace & 3) << 6 | (record.generalTierFlag & 1) << 5 | record.generalProfileIdc & 31);
-  bytes4.push(record.generalProfileCompatibilityFlags >>> 24 & 255);
-  bytes4.push(record.generalProfileCompatibilityFlags >>> 16 & 255);
-  bytes4.push(record.generalProfileCompatibilityFlags >>> 8 & 255);
-  bytes4.push(record.generalProfileCompatibilityFlags & 255);
-  bytes4.push(...record.generalConstraintIndicatorFlags);
-  bytes4.push(record.generalLevelIdc & 255);
-  bytes4.push(240 | record.minSpatialSegmentationIdc >> 8 & 15);
-  bytes4.push(record.minSpatialSegmentationIdc & 255);
-  bytes4.push(252 | record.parallelismType & 3);
-  bytes4.push(252 | record.chromaFormatIdc & 3);
-  bytes4.push(248 | record.bitDepthLumaMinus8 & 7);
-  bytes4.push(248 | record.bitDepthChromaMinus8 & 7);
-  bytes4.push(record.avgFrameRate >> 8 & 255);
-  bytes4.push(record.avgFrameRate & 255);
-  bytes4.push((record.constantFrameRate & 3) << 6 | (record.numTemporalLayers & 7) << 3 | (record.temporalIdNested & 1) << 2 | record.lengthSizeMinusOne & 3);
-  bytes4.push(record.arrays.length & 255);
+  const bytes3 = [];
+  bytes3.push(record.configurationVersion);
+  bytes3.push((record.generalProfileSpace & 3) << 6 | (record.generalTierFlag & 1) << 5 | record.generalProfileIdc & 31);
+  bytes3.push(record.generalProfileCompatibilityFlags >>> 24 & 255);
+  bytes3.push(record.generalProfileCompatibilityFlags >>> 16 & 255);
+  bytes3.push(record.generalProfileCompatibilityFlags >>> 8 & 255);
+  bytes3.push(record.generalProfileCompatibilityFlags & 255);
+  bytes3.push(...record.generalConstraintIndicatorFlags);
+  bytes3.push(record.generalLevelIdc & 255);
+  bytes3.push(240 | record.minSpatialSegmentationIdc >> 8 & 15);
+  bytes3.push(record.minSpatialSegmentationIdc & 255);
+  bytes3.push(252 | record.parallelismType & 3);
+  bytes3.push(252 | record.chromaFormatIdc & 3);
+  bytes3.push(248 | record.bitDepthLumaMinus8 & 7);
+  bytes3.push(248 | record.bitDepthChromaMinus8 & 7);
+  bytes3.push(record.avgFrameRate >> 8 & 255);
+  bytes3.push(record.avgFrameRate & 255);
+  bytes3.push((record.constantFrameRate & 3) << 6 | (record.numTemporalLayers & 7) << 3 | (record.temporalIdNested & 1) << 2 | record.lengthSizeMinusOne & 3);
+  bytes3.push(record.arrays.length & 255);
   for (const arr of record.arrays) {
-    bytes4.push((arr.arrayCompleteness & 1) << 7 | 0 << 6 | arr.nalUnitType & 63);
-    bytes4.push(arr.nalUnits.length >> 8 & 255);
-    bytes4.push(arr.nalUnits.length & 255);
+    bytes3.push((arr.arrayCompleteness & 1) << 7 | 0 << 6 | arr.nalUnitType & 63);
+    bytes3.push(arr.nalUnits.length >> 8 & 255);
+    bytes3.push(arr.nalUnits.length & 255);
     for (const nal of arr.nalUnits) {
-      bytes4.push(nal.length >> 8 & 255);
-      bytes4.push(nal.length & 255);
+      bytes3.push(nal.length >> 8 & 255);
+      bytes3.push(nal.length & 255);
       for (let i = 0; i < nal.length; i++) {
-        bytes4.push(nal[i]);
+        bytes3.push(nal[i]);
       }
     }
   }
-  return new Uint8Array(bytes4);
+  return new Uint8Array(bytes3);
 };
 var HevcNaluOrderState;
 (function(HevcNaluOrderState4) {
@@ -3003,16 +3003,16 @@ var extractAv1CodecInfoFromPacket = (packet) => {
   }
   return null;
 };
-var parseOpusIdentificationHeader = (bytes4) => {
-  const view4 = toDataView(bytes4);
-  const outputChannelCount = view4.getUint8(9);
-  const preSkip = view4.getUint16(10, true);
-  const inputSampleRate = view4.getUint32(12, true);
-  const outputGain = view4.getInt16(16, true);
-  const channelMappingFamily = view4.getUint8(18);
+var parseOpusIdentificationHeader = (bytes3) => {
+  const view3 = toDataView(bytes3);
+  const outputChannelCount = view3.getUint8(9);
+  const preSkip = view3.getUint16(10, true);
+  const inputSampleRate = view3.getUint32(12, true);
+  const outputGain = view3.getInt16(16, true);
+  const channelMappingFamily = view3.getUint8(18);
   let channelMappingTable = null;
   if (channelMappingFamily) {
-    channelMappingTable = bytes4.subarray(19, 19 + 2 + outputChannelCount);
+    channelMappingTable = bytes3.subarray(19, 19 + 2 + outputChannelCount);
   }
   return {
     outputChannelCount,
@@ -3038,12 +3038,12 @@ var determineVideoPacketType = (codec, decoderConfig, packetData) => {
           }
           if (type === AvcNalUnitType.SEI && (!isChromium() || getChromiumVersion() >= 144)) {
             const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
-            const bytes4 = removeEmulationPreventionBytes(nalUnit);
+            const bytes3 = removeEmulationPreventionBytes(nalUnit);
             let pos = 1;
             do {
               let payloadType = 0;
               while (true) {
-                const nextByte = bytes4[pos++];
+                const nextByte = bytes3[pos++];
                 if (nextByte === void 0)
                   break;
                 payloadType += nextByte;
@@ -3053,7 +3053,7 @@ var determineVideoPacketType = (codec, decoderConfig, packetData) => {
               }
               let payloadSize = 0;
               while (true) {
-                const nextByte = bytes4[pos++];
+                const nextByte = bytes3[pos++];
                 if (nextByte === void 0)
                   break;
                 payloadSize += nextByte;
@@ -3063,7 +3063,7 @@ var determineVideoPacketType = (codec, decoderConfig, packetData) => {
               }
               const PAYLOAD_TYPE_RECOVERY_POINT = 6;
               if (payloadType === PAYLOAD_TYPE_RECOVERY_POINT) {
-                const bitstream = new Bitstream(bytes4);
+                const bitstream = new Bitstream(bytes3);
                 bitstream.pos = 8 * pos;
                 const recoveryFrameCount = readExpGolomb(bitstream);
                 const exactMatchFlag = bitstream.readBits(1);
@@ -3072,7 +3072,7 @@ var determineVideoPacketType = (codec, decoderConfig, packetData) => {
                 }
               }
               pos += payloadSize;
-            } while (pos < bytes4.length - 1);
+            } while (pos < bytes3.length - 1);
           }
         }
         return "delta";
@@ -3617,16 +3617,16 @@ var buildIsobmffMimeType = (info) => {
   return string;
 };
 var parsePsshBoxContents = (contents) => {
-  const view4 = toDataView(contents);
+  const view3 = toDataView(contents);
   let pos = 0;
-  const version = view4.getUint8(pos);
+  const version = view3.getUint8(pos);
   pos += 1;
   pos += 3;
   const systemId = bytesToHexString(contents.subarray(pos, pos + 16));
   pos += 16;
   let keyIds = null;
   if (version > 0) {
-    const kidCount = view4.getUint32(pos);
+    const kidCount = view3.getUint32(pos);
     pos += 4;
     if (kidCount > 0) {
       keyIds = [];
@@ -3636,7 +3636,7 @@ var parsePsshBoxContents = (contents) => {
       }
     }
   }
-  const dataSize = view4.getUint32(pos);
+  const dataSize = view3.getUint32(pos);
   pos += 4;
   return {
     systemId,
@@ -4928,15 +4928,15 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
             channelMappingTable = new Uint8Array(0);
           }
           const description = new Uint8Array(8 + 1 + 1 + 2 + 4 + 2 + 1 + channelMappingTable.byteLength);
-          const view4 = new DataView(description.buffer);
-          view4.setUint32(0, 1332770163, false);
-          view4.setUint32(4, 1214603620, false);
-          view4.setUint8(8, 1);
-          view4.setUint8(9, outputChannelCount);
-          view4.setUint16(10, preSkip, true);
-          view4.setUint32(12, inputSampleRate, true);
-          view4.setInt16(16, outputGain, true);
-          view4.setUint8(18, channelMappingFamily);
+          const view3 = new DataView(description.buffer);
+          view3.setUint32(0, 1332770163, false);
+          view3.setUint32(4, 1214603620, false);
+          view3.setUint8(8, 1);
+          view3.setUint8(9, outputChannelCount);
+          view3.setUint16(10, preSkip, true);
+          view3.setUint32(12, inputSampleRate, true);
+          view3.setInt16(16, outputGain, true);
+          view3.setUint8(18, channelMappingFamily);
           description.set(channelMappingTable, 19);
           track.info.codecDescription = description;
           track.info.numberOfChannels = outputChannelCount;
@@ -4975,11 +4975,11 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
           }
           const endPos = slice.filePos;
           slice.filePos = startPos2;
-          const bytes4 = readBytes(slice, endPos - startPos2);
-          const description = new Uint8Array(4 + bytes4.byteLength);
-          const view4 = new DataView(description.buffer);
-          view4.setUint32(0, 1716281667, false);
-          description.set(bytes4, 4);
+          const bytes3 = readBytes(slice, endPos - startPos2);
+          const description = new Uint8Array(4 + bytes3.byteLength);
+          const view3 = new DataView(description.buffer);
+          view3.setUint32(0, 1716281667, false);
+          description.set(bytes3, 4);
           track.info.codecDescription = description;
         }
         ;
@@ -4991,8 +4991,8 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
             break;
           }
           assert(track.info?.type === "audio");
-          const bytes4 = readBytes(slice, 3);
-          const bitstream = new Bitstream(bytes4);
+          const bytes3 = readBytes(slice, 3);
+          const bitstream = new Bitstream(bytes3);
           const fscod = bitstream.readBits(2);
           bitstream.skipBits(5 + 3);
           const acmod = bitstream.readBits(3);
@@ -5011,8 +5011,8 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
             break;
           }
           assert(track.info?.type === "audio");
-          const bytes4 = readBytes(slice, boxInfo.contentSize);
-          const config = parseEac3Config(bytes4);
+          const bytes3 = readBytes(slice, boxInfo.contentSize);
+          const config = parseEac3Config(bytes3);
           if (!config) {
             console.warn("Invalid dec3 box contents, ignoring.");
             break;
@@ -5114,8 +5114,8 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
           slice.skip(3);
           const fieldSize = readU8(slice);
           const sampleCount = readU32Be(slice);
-          const bytes4 = readBytes(slice, Math.ceil(sampleCount * fieldSize / 8));
-          const bitstream = new Bitstream(bytes4);
+          const bytes3 = readBytes(slice, Math.ceil(sampleCount * fieldSize / 8));
+          const bitstream = new Bitstream(bytes3);
           for (let i = 0; i < sampleCount; i++) {
             const sampleSize = bitstream.readBits(fieldSize);
             track.sampleTable.sampleSizes.push(sampleSize);
@@ -5917,9 +5917,9 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
               case "trkn":
                 {
                   if (data instanceof Uint8Array && data.length >= 6) {
-                    const view4 = toDataView(data);
-                    const trackNumber = view4.getUint16(2, false);
-                    const tracksTotal = view4.getUint16(4, false);
+                    const view3 = toDataView(data);
+                    const trackNumber = view3.getUint16(2, false);
+                    const tracksTotal = view3.getUint16(4, false);
                     if (trackNumber > 0) {
                       this.metadataTags.trackNumber ??= trackNumber;
                     }
@@ -5934,9 +5934,9 @@ var IsobmffDemuxer = class _IsobmffDemuxer2 extends Demuxer {
               case "disk":
                 {
                   if (data instanceof Uint8Array && data.length >= 6) {
-                    const view4 = toDataView(data);
-                    const discNumber = view4.getUint16(2, false);
-                    const discNumberMax = view4.getUint16(4, false);
+                    const view3 = toDataView(data);
+                    const discNumber = view3.getUint16(2, false);
+                    const discNumberMax = view3.getUint16(4, false);
                     if (discNumber > 0) {
                       this.metadataTags.discNumber ??= discNumber;
                     }
@@ -7124,9 +7124,9 @@ var EBMLWriter = class {
         this.writeVarInt(size);
         this.writeSignedInt(data.data.value, size);
       } else if (data.data instanceof EBMLUnicodeString) {
-        const bytes4 = textEncoder.encode(data.data.value);
-        this.writeVarInt(bytes4.length);
-        this.writer.write(bytes4);
+        const bytes3 = textEncoder.encode(data.data.value);
+        this.writeVarInt(bytes3.length);
+        this.writer.write(bytes3);
       } else {
         assertNever(data.data);
       }
@@ -7244,20 +7244,20 @@ var readElementHeader = (slice) => {
   return { id, size };
 };
 var readAsciiString = (slice, length) => {
-  const bytes4 = readBytes(slice, length);
+  const bytes3 = readBytes(slice, length);
   let strLength = 0;
-  while (strLength < length && bytes4[strLength] !== 0) {
+  while (strLength < length && bytes3[strLength] !== 0) {
     strLength += 1;
   }
-  return String.fromCharCode(...bytes4.subarray(0, strLength));
+  return String.fromCharCode(...bytes3.subarray(0, strLength));
 };
 var readUnicodeString = (slice, length) => {
-  const bytes4 = readBytes(slice, length);
+  const bytes3 = readBytes(slice, length);
   let strLength = 0;
-  while (strLength < length && bytes4[strLength] !== 0) {
+  while (strLength < length && bytes3[strLength] !== 0) {
     strLength += 1;
   }
-  return textDecoder.decode(bytes4.subarray(0, strLength));
+  return textDecoder.decode(bytes3.subarray(0, strLength));
 };
 var readFloat = (slice, width) => {
   if (width === 0) {
@@ -9364,8 +9364,8 @@ var MIN_ADTS_FRAME_HEADER_SIZE = 7;
 var MAX_ADTS_FRAME_HEADER_SIZE = 9;
 var readAdtsFrameHeader = (slice) => {
   const startPos = slice.filePos;
-  const bytes4 = readBytes(slice, 9);
-  const bitstream = new Bitstream(bytes4);
+  const bytes3 = readBytes(slice, 9);
+  const bitstream = new Bitstream(bytes3);
   const syncword = bitstream.readBits(12);
   if (syncword !== 4095) {
     return null;
@@ -9769,7 +9769,7 @@ var ReadOrchestrator = class {
       };
     }
     const outerCacheStartIndex = binarySearchLessOrEqual(this.cache, outerStart, (x) => x.start);
-    const bytes4 = result ? null : new Uint8Array(innerEnd - innerStart);
+    const bytes3 = result ? null : new Uint8Array(innerEnd - innerStart);
     let contiguousBytesWriteEnd = 0;
     let lastEnd = outerStart;
     const outerHoles = [];
@@ -9789,12 +9789,12 @@ var ReadOrchestrator = class {
           outerHoles.push({ start: lastEnd, end: cappedOuterStart });
         }
         lastEnd = cappedOuterEnd;
-        if (bytes4) {
+        if (bytes3) {
           const cappedInnerStart = Math.max(innerStart, entry.start);
           const cappedInnerEnd = Math.min(innerEnd, entry.end);
           if (cappedInnerStart < cappedInnerEnd) {
             const relativeOffset = cappedInnerStart - innerStart;
-            bytes4.set(entry.bytes.subarray(cappedInnerStart - entry.start, cappedInnerEnd - entry.start), relativeOffset);
+            bytes3.set(entry.bytes.subarray(cappedInnerStart - entry.start, cappedInnerEnd - entry.start), relativeOffset);
             if (relativeOffset === contiguousBytesWriteEnd) {
               contiguousBytesWriteEnd = cappedInnerEnd - innerStart;
             }
@@ -9808,10 +9808,10 @@ var ReadOrchestrator = class {
     } else {
       outerHoles.push({ start: outerStart, end: outerEnd });
     }
-    if (bytes4 && contiguousBytesWriteEnd >= bytes4.length) {
+    if (bytes3 && contiguousBytesWriteEnd >= bytes3.length) {
       result = {
-        bytes: bytes4,
-        view: toDataView(bytes4),
+        bytes: bytes3,
+        view: toDataView(bytes3),
         offset: innerStart
       };
     }
@@ -9830,9 +9830,9 @@ var ReadOrchestrator = class {
         innerHoles.push({ start: cappedStart, end: cappedEnd });
       }
     }
-    const pendingSlice = bytes4 && {
+    const pendingSlice = bytes3 && {
       start: innerStart,
-      bytes: bytes4,
+      bytes: bytes3,
       holes: innerHoles,
       resolve,
       reject
@@ -9889,10 +9889,10 @@ var ReadOrchestrator = class {
       }
     }
     if (!result) {
-      assert(bytes4);
-      result = promise.then((bytes5) => bytes5 && {
-        bytes: bytes5,
-        view: toDataView(bytes5),
+      assert(bytes3);
+      result = promise.then((bytes4) => bytes4 && {
+        bytes: bytes4,
+        view: toDataView(bytes4),
         offset: innerStart
       });
     } else {
@@ -10024,18 +10024,18 @@ var ReadOrchestrator = class {
     this.queuedReads.length = 0;
   }
   /** Called by a worker when it has read some data. */
-  supplyWorkerData(worker, bytes4) {
+  supplyWorkerData(worker, bytes3) {
     assert(!worker.aborted);
     const start = worker.currentPos;
-    const end = start + bytes4.length;
+    const end = start + bytes3.length;
     this.insertIntoCache({
       start,
       end,
-      bytes: bytes4,
-      view: toDataView(bytes4),
+      bytes: bytes3,
+      view: toDataView(bytes3),
       age: this.nextAge++
     });
-    worker.currentPos += bytes4.length;
+    worker.currentPos += bytes3.length;
     if (worker.currentPos > worker.targetPos) {
       worker.targetPos = worker.currentPos;
       this.checkQueuedReadsAgainstWorker(worker);
@@ -10045,7 +10045,7 @@ var ReadOrchestrator = class {
       const clampedStart = Math.max(start, pendingSlice.start);
       const clampedEnd = Math.min(end, pendingSlice.start + pendingSlice.bytes.length);
       if (clampedStart < clampedEnd) {
-        pendingSlice.bytes.set(bytes4.subarray(clampedStart - start, clampedEnd - start), clampedStart - pendingSlice.start);
+        pendingSlice.bytes.set(bytes3.subarray(clampedStart - start, clampedEnd - start), clampedStart - pendingSlice.start);
       }
       for (let j = 0; j < pendingSlice.holes.length; j++) {
         const hole = pendingSlice.holes[j];
@@ -12254,32 +12254,32 @@ var getReadFunction = (format) => {
   switch (format) {
     case "u8":
     case "u8-planar":
-      return (view4, offset) => (view4.getUint8(offset) - 128) / 128;
+      return (view3, offset) => (view3.getUint8(offset) - 128) / 128;
     case "s16":
     case "s16-planar":
-      return (view4, offset) => view4.getInt16(offset, true) / 32768;
+      return (view3, offset) => view3.getInt16(offset, true) / 32768;
     case "s32":
     case "s32-planar":
-      return (view4, offset) => view4.getInt32(offset, true) / 2147483648;
+      return (view3, offset) => view3.getInt32(offset, true) / 2147483648;
     case "f32":
     case "f32-planar":
-      return (view4, offset) => view4.getFloat32(offset, true);
+      return (view3, offset) => view3.getFloat32(offset, true);
   }
 };
 var getWriteFunction = (format) => {
   switch (format) {
     case "u8":
     case "u8-planar":
-      return (view4, offset, value) => view4.setUint8(offset, clamp((value + 1) * 127.5, 0, 255));
+      return (view3, offset, value) => view3.setUint8(offset, clamp((value + 1) * 127.5, 0, 255));
     case "s16":
     case "s16-planar":
-      return (view4, offset, value) => view4.setInt16(offset, clamp(Math.round(value * 32767), -32768, 32767), true);
+      return (view3, offset, value) => view3.setInt16(offset, clamp(Math.round(value * 32767), -32768, 32767), true);
     case "s32":
     case "s32-planar":
-      return (view4, offset, value) => view4.setInt32(offset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), true);
+      return (view3, offset, value) => view3.setInt32(offset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), true);
     case "f32":
     case "f32-planar":
-      return (view4, offset, value) => view4.setFloat32(offset, value, true);
+      return (view3, offset, value) => view3.setFloat32(offset, value, true);
   }
 };
 var isAudioData = (x) => {
@@ -14245,13 +14245,13 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
       case 1:
         {
           if (dataType === "unsigned") {
-            this.readInputValue = (view4, byteOffset) => view4.getUint8(byteOffset) - 2 ** 7;
+            this.readInputValue = (view3, byteOffset) => view3.getUint8(byteOffset) - 2 ** 7;
           } else if (dataType === "signed") {
-            this.readInputValue = (view4, byteOffset) => view4.getInt8(byteOffset);
+            this.readInputValue = (view3, byteOffset) => view3.getInt8(byteOffset);
           } else if (dataType === "ulaw") {
-            this.readInputValue = (view4, byteOffset) => fromUlaw(view4.getUint8(byteOffset));
+            this.readInputValue = (view3, byteOffset) => fromUlaw(view3.getUint8(byteOffset));
           } else if (dataType === "alaw") {
-            this.readInputValue = (view4, byteOffset) => fromAlaw(view4.getUint8(byteOffset));
+            this.readInputValue = (view3, byteOffset) => fromAlaw(view3.getUint8(byteOffset));
           } else {
             assert(false);
           }
@@ -14261,9 +14261,9 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
       case 2:
         {
           if (dataType === "unsigned") {
-            this.readInputValue = (view4, byteOffset) => view4.getUint16(byteOffset, littleEndian) - 2 ** 15;
+            this.readInputValue = (view3, byteOffset) => view3.getUint16(byteOffset, littleEndian) - 2 ** 15;
           } else if (dataType === "signed") {
-            this.readInputValue = (view4, byteOffset) => view4.getInt16(byteOffset, littleEndian);
+            this.readInputValue = (view3, byteOffset) => view3.getInt16(byteOffset, littleEndian);
           } else {
             assert(false);
           }
@@ -14273,9 +14273,9 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
       case 3:
         {
           if (dataType === "unsigned") {
-            this.readInputValue = (view4, byteOffset) => getUint24(view4, byteOffset, littleEndian) - 2 ** 23;
+            this.readInputValue = (view3, byteOffset) => getUint24(view3, byteOffset, littleEndian) - 2 ** 23;
           } else if (dataType === "signed") {
-            this.readInputValue = (view4, byteOffset) => getInt24(view4, byteOffset, littleEndian);
+            this.readInputValue = (view3, byteOffset) => getInt24(view3, byteOffset, littleEndian);
           } else {
             assert(false);
           }
@@ -14285,11 +14285,11 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
       case 4:
         {
           if (dataType === "unsigned") {
-            this.readInputValue = (view4, byteOffset) => view4.getUint32(byteOffset, littleEndian) - 2 ** 31;
+            this.readInputValue = (view3, byteOffset) => view3.getUint32(byteOffset, littleEndian) - 2 ** 31;
           } else if (dataType === "signed") {
-            this.readInputValue = (view4, byteOffset) => view4.getInt32(byteOffset, littleEndian);
+            this.readInputValue = (view3, byteOffset) => view3.getInt32(byteOffset, littleEndian);
           } else if (dataType === "float") {
-            this.readInputValue = (view4, byteOffset) => view4.getFloat32(byteOffset, littleEndian);
+            this.readInputValue = (view3, byteOffset) => view3.getFloat32(byteOffset, littleEndian);
           } else {
             assert(false);
           }
@@ -14299,7 +14299,7 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
       case 8:
         {
           if (dataType === "float") {
-            this.readInputValue = (view4, byteOffset) => view4.getFloat64(byteOffset, littleEndian);
+            this.readInputValue = (view3, byteOffset) => view3.getFloat64(byteOffset, littleEndian);
           } else {
             assert(false);
           }
@@ -14319,11 +14319,11 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
           if (dataType === "ulaw" || dataType === "alaw") {
             this.outputSampleSize = 2;
             this.outputFormat = "s16";
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setInt16(byteOffset, value, true);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setInt16(byteOffset, value, true);
           } else {
             this.outputSampleSize = 1;
             this.outputFormat = "u8";
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setUint8(byteOffset, value + 2 ** 7);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setUint8(byteOffset, value + 2 ** 7);
           }
         }
         ;
@@ -14332,7 +14332,7 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
         {
           this.outputSampleSize = 2;
           this.outputFormat = "s16";
-          this.writeOutputValue = (view4, byteOffset, value) => view4.setInt16(byteOffset, value, true);
+          this.writeOutputValue = (view3, byteOffset, value) => view3.setInt16(byteOffset, value, true);
         }
         ;
         break;
@@ -14340,7 +14340,7 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
         {
           this.outputSampleSize = 4;
           this.outputFormat = "s32";
-          this.writeOutputValue = (view4, byteOffset, value) => view4.setInt32(byteOffset, value << 8, true);
+          this.writeOutputValue = (view3, byteOffset, value) => view3.setInt32(byteOffset, value << 8, true);
         }
         ;
         break;
@@ -14349,10 +14349,10 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
           this.outputSampleSize = 4;
           if (dataType === "float") {
             this.outputFormat = "f32";
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setFloat32(byteOffset, value, true);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setFloat32(byteOffset, value, true);
           } else {
             this.outputFormat = "s32";
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setInt32(byteOffset, value, true);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setInt32(byteOffset, value, true);
           }
         }
         ;
@@ -14361,7 +14361,7 @@ var PcmAudioDecoderWrapper = class extends DecoderWrapper {
         {
           this.outputSampleSize = 4;
           this.outputFormat = "f32";
-          this.writeOutputValue = (view4, byteOffset, value) => view4.setFloat32(byteOffset, value, true);
+          this.writeOutputValue = (view3, byteOffset, value) => view3.setFloat32(byteOffset, value, true);
         }
         ;
         break;
@@ -15673,16 +15673,16 @@ var Reader = class {
   }
 };
 var FileSlice = class _FileSlice2 {
-  constructor(bytes4, view4, offset, start, end) {
-    this.bytes = bytes4;
-    this.view = view4;
+  constructor(bytes3, view3, offset, start, end) {
+    this.bytes = bytes3;
+    this.view = view3;
     this.offset = offset;
     this.start = start;
     this.end = end;
     this.bufferPos = start - offset;
   }
-  static tempFromBytes(bytes4) {
-    return new _FileSlice2(bytes4, toDataView(bytes4), 0, 0, bytes4.length);
+  static tempFromBytes(bytes3) {
+    return new _FileSlice2(bytes3, toDataView(bytes3), 0, 0, bytes3.length);
   }
   get length() {
     return this.end - this.start;
@@ -15715,9 +15715,9 @@ var checkIsInRange = (slice, bytesToRead) => {
 };
 var readBytes = (slice, length) => {
   checkIsInRange(slice, length);
-  const bytes4 = slice.bytes.subarray(slice.bufferPos, slice.bufferPos + length);
+  const bytes3 = slice.bytes.subarray(slice.bufferPos, slice.bufferPos + length);
   slice.bufferPos += length;
-  return bytes4;
+  return bytes3;
 };
 var readU8 = (slice) => {
   checkIsInRange(slice, 1);
@@ -15968,26 +15968,26 @@ var fixed_2_30 = (value) => {
   return [bytes[0], bytes[1], bytes[2], bytes[3]];
 };
 var variableUnsignedInt = (value, byteLength) => {
-  const bytes4 = [];
+  const bytes3 = [];
   let remaining = value;
   do {
     let byte = remaining & 127;
     remaining >>= 7;
-    if (bytes4.length > 0) {
+    if (bytes3.length > 0) {
       byte |= 128;
     }
-    bytes4.push(byte);
+    bytes3.push(byte);
     if (byteLength !== void 0) {
       byteLength--;
     }
   } while (remaining > 0 || byteLength);
-  return bytes4.reverse();
+  return bytes3.reverse();
 };
 var ascii = (text, nullTerminated = false) => {
-  const bytes4 = Array(text.length).fill(null).map((_, i) => text.charCodeAt(i));
+  const bytes3 = Array(text.length).fill(null).map((_, i) => text.charCodeAt(i));
   if (nullTerminated)
-    bytes4.push(0);
-  return bytes4;
+    bytes3.push(0);
+  return bytes3;
 };
 var rotationMatrix = (rotationInDegrees) => {
   const theta = rotationInDegrees * (Math.PI / 180);
@@ -16582,7 +16582,7 @@ var esds = (trackData) => {
     default:
       throw new Error(`Unhandled audio codec: ${trackData.track.source._codec}`);
   }
-  let bytes4 = [
+  let bytes3 = [
     ...u8(objectTypeIndication),
     // Object type indication
     ...u8(21),
@@ -16596,23 +16596,23 @@ var esds = (trackData) => {
   ];
   if (trackData.info.decoderConfig.description) {
     const description = toUint8Array(trackData.info.decoderConfig.description);
-    bytes4 = [
-      ...bytes4,
+    bytes3 = [
+      ...bytes3,
       ...u8(5),
       // TAG(5) = DecoderSpecificInfo
       ...variableUnsignedInt(description.byteLength),
       ...description
     ];
   }
-  bytes4 = [
+  bytes3 = [
     ...u16(1),
     // ES_ID = 1
     ...u8(0),
     // flags etc = 0
     ...u8(4),
     // TAG(4) = ES Descriptor
-    ...variableUnsignedInt(bytes4.length),
-    ...bytes4,
+    ...variableUnsignedInt(bytes3.length),
+    ...bytes3,
     ...u8(6),
     // TAG(6)
     ...u8(1),
@@ -16620,13 +16620,13 @@ var esds = (trackData) => {
     ...u8(2)
     // data
   ];
-  bytes4 = [
+  bytes3 = [
     ...u8(3),
     // TAG(3) = Object Descriptor
-    ...variableUnsignedInt(bytes4.length),
-    ...bytes4
+    ...variableUnsignedInt(bytes3.length),
+    ...bytes3
   ];
-  return fullBox("esds", 0, 0, bytes4);
+  return fullBox("esds", 0, 0, bytes3);
 };
 var wave = (trackData) => {
   return box("wave", void 0, [
@@ -16657,8 +16657,8 @@ var dOps = (trackData) => {
   const description = trackData.info.decoderConfig?.description;
   if (description) {
     assert(description.byteLength >= 18);
-    const bytes4 = toUint8Array(description);
-    const header = parseOpusIdentificationHeader(bytes4);
+    const bytes3 = toUint8Array(description);
+    const header = parseOpusIdentificationHeader(bytes3);
     outputChannelCount = header.outputChannelCount;
     preSkip = header.preSkip;
     inputSampleRate = header.inputSampleRate;
@@ -16687,9 +16687,9 @@ var dOps = (trackData) => {
 var dfLa = (trackData) => {
   const description = trackData.info.decoderConfig?.description;
   assert(description);
-  const bytes4 = toUint8Array(description);
+  const bytes3 = toUint8Array(description);
   return fullBox("dfLa", 0, 0, [
-    ...bytes4.subarray(4)
+    ...bytes3.subarray(4)
   ]);
 };
 var pcmC = (trackData) => {
@@ -16705,8 +16705,8 @@ var dac3 = (trackData) => {
   if (!frameInfo) {
     throw new Error("Couldn't extract AC-3 frame info from the audio packet. Ensure the packets contain valid AC-3 sync frames (as specified in ETSI TS 102 366).");
   }
-  const bytes4 = new Uint8Array(3);
-  const bitstream = new Bitstream(bytes4);
+  const bytes3 = new Uint8Array(3);
+  const bitstream = new Bitstream(bytes3);
   bitstream.writeBits(2, frameInfo.fscod);
   bitstream.writeBits(5, frameInfo.bsid);
   bitstream.writeBits(3, frameInfo.bsmod);
@@ -16714,7 +16714,7 @@ var dac3 = (trackData) => {
   bitstream.writeBits(1, frameInfo.lfeon);
   bitstream.writeBits(5, frameInfo.bitRateCode);
   bitstream.writeBits(5, 0);
-  return box("dac3", [...bytes4]);
+  return box("dac3", [...bytes3]);
 };
 var dec3 = (trackData) => {
   const frameInfo = parseEac3SyncFrame(trackData.info.firstPacket.data);
@@ -16731,8 +16731,8 @@ var dec3 = (trackData) => {
     }
   }
   const size = Math.ceil(totalBits / 8);
-  const bytes4 = new Uint8Array(size);
-  const bitstream = new Bitstream(bytes4);
+  const bytes3 = new Uint8Array(size);
+  const bitstream = new Bitstream(bytes3);
   bitstream.writeBits(13, frameInfo.dataRate);
   bitstream.writeBits(3, frameInfo.substreams.length - 1);
   for (const sub of frameInfo.substreams) {
@@ -16751,7 +16751,7 @@ var dec3 = (trackData) => {
       bitstream.writeBits(1, 0);
     }
   }
-  return box("dec3", [...bytes4]);
+  return box("dec3", [...bytes3]);
 };
 var subtitleSampleDescription = (compressionType, trackData) => box(compressionType, [
   Array(6).fill(0),
@@ -18902,8 +18902,8 @@ var MatroskaMuxer = class extends Muxer {
         seekPreRollNs = 1e6 * 80;
         const description = trackData.info.decoderConfig.description;
         if (description) {
-          const bytes4 = toUint8Array(description);
-          const header = parseOpusIdentificationHeader(bytes4);
+          const bytes3 = toUint8Array(description);
+          const header = parseOpusIdentificationHeader(bytes3);
           seekPreRollNs = Math.round(1e9 * (header.preSkip / OPUS_SAMPLE_RATE));
         }
       }
@@ -19564,12 +19564,12 @@ ${cue.notes ?? ""}`;
       return;
     }
     const prelude = new Uint8Array(4);
-    const view4 = new DataView(prelude.buffer);
-    view4.setUint8(0, 128 | trackData.track.id);
-    view4.setInt16(1, relativeTimestamp, false);
+    const view3 = new DataView(prelude.buffer);
+    view3.setUint8(0, 128 | trackData.track.id);
+    view3.setInt16(1, relativeTimestamp, false);
     const msDuration = Math.round(1e3 * chunk.duration);
     if (!chunk.additions) {
-      view4.setUint8(3, Number(chunk.type === "key") << 7);
+      view3.setUint8(3, Number(chunk.type === "key") << 7);
       const simpleBlock = { id: EBMLId.SimpleBlock, data: [
         prelude,
         chunk.data
@@ -20437,7 +20437,7 @@ var VideoEncoderWrapper = class {
   }
 };
 var splitterGpuUnavailable = false;
-var ColorAlphaSplitter = class _ColorAlphaSplitter3 {
+var ColorAlphaSplitter = class _ColorAlphaSplitter2 {
   constructor(initialWidth, initialHeight) {
     this.canvas = null;
     this.gl = null;
@@ -20450,7 +20450,7 @@ var ColorAlphaSplitter = class _ColorAlphaSplitter3 {
     this.pendingRequests = /* @__PURE__ */ new Map();
     this.nextRequestId = 0;
     const canMakeCanvas = typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined" && typeof document.createElement === "function";
-    if (!_ColorAlphaSplitter3.forceCpu && canMakeCanvas && !splitterGpuUnavailable) {
+    if (!_ColorAlphaSplitter2.forceCpu && canMakeCanvas && !splitterGpuUnavailable) {
       try {
         if (typeof OffscreenCanvas !== "undefined") {
           this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
@@ -21104,9 +21104,9 @@ var AudioEncoderWrapper = class {
     for (let i = 0; i < numberOfChannels; i++) {
       audioSample.copyTo(floats, { planeIndex: i, format: "f32-planar" });
       for (let j = 0; j < outputs.length; j++) {
-        const { frameCount, view: view4 } = outputs[j];
+        const { frameCount, view: view3 } = outputs[j];
         for (let k = 0; k < frameCount; k++) {
-          this.writeOutputValue(view4, (k * numberOfChannels + i) * this.outputSampleSize, floats[j * CHUNK_SIZE + k]);
+          this.writeOutputValue(view3, (k * numberOfChannels + i) * this.outputSampleSize, floats[j * CHUNK_SIZE + k]);
         }
       }
     }
@@ -21121,8 +21121,8 @@ var AudioEncoderWrapper = class {
       }
     };
     for (let i = 0; i < outputs.length; i++) {
-      const { frameCount, view: view4 } = outputs[i];
-      const outputBuffer = view4.buffer;
+      const { frameCount, view: view3 } = outputs[i];
+      const outputBuffer = view3.buffer;
       const startFrame = i * CHUNK_SIZE;
       const packet = new EncodedPacket(new Uint8Array(outputBuffer), "key", timestamp + startFrame / sampleRate, frameCount / sampleRate);
       this.encodingConfig.onEncodedPacket?.(packet, meta);
@@ -21217,20 +21217,20 @@ var AudioEncoderWrapper = class {
       case 1:
         {
           if (dataType === "unsigned") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setUint8(byteOffset, clamp((value + 1) * 127.5, 0, 255));
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setUint8(byteOffset, clamp((value + 1) * 127.5, 0, 255));
           } else if (dataType === "signed") {
-            this.writeOutputValue = (view4, byteOffset, value) => {
-              view4.setInt8(byteOffset, clamp(Math.round(value * 128), -128, 127));
+            this.writeOutputValue = (view3, byteOffset, value) => {
+              view3.setInt8(byteOffset, clamp(Math.round(value * 128), -128, 127));
             };
           } else if (dataType === "ulaw") {
-            this.writeOutputValue = (view4, byteOffset, value) => {
+            this.writeOutputValue = (view3, byteOffset, value) => {
               const int16 = clamp(Math.floor(value * 32767), -32768, 32767);
-              view4.setUint8(byteOffset, toUlaw(int16));
+              view3.setUint8(byteOffset, toUlaw(int16));
             };
           } else if (dataType === "alaw") {
-            this.writeOutputValue = (view4, byteOffset, value) => {
+            this.writeOutputValue = (view3, byteOffset, value) => {
               const int16 = clamp(Math.floor(value * 32767), -32768, 32767);
-              view4.setUint8(byteOffset, toAlaw(int16));
+              view3.setUint8(byteOffset, toAlaw(int16));
             };
           } else {
             assert(false);
@@ -21241,9 +21241,9 @@ var AudioEncoderWrapper = class {
       case 2:
         {
           if (dataType === "unsigned") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setUint16(byteOffset, clamp((value + 1) * 32767.5, 0, 65535), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setUint16(byteOffset, clamp((value + 1) * 32767.5, 0, 65535), littleEndian);
           } else if (dataType === "signed") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setInt16(byteOffset, clamp(Math.round(value * 32767), -32768, 32767), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setInt16(byteOffset, clamp(Math.round(value * 32767), -32768, 32767), littleEndian);
           } else {
             assert(false);
           }
@@ -21253,9 +21253,9 @@ var AudioEncoderWrapper = class {
       case 3:
         {
           if (dataType === "unsigned") {
-            this.writeOutputValue = (view4, byteOffset, value) => setUint24(view4, byteOffset, clamp((value + 1) * 83886075e-1, 0, 16777215), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => setUint24(view3, byteOffset, clamp((value + 1) * 83886075e-1, 0, 16777215), littleEndian);
           } else if (dataType === "signed") {
-            this.writeOutputValue = (view4, byteOffset, value) => setInt24(view4, byteOffset, clamp(Math.round(value * 8388607), -8388608, 8388607), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => setInt24(view3, byteOffset, clamp(Math.round(value * 8388607), -8388608, 8388607), littleEndian);
           } else {
             assert(false);
           }
@@ -21265,11 +21265,11 @@ var AudioEncoderWrapper = class {
       case 4:
         {
           if (dataType === "unsigned") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setUint32(byteOffset, clamp((value + 1) * 21474836475e-1, 0, 4294967295), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setUint32(byteOffset, clamp((value + 1) * 21474836475e-1, 0, 4294967295), littleEndian);
           } else if (dataType === "signed") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setInt32(byteOffset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setInt32(byteOffset, clamp(Math.round(value * 2147483647), -2147483648, 2147483647), littleEndian);
           } else if (dataType === "float") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setFloat32(byteOffset, value, littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setFloat32(byteOffset, value, littleEndian);
           } else {
             assert(false);
           }
@@ -21279,7 +21279,7 @@ var AudioEncoderWrapper = class {
       case 8:
         {
           if (dataType === "float") {
-            this.writeOutputValue = (view4, byteOffset, value) => view4.setFloat64(byteOffset, value, littleEndian);
+            this.writeOutputValue = (view3, byteOffset, value) => view3.setFloat64(byteOffset, value, littleEndian);
           } else {
             assert(false);
           }
@@ -30496,9 +30496,9 @@ var ReadOrchestrator2 = class {
     }
     if (!result) {
       assert2(bytes22);
-      result = promise.then((bytes32) => bytes32 && {
-        bytes: bytes32,
-        view: toDataView2(bytes32),
+      result = promise.then((bytes3) => bytes3 && {
+        bytes: bytes3,
+        view: toDataView2(bytes3),
         offset: innerStart
       });
     } else {
@@ -44429,27 +44429,27 @@ var validateAnyIterable3 = (iterable) => {
 var assertNever3 = (x) => {
   throw new Error(`Unexpected value: ${x}`);
 };
-var getUint243 = (view22, byteOffset, littleEndian) => {
-  const byte1 = view22.getUint8(byteOffset);
-  const byte2 = view22.getUint8(byteOffset + 1);
-  const byte3 = view22.getUint8(byteOffset + 2);
+var getUint243 = (view3, byteOffset, littleEndian) => {
+  const byte1 = view3.getUint8(byteOffset);
+  const byte2 = view3.getUint8(byteOffset + 1);
+  const byte3 = view3.getUint8(byteOffset + 2);
   if (littleEndian) {
     return byte1 | byte2 << 8 | byte3 << 16;
   } else {
     return byte1 << 16 | byte2 << 8 | byte3;
   }
 };
-var setUint243 = (view22, byteOffset, value, littleEndian) => {
+var setUint243 = (view3, byteOffset, value, littleEndian) => {
   value = value >>> 0;
   value = value & 16777215;
   if (littleEndian) {
-    view22.setUint8(byteOffset, value & 255);
-    view22.setUint8(byteOffset + 1, value >>> 8 & 255);
-    view22.setUint8(byteOffset + 2, value >>> 16 & 255);
+    view3.setUint8(byteOffset, value & 255);
+    view3.setUint8(byteOffset + 1, value >>> 8 & 255);
+    view3.setUint8(byteOffset + 2, value >>> 16 & 255);
   } else {
-    view22.setUint8(byteOffset, value >>> 16 & 255);
-    view22.setUint8(byteOffset + 1, value >>> 8 & 255);
-    view22.setUint8(byteOffset + 2, value & 255);
+    view3.setUint8(byteOffset, value >>> 16 & 255);
+    view3.setUint8(byteOffset + 1, value >>> 8 & 255);
+    view3.setUint8(byteOffset + 2, value & 255);
   }
 };
 var roundToMultiple3 = (value, multiple) => {
@@ -44556,8 +44556,8 @@ var validateRectangle3 = (rect, propertyPath) => {
   }
 };
 var Bitstream3 = class _Bitstream2 {
-  constructor(bytes22) {
-    this.bytes = bytes22;
+  constructor(bytes3) {
+    this.bytes = bytes3;
     this.pos = 0;
   }
   seekToByte(byteOffset) {
@@ -44771,8 +44771,8 @@ var iterateNalUnitsInLengthPrefixed3 = function* (packetData, lengthSize) {
 };
 var iterateAvcNalUnits3 = (packetData, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes22 = toUint8Array3(decoderConfig.description);
-    const lengthSizeMinusOne = bytes22[4] & 3;
+    const bytes3 = toUint8Array3(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[4] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return iterateNalUnitsInLengthPrefixed3(packetData, lengthSize);
   } else {
@@ -44836,8 +44836,8 @@ var concatNalUnitsInLengthPrefixed3 = (nalUnits, lengthSize) => {
 };
 var concatAvcNalUnits3 = (nalUnits, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes22 = toUint8Array3(decoderConfig.description);
-    const lengthSizeMinusOne = bytes22[4] & 3;
+    const bytes3 = toUint8Array3(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[4] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return concatNalUnitsInLengthPrefixed3(nalUnits, lengthSize);
   } else {
@@ -44846,25 +44846,25 @@ var concatAvcNalUnits3 = (nalUnits, decoderConfig) => {
 };
 var deserializeAvcDecoderConfigurationRecord3 = (data) => {
   try {
-    const view22 = toDataView3(data);
+    const view3 = toDataView3(data);
     let offset = 0;
-    const configurationVersion = view22.getUint8(offset++);
-    const avcProfileIndication = view22.getUint8(offset++);
-    const profileCompatibility = view22.getUint8(offset++);
-    const avcLevelIndication = view22.getUint8(offset++);
-    const lengthSizeMinusOne = view22.getUint8(offset++) & 3;
-    const numOfSequenceParameterSets = view22.getUint8(offset++) & 31;
+    const configurationVersion = view3.getUint8(offset++);
+    const avcProfileIndication = view3.getUint8(offset++);
+    const profileCompatibility = view3.getUint8(offset++);
+    const avcLevelIndication = view3.getUint8(offset++);
+    const lengthSizeMinusOne = view3.getUint8(offset++) & 3;
+    const numOfSequenceParameterSets = view3.getUint8(offset++) & 31;
     const sequenceParameterSets = [];
     for (let i = 0; i < numOfSequenceParameterSets; i++) {
-      const length = view22.getUint16(offset, false);
+      const length = view3.getUint16(offset, false);
       offset += 2;
       sequenceParameterSets.push(data.subarray(offset, offset + length));
       offset += length;
     }
-    const numOfPictureParameterSets = view22.getUint8(offset++);
+    const numOfPictureParameterSets = view3.getUint8(offset++);
     const pictureParameterSets = [];
     for (let i = 0; i < numOfPictureParameterSets; i++) {
-      const length = view22.getUint16(offset, false);
+      const length = view3.getUint16(offset, false);
       offset += 2;
       pictureParameterSets.push(data.subarray(offset, offset + length));
       offset += length;
@@ -44883,16 +44883,16 @@ var deserializeAvcDecoderConfigurationRecord3 = (data) => {
       sequenceParameterSetExt: null
     };
     if ((avcProfileIndication === 100 || avcProfileIndication === 110 || avcProfileIndication === 122 || avcProfileIndication === 144) && offset + 4 <= data.length) {
-      const chromaFormat = view22.getUint8(offset++) & 3;
-      const bitDepthLumaMinus8 = view22.getUint8(offset++) & 7;
-      const bitDepthChromaMinus8 = view22.getUint8(offset++) & 7;
-      const numOfSequenceParameterSetExt = view22.getUint8(offset++);
+      const chromaFormat = view3.getUint8(offset++) & 3;
+      const bitDepthLumaMinus8 = view3.getUint8(offset++) & 7;
+      const bitDepthChromaMinus8 = view3.getUint8(offset++) & 7;
+      const numOfSequenceParameterSetExt = view3.getUint8(offset++);
       record.chromaFormat = chromaFormat;
       record.bitDepthLumaMinus8 = bitDepthLumaMinus8;
       record.bitDepthChromaMinus8 = bitDepthChromaMinus8;
       const sequenceParameterSetExt = [];
       for (let i = 0; i < numOfSequenceParameterSetExt; i++) {
-        const length = view22.getUint16(offset, false);
+        const length = view3.getUint16(offset, false);
         offset += 2;
         sequenceParameterSetExt.push(data.subarray(offset, offset + length));
         offset += length;
@@ -45145,8 +45145,8 @@ var skipAvcHrdParameters3 = (bitstream) => {
 };
 var concatHevcNalUnits3 = (nalUnits, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes22 = toUint8Array3(decoderConfig.description);
-    const lengthSizeMinusOne = bytes22[21] & 3;
+    const bytes3 = toUint8Array3(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[21] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return concatNalUnitsInLengthPrefixed3(nalUnits, lengthSize);
   } else {
@@ -45155,8 +45155,8 @@ var concatHevcNalUnits3 = (nalUnits, decoderConfig) => {
 };
 var iterateHevcNalUnits3 = (packetData, decoderConfig) => {
   if (decoderConfig.description) {
-    const bytes22 = toUint8Array3(decoderConfig.description);
-    const lengthSizeMinusOne = bytes22[21] & 3;
+    const bytes3 = toUint8Array3(decoderConfig.description);
+    const lengthSizeMinusOne = bytes3[21] & 3;
     const lengthSize = lengthSizeMinusOne + 1;
     return iterateNalUnitsInLengthPrefixed3(packetData, lengthSize);
   } else {
@@ -45298,12 +45298,12 @@ var determineVideoPacketType3 = (codec, decoderConfig, packetData) => {
           }
           if (type === AvcNalUnitType3.SEI && (!isChromium3() || getChromiumVersion3() >= 144)) {
             const nalUnit = packetData.subarray(loc.offset, loc.offset + loc.length);
-            const bytes22 = removeEmulationPreventionBytes3(nalUnit);
+            const bytes3 = removeEmulationPreventionBytes3(nalUnit);
             let pos = 1;
             do {
               let payloadType = 0;
               while (true) {
-                const nextByte = bytes22[pos++];
+                const nextByte = bytes3[pos++];
                 if (nextByte === void 0)
                   break;
                 payloadType += nextByte;
@@ -45313,7 +45313,7 @@ var determineVideoPacketType3 = (codec, decoderConfig, packetData) => {
               }
               let payloadSize = 0;
               while (true) {
-                const nextByte = bytes22[pos++];
+                const nextByte = bytes3[pos++];
                 if (nextByte === void 0)
                   break;
                 payloadSize += nextByte;
@@ -45323,7 +45323,7 @@ var determineVideoPacketType3 = (codec, decoderConfig, packetData) => {
               }
               const PAYLOAD_TYPE_RECOVERY_POINT = 6;
               if (payloadType === PAYLOAD_TYPE_RECOVERY_POINT) {
-                const bitstream = new Bitstream3(bytes22);
+                const bitstream = new Bitstream3(bytes3);
                 bitstream.pos = 8 * pos;
                 const recoveryFrameCount = readExpGolomb3(bitstream);
                 const exactMatchFlag = bitstream.readBits(1);
@@ -45332,7 +45332,7 @@ var determineVideoPacketType3 = (codec, decoderConfig, packetData) => {
                 }
               }
               pos += payloadSize;
-            } while (pos < bytes22.length - 1);
+            } while (pos < bytes3.length - 1);
           }
         }
         return "delta";
@@ -45695,21 +45695,6 @@ var EncodedPacket3 = class _EncodedPacket2 {
     return new _EncodedPacket2(options?.data ?? this.data, options?.type ?? this.type, options?.timestamp ?? this.timestamp, options?.duration ?? this.duration, options?.sequenceNumber ?? this.sequenceNumber, this.byteLength, options?.sideData ?? this.sideData);
   }
 };
-var Te43 = new Uint32Array(256);
-var Td03 = new Uint32Array(256);
-var Td13 = new Uint32Array(256);
-var Td23 = new Uint32Array(256);
-var Td33 = new Uint32Array(256);
-var Td43 = new Uint32Array(256);
-var rcon3 = new Uint32Array(10);
-polyfillSymbolDispose3();
-var sourceFinalizationRegistry3 = null;
-if (typeof FinalizationRegistry !== "undefined") {
-  sourceFinalizationRegistry3 = new FinalizationRegistry((cleanup) => {
-    cleanup();
-  });
-}
-var URL_SOURCE_MIN_LOAD_AMOUNT3 = 0.5 * 2 ** 20;
 var __addDisposableResource3 = function(env, value, async) {
   if (value !== null && value !== void 0) {
     if (typeof value !== "object" && typeof value !== "function") throw new TypeError("Object expected.");
@@ -48037,9 +48022,9 @@ var ColorAlphaMerger3 = class _ColorAlphaMerger2 {
   updateCpu(color, alpha) {
     if (!this.worker) {
       const blob = new Blob([`(${colorAlphaMergerWorkerCode3.toString()})()`], { type: "application/javascript" });
-      const url22 = URL.createObjectURL(blob);
-      this.worker = new Worker(url22);
-      URL.revokeObjectURL(url22);
+      const url3 = URL.createObjectURL(blob);
+      this.worker = new Worker(url3);
+      URL.revokeObjectURL(url3);
       this.worker.addEventListener("message", (event) => {
         const data = event.data;
         const pending2 = this.pendingRequests.get(data.id);
@@ -48964,505 +48949,79 @@ var InputDisposedError3 = class extends Error {
     this.name = "InputDisposedError";
   }
 };
-var bytes3 = /* @__PURE__ */ new Uint8Array(8);
-var view3 = /* @__PURE__ */ new DataView(bytes3.buffer);
-var ARRAY_BUFFER_INITIAL_SIZE3 = 2 ** 16;
-var ARRAY_BUFFER_MAX_SIZE3 = 2 ** 32;
-var DEFAULT_CHUNK_SIZE3 = 2 ** 24;
-var PMT_PID2 = 4096;
-var AVC_AUD_NAL2 = new Uint8Array([9, 240]);
-var HEVC_AUD_NAL2 = new Uint8Array([70, 1]);
-var MPEG_TS_CRC_POLYNOMIAL2 = 79764919;
-var MPEG_TS_CRC_TABLE2 = new Uint32Array(256);
-for (let n = 0; n < 256; n++) {
-  let crc = n << 24;
-  for (let k = 0; k < 8; k++) {
-    crc = crc & 2147483648 ? crc << 1 ^ MPEG_TS_CRC_POLYNOMIAL2 : crc << 1;
-  }
-  MPEG_TS_CRC_TABLE2[n] = crc >>> 0 & 4294967295;
-}
-var computeMpegTsCrc322 = (data) => {
-  let crc = 4294967295;
-  for (let i = 0; i < data.length; i++) {
-    const byte = data[i];
-    crc = (crc << 8 ^ MPEG_TS_CRC_TABLE2[crc >>> 24 ^ byte]) >>> 0;
-  }
-  return crc;
-};
-var PAT_SECTION2 = new Uint8Array(16);
-{
-  const view22 = toDataView3(PAT_SECTION2);
-  PAT_SECTION2[0] = 0;
-  view22.setUint16(1, 45069, false);
-  view22.setUint16(3, 1, false);
-  PAT_SECTION2[5] = 193;
-  PAT_SECTION2[6] = 0;
-  PAT_SECTION2[7] = 0;
-  view22.setUint16(8, 1, false);
-  view22.setUint16(10, 57344 | PMT_PID2 & 8191, false);
-  view22.setUint32(12, computeMpegTsCrc322(PAT_SECTION2.subarray(0, 12)), false);
-}
-var splitterGpuUnavailable3 = false;
-var ColorAlphaSplitter3 = class _ColorAlphaSplitter2 {
-  constructor(initialWidth, initialHeight) {
-    this.canvas = null;
-    this.gl = null;
-    this.colorProgram = null;
-    this.alphaProgram = null;
-    this.vao = null;
-    this.sourceTexture = null;
-    this.alphaResolutionLocation = null;
-    this.worker = null;
-    this.pendingRequests = /* @__PURE__ */ new Map();
-    this.nextRequestId = 0;
-    const canMakeCanvas = typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined" && typeof document.createElement === "function";
-    if (!_ColorAlphaSplitter2.forceCpu && canMakeCanvas && !splitterGpuUnavailable3) {
-      try {
-        if (typeof OffscreenCanvas !== "undefined") {
-          this.canvas = new OffscreenCanvas(initialWidth, initialHeight);
-        } else {
-          this.canvas = document.createElement("canvas");
-          this.canvas.width = initialWidth;
-          this.canvas.height = initialHeight;
-        }
-        const gl = this.canvas.getContext("webgl2", {
-          alpha: true
-          // Needed due to the YUV thing we do for alpha
-        });
-        if (!gl) {
-          throw new Error("Couldn't acquire WebGL 2 context.");
-        }
-        this.gl = gl;
-        this.colorProgram = this.createColorProgram();
-        this.alphaProgram = this.createAlphaProgram();
-        this.vao = this.createVAO();
-        this.sourceTexture = this.createTexture();
-        this.alphaResolutionLocation = this.gl.getUniformLocation(this.alphaProgram, "u_resolution");
-        this.gl.useProgram(this.colorProgram);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.colorProgram, "u_sourceTexture"), 0);
-        this.gl.useProgram(this.alphaProgram);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.alphaProgram, "u_sourceTexture"), 0);
-      } catch (error) {
-        this.gl = null;
-        this.canvas = null;
-        splitterGpuUnavailable3 = true;
-        console.warn("Falling back to CPU for color/alpha splitting.", error);
-      }
-    }
-  }
-  async update(sourceFrame) {
-    if (this.gl) {
-      return this.updateGpu(sourceFrame);
-    } else {
-      return this.updateCpu(sourceFrame);
-    }
-  }
-  updateGpu(sourceFrame) {
-    assert3(this.gl);
-    assert3(this.canvas);
-    if (sourceFrame.displayWidth !== this.canvas.width || sourceFrame.displayHeight !== this.canvas.height) {
-      this.canvas.width = sourceFrame.displayWidth;
-      this.canvas.height = sourceFrame.displayHeight;
-    }
-    this.gl.activeTexture(this.gl.TEXTURE0);
-    this.gl.bindTexture(this.gl.TEXTURE_2D, this.sourceTexture);
-    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, sourceFrame);
-    const colorFrame = this.runColorProgram(sourceFrame);
-    const alphaFrame = this.runAlphaProgram(sourceFrame);
-    sourceFrame.close();
-    return { colorFrame, alphaFrame };
-  }
-  createVertexShader() {
-    assert3(this.gl);
-    return this.createShader(this.gl.VERTEX_SHADER, `#version 300 es
-			in vec2 a_position;
-			in vec2 a_texCoord;
-			out vec2 v_texCoord;
-			
-			void main() {
-				gl_Position = vec4(a_position, 0.0, 1.0);
-				v_texCoord = a_texCoord;
-			}
-		`);
-  }
-  createColorProgram() {
-    assert3(this.gl);
-    const vertexShader = this.createVertexShader();
-    const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-			precision highp float;
-			
-			uniform sampler2D u_sourceTexture;
-			in vec2 v_texCoord;
-			out vec4 fragColor;
-			
-			void main() {
-				vec4 source = texture(u_sourceTexture, v_texCoord);
-				fragColor = vec4(source.rgb, 1.0);
-			}
-		`);
-    const program = this.gl.createProgram();
-    this.gl.attachShader(program, vertexShader);
-    this.gl.attachShader(program, fragmentShader);
-    this.gl.linkProgram(program);
-    return program;
-  }
-  createAlphaProgram() {
-    assert3(this.gl);
-    const vertexShader = this.createVertexShader();
-    const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, `#version 300 es
-			precision highp float;
-			
-			uniform sampler2D u_sourceTexture;
-			uniform vec2 u_resolution; // The width and height of the canvas
-			in vec2 v_texCoord;
-			out vec4 fragColor;
-
-			// This function determines the value for a single byte in the YUV stream
-			float getByteValue(float byteOffset) {
-				float width = u_resolution.x;
-				float height = u_resolution.y;
-
-				float yPlaneSize = width * height;
-
-				if (byteOffset < yPlaneSize) {
-					// This byte is in the luma plane. Find the corresponding pixel coordinates to sample from
-					float y = floor(byteOffset / width);
-					float x = mod(byteOffset, width);
-					
-					// Add 0.5 to sample the center of the texel
-					vec2 sampleCoord = (vec2(x, y) + 0.5) / u_resolution;
-					
-					// The luma value is the alpha from the source texture
-					return texture(u_sourceTexture, sampleCoord).a;
-				} else {
-					// Write a fixed value for chroma and beyond
-					return 128.0 / 255.0;
-				}
-			}
-			
-			void main() {
-				// Each fragment writes 4 bytes (R, G, B, A)
-				float pixelIndex = floor(gl_FragCoord.y) * u_resolution.x + floor(gl_FragCoord.x);
-				float baseByteOffset = pixelIndex * 4.0;
-
-				vec4 result;
-				for (int i = 0; i < 4; i++) {
-					float currentByteOffset = baseByteOffset + float(i);
-					result[i] = getByteValue(currentByteOffset);
-				}
-				
-				fragColor = result;
-			}
-		`);
-    const program = this.gl.createProgram();
-    this.gl.attachShader(program, vertexShader);
-    this.gl.attachShader(program, fragmentShader);
-    this.gl.linkProgram(program);
-    return program;
-  }
-  createShader(type, source) {
-    assert3(this.gl);
-    const shader = this.gl.createShader(type);
-    this.gl.shaderSource(shader, source);
-    this.gl.compileShader(shader);
-    if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-      console.error("Shader compile error:", this.gl.getShaderInfoLog(shader));
-    }
-    return shader;
-  }
-  createVAO() {
-    assert3(this.gl);
-    assert3(this.colorProgram);
-    const vao = this.gl.createVertexArray();
-    this.gl.bindVertexArray(vao);
-    const vertices = new Float32Array([
-      -1,
-      -1,
-      0,
-      1,
-      1,
-      -1,
-      1,
-      1,
-      -1,
-      1,
-      0,
-      0,
-      1,
-      1,
-      1,
-      0
-    ]);
-    const buffer = this.gl.createBuffer();
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
-    this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
-    const positionLocation = this.gl.getAttribLocation(this.colorProgram, "a_position");
-    const texCoordLocation = this.gl.getAttribLocation(this.colorProgram, "a_texCoord");
-    this.gl.enableVertexAttribArray(positionLocation);
-    this.gl.vertexAttribPointer(positionLocation, 2, this.gl.FLOAT, false, 16, 0);
-    this.gl.enableVertexAttribArray(texCoordLocation);
-    this.gl.vertexAttribPointer(texCoordLocation, 2, this.gl.FLOAT, false, 16, 8);
-    return vao;
-  }
-  createTexture() {
-    assert3(this.gl);
-    const texture = this.gl.createTexture();
-    this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-    return texture;
-  }
-  runColorProgram(sourceFrame) {
-    assert3(this.gl);
-    assert3(this.canvas);
-    this.gl.useProgram(this.colorProgram);
-    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-    this.gl.bindVertexArray(this.vao);
-    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-    return new VideoFrame(this.canvas, {
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0,
-      alpha: "discard"
-    });
-  }
-  runAlphaProgram(sourceFrame) {
-    assert3(this.gl);
-    assert3(this.canvas);
-    this.gl.useProgram(this.alphaProgram);
-    this.gl.uniform2f(this.alphaResolutionLocation, this.canvas.width, this.canvas.height);
-    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
-    this.gl.bindVertexArray(this.vao);
-    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
-    const { width, height } = this.canvas;
-    const chromaSamples = Math.ceil(width / 2) * Math.ceil(height / 2);
-    const yuvSize = width * height + chromaSamples * 2;
-    const requiredHeight = Math.ceil(yuvSize / (width * 4));
-    let yuv = new Uint8Array(4 * width * requiredHeight);
-    this.gl.readPixels(0, 0, width, requiredHeight, this.gl.RGBA, this.gl.UNSIGNED_BYTE, yuv);
-    yuv = yuv.subarray(0, yuvSize);
-    assert3(yuv[width * height] === 128);
-    assert3(yuv[yuv.length - 1] === 128);
-    const init = {
-      format: "I420",
-      codedWidth: width,
-      codedHeight: height,
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0,
-      transfer: [yuv.buffer]
-    };
-    return new VideoFrame(yuv, init);
-  }
-  updateCpu(sourceFrame) {
-    if (!this.worker) {
-      const blob = new Blob([`(${colorAlphaSplitterWorkerCode3.toString()})()`], { type: "application/javascript" });
-      const url22 = URL.createObjectURL(blob);
-      this.worker = new Worker(url22);
-      URL.revokeObjectURL(url22);
-      this.worker.addEventListener("message", (event) => {
-        const data = event.data;
-        const pending2 = this.pendingRequests.get(data.id);
-        if (!pending2) {
-          return;
-        }
-        this.pendingRequests.delete(data.id);
-        if ("error" in data) {
-          pending2.reject(new Error(data.error));
-        } else {
-          pending2.resolve({ colorFrame: data.colorFrame, alphaFrame: data.alphaFrame });
-        }
-      });
-      this.worker.addEventListener("error", (event) => {
-        const error = new Error(event.message || "Color/alpha splitter worker error.");
-        for (const pending2 of this.pendingRequests.values()) {
-          pending2.reject(error);
-        }
-        this.pendingRequests.clear();
-      });
-    }
-    const id = this.nextRequestId++;
-    const pending = promiseWithResolvers3();
-    this.pendingRequests.set(id, pending);
-    this.worker.postMessage({ id, sourceFrame }, { transfer: [sourceFrame] });
-    return pending.promise;
-  }
-  close() {
-    this.gl?.getExtension("WEBGL_lose_context")?.loseContext();
-    this.gl = null;
-    this.canvas = null;
-    this.worker?.terminate();
-    this.worker = null;
-    const error = new Error("Color/alpha splitter closed.");
-    for (const pending of this.pendingRequests.values()) {
-      pending.reject(error);
-    }
-    this.pendingRequests.clear();
-  }
-};
-ColorAlphaSplitter3.forceCpu = true;
-var colorAlphaSplitterWorkerCode3 = () => {
-  let cpuSourceBuffer = null;
-  let chain = Promise.resolve();
-  self.addEventListener("message", (event) => {
-    const { id, sourceFrame } = event.data;
-    chain = chain.then(async () => {
-      try {
-        const { colorFrame, alphaFrame } = await split(sourceFrame);
-        self.postMessage({ id, colorFrame, alphaFrame }, { transfer: [colorFrame, alphaFrame] });
-      } catch (error) {
-        self.postMessage({ id, error: error.message });
-      } finally {
-        sourceFrame.close();
-      }
-    });
-  });
-  const split = async (sourceFrame) => {
-    const format = sourceFrame.format;
-    if (!format) {
-      throw new Error("CPU color/alpha splitting requires a known VideoFrame format.");
-    }
-    const width = sourceFrame.codedWidth;
-    const height = sourceFrame.codedHeight;
-    const sourceSize = sourceFrame.allocationSize();
-    if (!cpuSourceBuffer || cpuSourceBuffer.byteLength !== sourceSize) {
-      cpuSourceBuffer = new Uint8Array(sourceSize);
-    }
-    await sourceFrame.copyTo(cpuSourceBuffer);
-    if (format === "RGBA" || format === "BGRA") {
-      return splitInterleavedRgba(cpuSourceBuffer, width, height, format, sourceFrame);
-    } else if (format === "I420A" || format === "I420AP10" || format === "I420AP12" || format === "I422A" || format === "I422AP10" || format === "I422AP12" || format === "I444A" || format === "I444AP10" || format === "I444AP12") {
-      return splitPlanarYuvA(cpuSourceBuffer, width, height, format, sourceFrame);
-    }
-    throw new Error(`CPU color/alpha splitting does not support format '${format}'.`);
-  };
-  const splitInterleavedRgba = (source, width, height, format, sourceFrame) => {
-    const pixelCount = width * height;
-    const chromaW = Math.ceil(width / 2);
-    const chromaH = Math.ceil(height / 2);
-    const alphaSize = pixelCount + chromaW * chromaH * 2;
-    const alphaBuffer = new Uint8Array(alphaSize);
-    for (let i = 0, j = 3; i < pixelCount; i++, j += 4) {
-      alphaBuffer[i] = source[j];
-    }
-    alphaBuffer.fill(128, pixelCount);
-    const colorFrame = new VideoFrame(source, {
-      format: format === "RGBA" ? "RGBX" : "BGRX",
-      codedWidth: width,
-      codedHeight: height,
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0
-      // No transfer!
-    });
-    const alphaInit = {
-      format: "I420",
-      codedWidth: width,
-      codedHeight: height,
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0,
-      transfer: [alphaBuffer.buffer]
-    };
-    const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
-    return { colorFrame, alphaFrame };
-  };
-  const splitPlanarYuvA = (source, width, height, format, sourceFrame) => {
-    const is10 = format.includes("P10");
-    const is12 = format.includes("P12");
-    const bytesPerSample = is10 || is12 ? 2 : 1;
-    let chromaW;
-    let chromaH;
-    if (format.startsWith("I420")) {
-      chromaW = Math.ceil(width / 2);
-      chromaH = Math.ceil(height / 2);
-    } else if (format.startsWith("I422")) {
-      chromaW = Math.ceil(width / 2);
-      chromaH = height;
-    } else {
-      chromaW = width;
-      chromaH = height;
-    }
-    const ySamples = width * height;
-    const uvSamples = chromaW * chromaH;
-    const yBytes = ySamples * bytesPerSample;
-    const uvBytes = uvSamples * bytesPerSample;
-    const aBytes = ySamples * bytesPerSample;
-    const colorBytes = yBytes + uvBytes * 2;
-    const colorFormat = format.replace("A", "");
-    const alphaChromaW = Math.ceil(width / 2);
-    const alphaChromaH = Math.ceil(height / 2);
-    const alphaUvSamples = alphaChromaW * alphaChromaH;
-    const alphaUvBytes = alphaUvSamples * bytesPerSample;
-    const alphaSize = aBytes + 2 * alphaUvBytes;
-    const alphaBuffer = new Uint8Array(alphaSize);
-    const aPlaneStart = colorBytes;
-    alphaBuffer.set(source.subarray(aPlaneStart, aPlaneStart + aBytes), 0);
-    const uvOffset = aBytes;
-    const neutralChroma = is10 ? 512 : is12 ? 2048 : 128;
-    if (bytesPerSample === 1) {
-      alphaBuffer.fill(neutralChroma, uvOffset);
-    } else {
-      const uvView = new Uint16Array(alphaBuffer.buffer, uvOffset, 2 * alphaUvSamples);
-      uvView.fill(neutralChroma);
-    }
-    const alphaFormat = is10 ? "I420P10" : is12 ? "I420P12" : "I420";
-    const colorFrame = new VideoFrame(source.subarray(0, colorBytes), {
-      format: colorFormat,
-      codedWidth: width,
-      codedHeight: height,
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0
-    });
-    const alphaInit = {
-      format: alphaFormat,
-      codedWidth: width,
-      codedHeight: height,
-      timestamp: sourceFrame.timestamp,
-      duration: sourceFrame.duration ?? void 0,
-      transfer: [alphaBuffer.buffer]
-    };
-    const alphaFrame = new VideoFrame(alphaBuffer, alphaInit);
-    return { colorFrame, alphaFrame };
-  };
-};
 var MEDIABUNNY_LOADED_SYMBOL3 = /* @__PURE__ */ Symbol.for("mediabunny loaded");
 if (globalThis[MEDIABUNNY_LOADED_SYMBOL3]) {
   console.error("[WARNING]\nMediabunny was loaded twice. This will likely cause Mediabunny not to work correctly. Check if multiple dependencies are importing different versions of Mediabunny, or if something is being bundled incorrectly.");
 }
 globalThis[MEDIABUNNY_LOADED_SYMBOL3] = true;
+var sceneDetectionPresets = {
+  low: {
+    sampleRate: 1,
+    threshold: 0.25,
+    width: 96,
+    height: 54,
+    minSceneDuration: 1.5
+  },
+  medium: {
+    sampleRate: 2,
+    threshold: 0.18,
+    width: 96,
+    height: 54,
+    minSceneDuration: 0.8
+  },
+  high: {
+    sampleRate: 3,
+    threshold: 0.12,
+    width: 128,
+    height: 72,
+    minSceneDuration: 0.5
+  }
+};
+function resolveSceneDetectionOptions(options = {}) {
+  const sensitivity = options.sensitivity ?? "medium";
+  const preset = sceneDetectionPresets[sensitivity];
+  return {
+    sensitivity,
+    sampleRate: options.sampleRate ?? preset.sampleRate,
+    threshold: options.threshold ?? preset.threshold,
+    width: options.width ?? preset.width,
+    height: options.height ?? preset.height,
+    minSceneDuration: options.minSceneDuration ?? preset.minSceneDuration,
+    minKeyFrameDistance: options.minKeyFrameDistance,
+    maxKeyFrameInterval: options.maxKeyFrameInterval
+  };
+}
 async function detectSceneChanges(track, options = {}) {
-  const sampleRate = options.sampleRate ?? 2;
-  const width = options.width ?? 96;
-  const height = options.height ?? 54;
+  const resolved = resolveSceneDetectionOptions(options);
   const sink = new VideoSampleSink3(track);
   const duration = await track.computeDuration();
   const timestamps = [];
-  for (let time = 0; time < duration; time += 1 / sampleRate) timestamps.push(time);
+  for (let time = 0; time < duration; time += 1 / resolved.sampleRate) timestamps.push(time);
   const fingerprints = [];
   for await (const sample of sink.samplesAtTimestamps(timestamps)) {
     if (!sample) continue;
-    const data = sampleFingerprint(sample, width, height);
+    const data = sampleFingerprint(sample, resolved.width, resolved.height);
     fingerprints.push({ timestamp: sample.timestamp, data });
     sample.close();
   }
-  return detectSceneChangesInFingerprints(fingerprints, options);
+  return detectSceneChangesInFingerprints(fingerprints, resolved);
 }
 async function planSceneKeyFrames(track, options = {}) {
-  const changes = await detectSceneChanges(track, options);
+  const resolved = resolveSceneDetectionOptions(options);
+  const changes = await detectSceneChanges(track, resolved);
   const duration = await track.computeDuration();
   const keyFrameTimestamps = planKeyFrameTimestamps(changes, {
     duration,
-    minKeyFrameDistance: options.minKeyFrameDistance ?? options.minSceneDuration,
-    maxKeyFrameInterval: options.maxKeyFrameInterval
+    minKeyFrameDistance: resolved.minKeyFrameDistance ?? resolved.minSceneDuration,
+    maxKeyFrameInterval: resolved.maxKeyFrameInterval
   });
   const intervals = changes.slice(1).map((change, index) => change.timestamp - changes[index].timestamp);
-  const recommendedKeyFrameInterval = clamp22(percentile(intervals, 0.35) || options.minSceneDuration || 2, 0.5, 5);
+  const recommendedKeyFrameInterval = clamp22(percentile(intervals, 0.35) || resolved.minSceneDuration || 2, 0.5, 5);
   return { changes, keyFrameTimestamps, recommendedKeyFrameInterval };
 }
 function detectSceneChangesInFingerprints(fingerprints, options = {}) {
-  const threshold = options.threshold ?? 0.18;
-  const minSceneDuration = options.minSceneDuration ?? 0.8;
+  const resolved = resolveSceneDetectionOptions(options);
+  const { threshold, minSceneDuration } = resolved;
   let previous = null;
   let lastChange = -Infinity;
   const changes = [];
@@ -49943,6 +49502,27 @@ mediabunny/dist/modules/src/hls/hls-muxer.js:
 mediabunny/dist/modules/src/output-format.js:
 mediabunny/dist/modules/src/output.js:
 mediabunny/dist/modules/src/conversion.js:
+mediabunny/dist/modules/src/index.js:
+  (*!
+   * Copyright (c) 2026-present, Vanilagy and contributors
+   *
+   * This Source Code Form is subject to the terms of the Mozilla Public
+   * License, v. 2.0. If a copy of the MPL was not distributed with this
+   * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+   *)
+*/
+/*! Bundled license information:
+
+mediabunny/dist/modules/src/misc.js:
+mediabunny/dist/modules/shared/bitstream.js:
+mediabunny/dist/modules/src/codec.js:
+mediabunny/dist/modules/src/codec-data.js:
+mediabunny/dist/modules/src/packet.js:
+mediabunny/dist/modules/src/sample.js:
+mediabunny/dist/modules/src/custom-coder.js:
+mediabunny/dist/modules/src/media-sink.js:
+mediabunny/dist/modules/src/input-track.js:
+mediabunny/dist/modules/src/input.js:
 mediabunny/dist/modules/src/index.js:
   (*!
    * Copyright (c) 2026-present, Vanilagy and contributors

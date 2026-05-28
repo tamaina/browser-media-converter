@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   detectSceneChangesInFingerprints,
   planKeyFrameTimestamps,
+  resolveSceneDetectionOptions,
+  sceneDetectionPresets,
   scoreFrameDifference,
 } from '../dist/index.js';
 
@@ -28,6 +30,28 @@ assert.equal(scoreFrameDifference(black, black), 0);
 assert.equal(scoreFrameDifference(black, white), 1);
 assert.equal(scoreFrameDifference(white, red), 2 / 3);
 assert.throws(() => scoreFrameDifference(new Uint8ClampedArray(4), new Uint8ClampedArray(8)), /different lengths/);
+
+assert.equal(sceneDetectionPresets.medium.threshold, 0.18);
+assert.deepEqual(resolveSceneDetectionOptions({ sensitivity: 'high' }), {
+  sensitivity: 'high',
+  sampleRate: 3,
+  threshold: 0.12,
+  width: 128,
+  height: 72,
+  minSceneDuration: 0.5,
+  minKeyFrameDistance: undefined,
+  maxKeyFrameInterval: undefined,
+});
+assert.deepEqual(resolveSceneDetectionOptions({ sensitivity: 'low', threshold: 0.3, sampleRate: 4 }), {
+  sensitivity: 'low',
+  sampleRate: 4,
+  threshold: 0.3,
+  width: 96,
+  height: 54,
+  minSceneDuration: 1.5,
+  minKeyFrameDistance: undefined,
+  maxKeyFrameInterval: undefined,
+});
 
 const hardCuts = detectSceneChangesInFingerprints([
   frame(0, [0, 0, 0]),
@@ -61,6 +85,15 @@ const belowThreshold = detectSceneChangesInFingerprints([
   threshold: 0.1,
 });
 assert.deepEqual(belowThreshold, []);
+
+const presetSensitiveCuts = detectSceneChangesInFingerprints([
+  frame(0, [0, 0, 0]),
+  frame(1, [40, 40, 40]),
+  frame(2, [80, 80, 80]),
+], {
+  sensitivity: 'high',
+});
+assert.deepEqual(timestamps(presetSensitiveCuts), [1, 2]);
 
 assert.deepEqual(planKeyFrameTimestamps([
   { timestamp: 1, score: 1 },

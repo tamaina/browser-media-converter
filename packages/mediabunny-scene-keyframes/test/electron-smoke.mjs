@@ -1,18 +1,53 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
+import { build } from 'esbuild';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/mediabunny-scene-keyframes/test/electron-main.cjs');
-const outputDir = resolve(root, 'playground-output/scene-keyframes-electron');
+const smokeDir = await mkdtemp(resolve(tmpdir(), 'scene-keyframes-'));
+const smokeBundle = resolve(smokeDir, 'smoke.js');
+
+await build({
+  stdin: {
+    sourcefile: 'scene-keyframes-electron-smoke-entry.js',
+    resolveDir: resolve(root, 'packages/mediabunny-scene-keyframes'),
+    contents: `
+      import { BlobSource, Input, QuickTimeInputFormat } from 'mediabunny';
+      import { planSceneKeyFrames } from './src/index.ts';
+
+      globalThis.runSceneKeyFrameSmoke = async (inputBytes) => {
+        const mediaInput = new Input({
+          source: new BlobSource(new Blob([inputBytes], { type: 'video/quicktime' })),
+          formats: [new QuickTimeInputFormat()],
+        });
+        const track = await mediaInput.getPrimaryVideoTrack();
+        if (!track) throw new Error('bbb.mov did not expose a primary video track');
+        return planSceneKeyFrames(track, {
+          sampleRate: 1,
+          threshold: 0.18,
+          width: 64,
+          height: 36,
+          minKeyFrameDistance: 2,
+        });
+      };
+    `,
+  },
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  outfile: smokeBundle,
+});
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
-  if (url.pathname === '/scene.js') {
+  if (url.pathname === '/smoke.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'packages/mediabunny-scene-keyframes/dist/index.js')));
+    response.end(await readFile(smokeBundle));
     return;
   }
   if (url.pathname === '/bbb.mov') {
@@ -34,24 +69,10 @@ const page = await app.firstWindow();
 await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
+  await import(`http://127.0.0.1:${port}/smoke.js`);
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/bbb.mov`)).arrayBuffer());
-  const { transcodeWithSceneKeyFrames } = await import(`http://127.0.0.1:${port}/scene.js`);
-
-  const conversion = await transcodeWithSceneKeyFrames({
-    input,
-    detection: {
-      sampleRate: 1,
-      threshold: 0.18,
-      width: 64,
-      height: 36,
-      minKeyFrameDistance: 2,
-    },
-  });
-
   return {
-    scenePlan: conversion.scenePlan,
-    convertedLength: conversion.buffer.byteLength,
-    convertedBytes: [...new Uint8Array(conversion.buffer)],
+    scenePlan: await globalThis.runSceneKeyFrameSmoke(input),
   };
 }, { port });
 
@@ -60,7 +81,6 @@ assert.ok(result.scenePlan.changes.length > 0, 'expected at least one detected s
 assert.ok(result.scenePlan.keyFrameTimestamps.length > 0, 'expected at least one planned key frame timestamp');
 assert.ok(result.scenePlan.recommendedKeyFrameInterval >= 0.5);
 assert.ok(result.scenePlan.recommendedKeyFrameInterval <= 5);
-assert.ok(result.convertedLength > 0, 'expected a non-empty converted MP4');
 for (let i = 1; i < result.scenePlan.changes.length; i++) {
   assert.ok(result.scenePlan.changes[i].timestamp > result.scenePlan.changes[i - 1].timestamp, 'scene changes must be strictly ordered');
 }
@@ -69,12 +89,8 @@ for (let i = 1; i < result.scenePlan.keyFrameTimestamps.length; i++) {
   assert.ok(result.scenePlan.keyFrameTimestamps[i] - result.scenePlan.keyFrameTimestamps[i - 1] >= 2, 'planned key frames must respect minKeyFrameDistance');
 }
 
-await mkdir(outputDir, { recursive: true });
-await writeFile(resolve(outputDir, 'scene-keyframes.mp4'), Buffer.from(result.convertedBytes));
 console.log(JSON.stringify({
   scenePlan: result.scenePlan,
-  convertedLength: result.convertedLength,
-  output: resolve(outputDir, 'scene-keyframes.mp4'),
 }, null, 2));
 
 await app.close();

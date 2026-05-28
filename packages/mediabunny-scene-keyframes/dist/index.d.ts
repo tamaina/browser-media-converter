@@ -1,9 +1,11 @@
-import { HlsOutputFormat, type ConversionVideoOptions, type InputVideoTrack, type OutputFormat, type Source } from 'mediabunny';
+import { type InputVideoTrack } from 'mediabunny';
 export type SceneChange = {
     timestamp: number;
     score: number;
 };
+export type SceneDetectionSensitivity = 'low' | 'medium' | 'high';
 export type SceneDetectionOptions = {
+    sensitivity?: SceneDetectionSensitivity;
     sampleRate?: number;
     threshold?: number;
     width?: number;
@@ -21,20 +23,37 @@ export type FrameFingerprint = {
     timestamp: number;
     data: Uint8ClampedArray;
 };
+export type ResolvedSceneDetectionOptions = Required<Omit<SceneDetectionOptions, 'sensitivity' | 'minKeyFrameDistance' | 'maxKeyFrameInterval'>> & {
+    sensitivity: SceneDetectionSensitivity;
+    minKeyFrameDistance?: number;
+    maxKeyFrameInterval?: number;
+};
+export declare const sceneDetectionPresets: {
+    low: {
+        sampleRate: number;
+        threshold: number;
+        width: number;
+        height: number;
+        minSceneDuration: number;
+    };
+    medium: {
+        sampleRate: number;
+        threshold: number;
+        width: number;
+        height: number;
+        minSceneDuration: number;
+    };
+    high: {
+        sampleRate: number;
+        threshold: number;
+        width: number;
+        height: number;
+        minSceneDuration: number;
+    };
+};
+export declare function resolveSceneDetectionOptions(options?: SceneDetectionOptions): ResolvedSceneDetectionOptions;
 export declare function detectSceneChanges(track: InputVideoTrack, options?: SceneDetectionOptions): Promise<SceneChange[]>;
 export declare function planSceneKeyFrames(track: InputVideoTrack, options?: SceneDetectionOptions): Promise<SceneKeyFramePlan>;
-export declare function conversionVideoOptionsWithSceneKeyFrames(track: InputVideoTrack, options?: SceneDetectionOptions): Promise<ConversionVideoOptions>;
-export type TranscodeWithSceneKeyFramesOptions = {
-    input: Blob | ArrayBuffer | Uint8Array | Source;
-    outputFormat?: OutputFormat;
-    detection?: SceneDetectionOptions;
-    video?: Omit<ConversionVideoOptions, 'keyFrameInterval' | 'forceTranscode' | 'process'>;
-};
-export declare function transcodeWithSceneKeyFrames(options: TranscodeWithSceneKeyFramesOptions): Promise<{
-    buffer: ArrayBuffer;
-    scenePlan: SceneKeyFramePlan | null;
-}>;
-export declare function mpegTsHlsOutputFormat(targetDuration?: number): HlsOutputFormat;
 export declare function detectSceneChangesInFingerprints(fingerprints: FrameFingerprint[], options?: SceneDetectionOptions): SceneChange[];
 export declare function planKeyFrameTimestamps(changes: SceneChange[], options?: {
     duration?: number;

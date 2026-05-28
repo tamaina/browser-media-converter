@@ -16,8 +16,7 @@ const input = new Input({
 const track = await input.getPrimaryVideoTrack();
 if (track) {
   const plan = await planSceneKeyFrames(track, {
-    sampleRate: 1,
-    threshold: 0.18,
+    sensitivity: 'medium',
     minKeyFrameDistance: 2,
     maxKeyFrameInterval: 6,
   });
@@ -28,25 +27,32 @@ if (track) {
 }
 ```
 
-## Transcode With Scene-Derived Key-Frame Interval
+## Scope
+
+This package only detects scene changes and builds a key-frame plan. It does not wrap Mediabunny `Conversion` and does not transcode media.
+
+Current Mediabunny `Conversion` exposes interval-based key-frame control. `keyFrameTimestamps` is a plan that suppresses scene-derived key frames closer than `minKeyFrameDistance`; applying that plan to an actual conversion belongs in `@browser-avif-lab/browser-movie-converter`.
+
+## Sensitivity Presets
 
 ```ts
-import { transcodeWithSceneKeyFrames } from '@browser-avif-lab/mediabunny-scene-keyframes';
+import { resolveSceneDetectionOptions, sceneDetectionPresets } from '@browser-avif-lab/mediabunny-scene-keyframes';
 
-const result = await transcodeWithSceneKeyFrames({
-  input: new Uint8Array(await file.arrayBuffer()),
-  detection: {
-    sampleRate: 1,
-    threshold: 0.18,
-    minKeyFrameDistance: 2,
-  },
+console.log(sceneDetectionPresets);
+
+const options = resolveSceneDetectionOptions({
+  sensitivity: 'high',
+  minKeyFrameDistance: 2,
 });
-
-console.log(result.scenePlan);
-console.log(result.buffer.byteLength);
 ```
 
-Current Mediabunny `Conversion` exposes interval-based key-frame control. `keyFrameTimestamps` is a plan that suppresses scene-derived key frames closer than `minKeyFrameDistance`; exact per-frame key-frame forcing would need a lower-level encode path.
+Presets:
+
+- `low`: `threshold: 0.25`, `sampleRate: 1`, `minSceneDuration: 1.5`
+- `medium`: `threshold: 0.18`, `sampleRate: 2`, `minSceneDuration: 0.8`
+- `high`: `threshold: 0.12`, `sampleRate: 3`, `minSceneDuration: 0.5`
+
+Explicit options override preset values, so `{ sensitivity: 'low', threshold: 0.2 }` keeps the low preset shape but uses `threshold: 0.2`.
 
 ## Pure Detection Tests
 
@@ -65,4 +71,4 @@ pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test
 pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
 ```
 
-The Electron smoke test writes `playground-output/scene-keyframes-electron/scene-keyframes.mp4`.
+The Electron smoke test decodes `bbb.mov` and verifies that a scene plan can be produced in a browser runtime.
