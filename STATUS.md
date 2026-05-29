@@ -87,6 +87,23 @@ Command:
 pnpm --filter @browser-avif-lab/mediabunny-hls test:electron
 ```
 
+## 3.5 ISOBMFF GPS Metadata
+
+Implemented MOV/MP4 GPS metadata sanitization in `@browser-avif-lab/media-container`.
+
+- Detects iPhone-style `moov/meta/keys` + `moov/meta/ilst` metadata.
+- Replaces `com.apple.quicktime.location.ISO6709`, `location.ISO6709`, ItemList `GPSCoordinates`, and `©xyz` coordinate payloads with a zero coordinate while preserving the original box structure, file size, and media data offsets.
+- Leaves horizontal accuracy metadata unchanged.
+- Also scans `free` boxes for stale embedded metadata copies and zeroes the entire `free` payload when GPS metadata is found there.
+- Detects likely GPS timed metadata tracks and zeroes GPS-bearing sample payloads through `stsc`/`stsz`/`stco`/`co64`.
+- Verified against local `IMG_3439.mov`: replaced 1 live coordinate item plus 1 stale metadata `free` payload, preserved horizontal accuracy, and preserved the original byte length.
+
+Command:
+
+```sh
+pnpm --filter @browser-avif-lab/media-container test
+```
+
 ## 4. EXIF Transplant
 
 Implemented `@browser-avif-lab/exif-transplant`.
