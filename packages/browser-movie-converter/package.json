@@ -11,14 +11,16 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/mediabunny-hls build && pnpm --filter @browser-avif-lab/webcodecs-color build",
+    "prebuild": "pnpm --filter @browser-avif-lab/binary build && pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/mediabunny-hls build && pnpm --filter @browser-avif-lab/webcodecs-color build && pnpm --filter @browser-avif-lab/media-container build",
     "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/index.js && tsc -p tsconfig.json --emitDeclarationOnly",
-    "pretypecheck": "pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/mediabunny-hls build && pnpm --filter @browser-avif-lab/webcodecs-color build",
+    "pretypecheck": "pnpm --filter @browser-avif-lab/binary build && pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/mediabunny-hls build && pnpm --filter @browser-avif-lab/webcodecs-color build && pnpm --filter @browser-avif-lab/media-container build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
   "dependencies": {
+    "@browser-avif-lab/binary": "workspace:*",
+    "@browser-avif-lab/media-container": "workspace:*",
     "@browser-avif-lab/mediabunny-hls": "workspace:*",
     "@browser-avif-lab/mediabunny-scene-keyframes": "workspace:*",
     "@browser-avif-lab/webcodecs-color": "workspace:*",

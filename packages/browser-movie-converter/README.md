@@ -8,6 +8,7 @@ Browser movie conversion package using Mediabunny for demux/mux/encode orchestra
 - Scene detection/keyframe interval planning through `@browser-avif-lab/mediabunny-scene-keyframes`
 - Raw planar resize through `@browser-avif-lab/webcodecs-color`
 - Input color-space inspection and color metadata copying for raw-resized samples
+- Optional MP4/MOV GPS metadata sanitization after Mediabunny output
 
 ## Install
 
@@ -38,11 +39,13 @@ const result = await convertMovie({
     maxKeyFrameInterval: 5,
   },
   colorMetadata: 'copy',
+  gpsMetadata: 'zero-location',
 });
 
 console.log(result.scenePlan?.keyFrameTimestamps);
 console.log(result.videoColor?.colorSpace);
 console.log(result.resize);
+console.log(result.gpsMetadata);
 ```
 
 ## HLS
@@ -64,4 +67,5 @@ const assets = await convertMovieToHls({
 - Mediabunny currently exposes `keyFrameInterval` to conversion. The scene plan is used to choose an interval and is returned to callers; exact per-scene keyframe forcing is not exposed as a stable hook here yet.
 - `colorMetadata: 'copy'` copies the source sample's `VideoColorSpace` metadata to raw-resized samples. It does not repair pixels that were already converted by another resize path.
 - `resize.path: 'mediabunny'` delegates resizing to Mediabunny, so this package does not claim color metadata preservation for that path.
+- `gpsMetadata: 'zero-location'` runs the final MP4/MOV bytes through `@browser-avif-lab/media-container`'s ISOBMFF GPS sanitizer. Coordinate payloads are replaced with a zero coordinate, stale `free` payloads and GPS timed metadata samples are zeroed, and horizontal accuracy metadata is left unchanged. The default is `preserve`.
 - For browser tests with H.264/AAC material, use a browser build that has proprietary codec support, such as installed Chrome/Electron rather than Playwright's bundled Chromium.

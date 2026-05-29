@@ -18,6 +18,12 @@ export function startsWith(data: Uint8Array, prefix: Uint8Array) {
   return prefix.every((byte, index) => data[index] === byte);
 }
 
+export function copyArrayBuffer(data: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(data.byteLength);
+  copy.set(data);
+  return copy.buffer;
+}
+
 export function readAscii(data: Uint8Array, offset: number, length: number) {
   let result = '';
   for (let i = offset; i < offset + length; i++) result += String.fromCharCode(data[i]);

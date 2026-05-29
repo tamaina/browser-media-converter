@@ -44,12 +44,14 @@ const result = await page.evaluate(async ({ port }) => {
     },
     sceneDetection: false,
     colorMetadata: 'copy',
+    gpsMetadata: 'zero-location',
   });
 
   return {
     length: conversion.buffer.byteLength,
     resize: conversion.resize,
     videoColor: conversion.videoColor,
+    gpsMetadata: conversion.gpsMetadata,
     bytes: [...new Uint8Array(conversion.buffer)],
   };
 }, { port });
@@ -57,6 +59,7 @@ const result = await page.evaluate(async ({ port }) => {
 assert.ok(result.length > 0, 'expected a non-empty converted MP4');
 assert.deepEqual(result.resize, { width: 320, height: 180, path: 'raw' });
 assert.ok(result.videoColor, 'expected input video color metadata');
+assert.deepEqual(result.gpsMetadata, { policy: 'zero-location', removed: 0 });
 
 await mkdir(outputDir, { recursive: true });
 await writeFile(resolve(outputDir, 'resized.mp4'), Buffer.from(result.bytes));
@@ -64,6 +67,7 @@ console.log(JSON.stringify({
   length: result.length,
   resize: result.resize,
   videoColor: result.videoColor,
+  gpsMetadata: result.gpsMetadata,
   output: resolve(outputDir, 'resized.mp4'),
 }, null, 2));
 

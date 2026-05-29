@@ -46,6 +46,9 @@ importers:
 
   packages/browser-image-resizer-ex:
     dependencies:
+      '@browser-avif-lab/binary':
+        specifier: workspace:*
+        version: link:../binary
       '@browser-avif-lab/exif-transplant':
         specifier: workspace:*
         version: link:../exif-transplant
@@ -61,6 +64,12 @@ importers:
 
   packages/browser-movie-converter:
     dependencies:
+      '@browser-avif-lab/binary':
+        specifier: workspace:*
+        version: link:../binary
+      '@browser-avif-lab/media-container':
+        specifier: workspace:*
+        version: link:../media-container
       '@browser-avif-lab/mediabunny-hls':
         specifier: workspace:*
         version: link:../mediabunny-hls
@@ -110,7 +119,11 @@ importers:
         specifier: workspace:*
         version: link:../media-container
 
-  packages/webcodecs-color: {}
+  packages/webcodecs-color:
+    dependencies:
+      '@browser-avif-lab/binary':
+        specifier: workspace:*
+        version: link:../binary
 
 packages:
 

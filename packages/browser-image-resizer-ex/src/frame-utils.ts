@@ -4,6 +4,9 @@ import {
   resizeFrameWithCanvas,
   type ResizeRawOptions,
 } from '@browser-avif-lab/webcodecs-color';
+import { copyArrayBuffer } from '@browser-avif-lab/binary';
+
+export { copyArrayBuffer };
 
 export type BrowserImageResizeFit = 'contain' | 'cover' | 'fill';
 
@@ -170,12 +173,6 @@ export async function toUint8Array(input: Blob | ArrayBuffer | Uint8Array): Prom
   if (input instanceof Uint8Array) return input;
   if (input instanceof ArrayBuffer) return new Uint8Array(input);
   return new Uint8Array(await input.arrayBuffer());
-}
-
-export function copyArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(data.byteLength);
-  copy.set(data);
-  return copy.buffer;
 }
 
 function assertImageDecoder() {

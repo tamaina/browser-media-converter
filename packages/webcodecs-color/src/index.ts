@@ -1,3 +1,5 @@
+import { copyArrayBuffer } from '@browser-avif-lab/binary';
+
 export type FrameColorInspection = {
   format: VideoPixelFormat | null;
   codedWidth: number;
@@ -236,12 +238,6 @@ export async function resizeFrameRaw(frame: VideoFrame, options: ResizeRawOption
     byteLength: destination.byteLength,
     algorithm,
   };
-}
-
-function copyArrayBuffer(data: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(data.byteLength);
-  copy.set(data);
-  return copy.buffer;
 }
 
 type PlanarFormatDescriptor = {

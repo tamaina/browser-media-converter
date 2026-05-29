@@ -27,12 +27,16 @@ import {
   resizeFrameRaw,
   type ResizeRawOptions,
 } from '@browser-avif-lab/webcodecs-color';
+import { sanitizeIsobmffGpsMetadata } from '@browser-avif-lab/media-container';
+import { copyArrayBuffer } from '@browser-avif-lab/binary';
 
 export type BrowserMovieInput = Blob | ArrayBuffer | Uint8Array | Source;
 
 export type BrowserMovieOutputContainer = 'mp4' | 'webm';
 
 export type BrowserMovieColorMetadataPolicy = 'copy' | 'default';
+
+export type BrowserMovieGpsMetadataPolicy = 'preserve' | 'zero-location';
 
 export type BrowserMovieResizeFit = 'contain' | 'cover' | 'fill';
 
@@ -56,6 +60,7 @@ export type BrowserMovieConverterOptions = {
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
+  gpsMetadata?: BrowserMovieGpsMetadataPolicy;
   /** @deprecated Use colorMetadata. This option only copied metadata and did not perform color conversion. */
   colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
@@ -71,6 +76,10 @@ export type BrowserMovieConverterResult = {
   buffer: ArrayBuffer;
   blob: Blob;
   mimeType: string;
+  gpsMetadata: {
+    policy: BrowserMovieGpsMetadataPolicy;
+    removed: number;
+  };
   scenePlan: SceneKeyFramePlan | null;
   videoColor: BrowserMovieTrackColor | null;
   resize: {
@@ -116,11 +125,17 @@ export async function convertMovie(options: BrowserMovieConverterOptions): Promi
   if (options.onProgress) conversion.onProgress = options.onProgress;
   await conversion.execute();
   if (!target.buffer) throw new Error('Mediabunny did not produce an output buffer');
+  const gpsMetadataPolicy = options.gpsMetadata ?? 'preserve';
+  const sanitized = sanitizeOutputGpsMetadata(new Uint8Array(target.buffer), outputFormat, gpsMetadataPolicy);
 
   return {
-    buffer: target.buffer,
-    blob: new Blob([target.buffer], { type: outputFormat.mimeType }),
+    buffer: copyArrayBuffer(sanitized.data),
+    blob: new Blob([copyArrayBuffer(sanitized.data)], { type: outputFormat.mimeType }),
     mimeType: outputFormat.mimeType,
+    gpsMetadata: {
+      policy: gpsMetadataPolicy,
+      removed: sanitized.removed,
+    },
     scenePlan,
     videoColor,
     resize: resize
@@ -286,6 +301,15 @@ function alignDimension(value: number, alignment: 1 | 2 | 4 | 8) {
 function defaultOutputFormat(container: BrowserMovieOutputContainer) {
   if (container === 'webm') return new WebMOutputFormat();
   return new Mp4OutputFormat({ fastStart: 'in-memory' });
+}
+
+function sanitizeOutputGpsMetadata(data: Uint8Array, outputFormat: OutputFormat, policy: BrowserMovieGpsMetadataPolicy) {
+  if (policy === 'preserve' || !isIsobmffMimeType(outputFormat.mimeType)) return { data, removed: 0 };
+  return sanitizeIsobmffGpsMetadata(data);
+}
+
+function isIsobmffMimeType(mimeType: string) {
+  return mimeType === 'video/mp4' || mimeType === 'video/quicktime';
 }
 
 function toSource(input: BrowserMovieInput) {
