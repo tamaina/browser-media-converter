@@ -2,7 +2,7 @@
 
 Browser movie conversion package using Mediabunny for demux/mux/encode orchestration and the local WebCodecs color helpers for resizing.
 
-- MP4/MOV/WebM input through Mediabunny
+- Caller-provided Mediabunny `Input` for MP4/MOV/WebM and other supported sources
 - MP4/WebM output through Mediabunny `Conversion`
 - HLS output through local Mediabunny helpers
 - Streaming scene detection and keyframe forcing through `@browser-avif-lab/mediabunny-scene-keyframes`
@@ -19,17 +19,22 @@ pnpm add @browser-avif-lab/browser-movie-converter mediabunny
 
 ```ts
 import {
+  BlobSource,
   BufferTarget,
   Conversion,
+  Input,
   Mp4OutputFormat,
   Output,
+  QuickTimeInputFormat,
 } from 'mediabunny';
 import {
   buildMovieConversionOptions,
-  createInput,
 } from '@browser-avif-lab/browser-movie-converter';
 
-const input = createInput(file);
+const input = new Input({
+  source: new BlobSource(file),
+  formats: [new QuickTimeInputFormat()],
+});
 const target = new BufferTarget();
 const output = new Output({
   target,
@@ -39,6 +44,9 @@ const output = new Output({
 const plan = await buildMovieConversionOptions({
   input,
   output,
+  videoTrackQuery: {
+    filter: (track) => track.number === 1,
+  },
   video: {
     codec: 'avc',
     bitrate: { quality: 0.75 },
@@ -70,17 +78,47 @@ console.log(target.buffer);
 
 ```ts
 import {
+  BlobSource,
+  Input,
+  QuickTimeInputFormat,
+} from 'mediabunny';
+import {
   convertMovieToHls,
   decodeMovieHlsText,
 } from '@browser-avif-lab/browser-movie-converter';
 
+const input = new Input({
+  source: new BlobSource(file),
+  formats: [new QuickTimeInputFormat()],
+});
+
 for await (const asset of convertMovieToHls({
-  input: file,
+  input,
+  tracks: 'primary',
+  videoTrackQuery: {
+    filter: (track) => track.number === 1,
+  },
   targetDuration: 2,
   resize: {
-    width: 1280,
+    width: 640,
     path: 'auto',
   },
+  variants: [
+    {
+      resize: {
+        width: 1280,
+        path: 'auto',
+      },
+      video: {
+        bitrate: 4_000_000,
+      },
+    },
+    {
+      video: {
+        bitrate: 1_500_000,
+      },
+    },
+  ],
   sceneDetection: {
     sampleRate: 'all',
     threshold: 0.2,
@@ -99,7 +137,7 @@ for await (const asset of convertMovieToHls({
 
 - This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle.
 - When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFrameRaw()` inside Mediabunny's `process` hook.
-- `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and shares the same Mediabunny conversion option builder, so HLS output can use the same resize, scene detection, color metadata, audio, and video option handling.
+- `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
 - Resize dimensions are rounded down to a multiple of `dimensionAlignment`, defaulting to `2`, which avoids odd-size 4:2:0/NV12 artifacts and encoder constraints.
 - `resize.path: 'auto'` and `'raw'` use the raw resize path and fail for unsupported frame formats. Use `resize.path: 'mediabunny'` to explicitly use Mediabunny's built-in resize.
 - Scene detection defaults to `sampleRate: 'all'`, so every decoded video sample is considered while conversion runs. Detected scene samples are marked immediately with Mediabunny `VideoSample` encode options to force key frames.

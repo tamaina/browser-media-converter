@@ -43,9 +43,10 @@ await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/bbb.mov`)).arrayBuffer());
-  const { buildMovieConversionOptions, createInput } = await import(`http://127.0.0.1:${port}/converter.js`);
+  const { buildMovieConversionOptions } = await import(`http://127.0.0.1:${port}/converter.js`);
   const {
     BlobSource,
+    BufferSource,
     BufferTarget,
     Conversion,
     EncodedPacketSink,
@@ -53,15 +54,23 @@ const result = await page.evaluate(async ({ port }) => {
     Mp4InputFormat,
     Mp4OutputFormat,
     Output,
+    QuickTimeInputFormat,
   } = await import(`http://127.0.0.1:${port}/mediabunny.js`);
+  const sourceInput = new Input({
+    source: new BufferSource(input),
+    formats: [new QuickTimeInputFormat()],
+  });
   const target = new BufferTarget();
   const output = new Output({
     target,
     format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
   });
   const plan = await buildMovieConversionOptions({
-    input: createInput(input),
+    input: sourceInput,
     output,
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
     resize: {
       width: 320,
       path: 'raw',

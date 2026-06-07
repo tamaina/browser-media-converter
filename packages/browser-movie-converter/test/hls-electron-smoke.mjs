@@ -47,15 +47,38 @@ const result = await page.evaluate(async ({ port }) => {
     convertMovieToHls,
     decodeMovieHlsText,
   } = await import(`http://127.0.0.1:${port}/converter.js`);
+  const {
+    BufferSource,
+    Input,
+    QuickTimeInputFormat,
+  } = await import(`http://127.0.0.1:${port}/mediabunny.js`);
+  const sourceInput = new Input({
+    source: new BufferSource(input),
+    formats: [new QuickTimeInputFormat()],
+  });
   const assets = [];
   for await (const asset of convertMovieToHls({
-    input,
+    input: sourceInput,
+    tracks: 'primary',
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
     targetDuration: 2,
-    keyFrameInterval: 2,
+    keyFrameInterval: 3,
     resize: {
-      width: 320,
+      width: 160,
       path: 'raw',
     },
+    variants: [
+      {
+        resize: {
+          width: 320,
+          path: 'raw',
+        },
+        keyFrameInterval: 2,
+      },
+      {},
+    ],
     sceneDetection: {
       sensitivity: 'high',
       sampleRate: 'all',
@@ -70,13 +93,23 @@ const result = await page.evaluate(async ({ port }) => {
       path: asset.path,
       mimeType: asset.mimeType,
       length: bytes.length,
-      preview: asset.path.endsWith('.m3u8') ? decodeMovieHlsText(bytes).slice(0, 240) : '',
+      preview: asset.path.endsWith('.m3u8') ? decodeMovieHlsText(bytes).slice(0, 800) : '',
       bytes: [...bytes],
     });
   }
 
+  let emptyVariantsError = null;
+  try {
+    for await (const asset of convertMovieToHls({ input: sourceInput, variants: [] })) {
+      await readStream(asset.data);
+    }
+  } catch (error) {
+    emptyVariantsError = error.message;
+  }
+
   return {
     masterPath: assets.find((asset) => asset.preview.includes('#EXT-X-STREAM-INF'))?.path ?? null,
+    emptyVariantsError,
     assets,
   };
 
@@ -107,9 +140,24 @@ assert.ok(
   result.assets.some((asset) => asset.preview.includes('#EXT-X-STREAM-INF')),
   'expected an HLS master playlist',
 );
+const masterPlaylist = result.assets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';
+assert.equal(
+  (masterPlaylist.match(/#EXT-X-STREAM-INF/g) ?? []).length,
+  2,
+  'expected one HLS stream declaration per variant',
+);
 assert.ok(
-  result.assets.some((asset) => asset.preview.includes('RESOLUTION=320x180')),
-  'expected HLS output to use browser-movie-converter resize options',
+  masterPlaylist.includes('RESOLUTION=320x180'),
+  'expected HLS output to use variant resize override',
+);
+assert.ok(
+  masterPlaylist.includes('RESOLUTION=160x90'),
+  'expected HLS output to use top-level resize defaults',
+);
+assert.equal(
+  result.emptyVariantsError,
+  'convertMovieToHls requires at least one HLS variant.',
+  'expected empty variants to throw a clear error',
 );
 for (const asset of result.assets) {
   assert.ok(asset.length > 0, `expected non-empty HLS asset: ${asset.path}`);

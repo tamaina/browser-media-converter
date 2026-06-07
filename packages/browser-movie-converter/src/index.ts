@@ -3,14 +3,13 @@ import {
   decodeMovieHlsText,
   type MovieHlsAsset,
   type MovieHlsOptions,
+  type MovieHlsVariantOptions,
 } from './hls';
 import {
   buildMovieConversionOptions,
-  createInput,
   inspectMovie,
   inspectVideoTrackColor,
   type BrowserMovieColorMetadataPolicy,
-  type BrowserMovieInput,
   type BrowserMovieResizeFit,
   type BrowserMovieResizeOptions,
   type BrowserMovieResizePath,
@@ -21,20 +20,19 @@ import {
 
 export type {
   BrowserMovieColorMetadataPolicy,
-  BrowserMovieInput,
   BrowserMovieResizeFit,
   BrowserMovieResizeOptions,
   BrowserMovieResizePath,
   BrowserMovieTrackColor,
   MovieHlsAsset,
   MovieHlsOptions,
+  MovieHlsVariantOptions,
   SceneDetectionOptions,
   SceneKeyFrameState,
 };
 
 export {
   buildMovieConversionOptions,
-  createInput,
   convertMovieToHls,
   decodeMovieHlsText,
   inspectMovie,

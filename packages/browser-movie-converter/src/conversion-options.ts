@@ -1,17 +1,13 @@
 import {
-  BlobSource,
-  BufferSource,
   Input,
-  Mp4InputFormat,
-  QuickTimeInputFormat,
   VideoSample,
-  WebMInputFormat,
   type ConversionAudioOptions,
   type ConversionOptions,
   type ConversionVideoOptions,
+  type InputAudioTrack,
+  type InputTrackQuery,
   type InputVideoTrack,
   type Output,
-  type Source,
 } from 'mediabunny';
 import {
   planSceneKeyFrames,
@@ -23,8 +19,6 @@ import {
   resizeFrameRaw,
   type ResizeRawOptions,
 } from '@browser-avif-lab/webcodecs-color';
-
-export type BrowserMovieInput = Blob | ArrayBuffer | Uint8Array | Source;
 
 export type BrowserMovieColorMetadataPolicy = 'copy' | 'default';
 
@@ -52,6 +46,28 @@ export type BrowserMovieConversionOptionsInput = {
   colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
   tracks?: ConversionOptions['tracks'];
+  videoTrackQuery?: InputTrackQuery<InputVideoTrack>;
+};
+
+export type BrowserMovieVideoConversionOptionsInput = {
+  track: InputVideoTrack;
+  video?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'>;
+  resize?: BrowserMovieResizeOptions;
+  sceneDetection?: false | SceneDetectionOptions;
+  colorMetadata?: BrowserMovieColorMetadataPolicy;
+  colorSpace?: 'preserve' | 'default';
+  forceTranscode?: boolean;
+};
+
+export type BrowserMovieVideoConversionPlan = {
+  options: ConversionVideoOptions;
+  sceneKeyFrames: SceneKeyFrameDetector | null;
+  videoColor: BrowserMovieTrackColor;
+  resize: {
+    width: number;
+    height: number;
+    path: BrowserMovieResizePath | 'none';
+  } | null;
 };
 
 export type BrowserMovieTrackColor = {
@@ -76,31 +92,58 @@ const defaultMovieSceneDetectionOptions = {
 } satisfies SceneDetectionOptions;
 
 export async function buildMovieConversionOptions(options: BrowserMovieConversionOptionsInput): Promise<BrowserMovieConversionPlan> {
-  const primaryVideo = await options.input.getPrimaryVideoTrack();
-  const sceneKeyFrames = primaryVideo && options.sceneDetection !== false
-    ? new SceneKeyFrameDetector(options.sceneDetection ?? defaultMovieSceneDetectionOptions)
-    : null;
-  const videoColor = primaryVideo ? await inspectVideoTrackColor(primaryVideo) : null;
-  const resize = primaryVideo && options.resize
-    ? await resolveTrackResize(primaryVideo, options.resize)
-    : null;
+  const tracks = options.tracks ?? 'primary';
+  const videoTracks = await getSelectedVideoTracks(options.input, tracks, options.videoTrackQuery);
+  const videoPlans = new Map<InputVideoTrack, BrowserMovieVideoConversionPlan>();
+  await Promise.all(videoTracks.map(async (track) => {
+    videoPlans.set(track, await buildMovieVideoConversionOptions({
+      track,
+      video: options.video,
+      resize: options.resize,
+      sceneDetection: options.sceneDetection,
+      colorMetadata: options.colorMetadata,
+      colorSpace: options.colorSpace,
+      forceTranscode: options.forceTranscode,
+    }));
+  }));
+  const firstVideoPlan = videoTracks[0] ? videoPlans.get(videoTracks[0]) ?? null : null;
+  const audioTracks = await getSelectedAudioTracks(options.input, tracks);
 
   return {
     options: {
       input: options.input,
       output: options.output,
-      tracks: options.tracks ?? 'primary',
-      video: primaryVideo
-        ? makeVideoOptions({
-            base: options.video,
-            resize,
-            sceneKeyFrames,
-            forceTranscode: options.forceTranscode,
-            colorMetadata: normalizeColorMetadataPolicy(options),
-          })
-        : options.video,
-      audio: options.audio ?? {},
+      tracks: 'all',
+      video: videoTracks.length > 0
+        ? (track) => videoPlans.get(track)?.options
+        : undefined,
+      audio: audioTracks.length > 0
+        ? (track) => audioTracks.includes(track) ? (options.audio ?? {}) : undefined
+        : undefined,
     },
+    sceneKeyFrames: firstVideoPlan?.sceneKeyFrames ?? null,
+    videoColor: firstVideoPlan?.videoColor ?? null,
+    resize: firstVideoPlan?.resize ?? null,
+  };
+}
+
+export async function buildMovieVideoConversionOptions(options: BrowserMovieVideoConversionOptionsInput): Promise<BrowserMovieVideoConversionPlan> {
+  const sceneKeyFrames = options.sceneDetection !== false
+    ? new SceneKeyFrameDetector(options.sceneDetection ?? defaultMovieSceneDetectionOptions)
+    : null;
+  const videoColor = await inspectVideoTrackColor(options.track);
+  const resize = options.resize
+    ? await resolveTrackResize(options.track, options.resize)
+    : null;
+
+  return {
+    options: makeVideoOptions({
+      base: options.video,
+      resize,
+      sceneKeyFrames,
+      forceTranscode: options.forceTranscode,
+      colorMetadata: normalizeColorMetadataPolicy(options),
+    }),
     sceneKeyFrames,
     videoColor,
     resize: resize
@@ -109,12 +152,11 @@ export async function buildMovieConversionOptions(options: BrowserMovieConversio
   };
 }
 
-export async function inspectMovie(inputSource: BrowserMovieInput): Promise<{
+export async function inspectMovie(input: Input, videoTrackQuery?: InputTrackQuery<InputVideoTrack>): Promise<{
   videoColor: BrowserMovieTrackColor | null;
   scenePlan: SceneKeyFrameState | null;
 }> {
-  const input = createInput(inputSource);
-  const primaryVideo = await input.getPrimaryVideoTrack();
+  const primaryVideo = await input.getPrimaryVideoTrack(videoTrackQuery);
   if (!primaryVideo) return { videoColor: null, scenePlan: null };
   return {
     videoColor: await inspectVideoTrackColor(primaryVideo),
@@ -129,15 +171,20 @@ export async function inspectVideoTrackColor(track: InputVideoTrack): Promise<Br
   };
 }
 
-export function createInput(input: BrowserMovieInput): Input {
-  return new Input({
-    source: toSource(input),
-    formats: [
-      new Mp4InputFormat(),
-      new QuickTimeInputFormat(),
-      new WebMInputFormat(),
-    ],
-  });
+export async function getSelectedVideoTracks(
+  input: Input,
+  tracks: NonNullable<ConversionOptions['tracks']>,
+  videoTrackQuery?: InputTrackQuery<InputVideoTrack>,
+) {
+  if (tracks === 'all') return input.getVideoTracks(videoTrackQuery);
+  const primaryVideo = await input.getPrimaryVideoTrack(videoTrackQuery);
+  return primaryVideo ? [primaryVideo] : [];
+}
+
+export async function getSelectedAudioTracks(input: Input, tracks: NonNullable<ConversionOptions['tracks']>): Promise<InputAudioTrack[]> {
+  if (tracks === 'all') return input.getAudioTracks();
+  const primaryAudio = await input.getPrimaryAudioTrack();
+  return primaryAudio ? [primaryAudio] : [];
 }
 
 function makeVideoOptions(options: {
@@ -232,7 +279,6 @@ function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: Browser
     }
   };
 }
-
 function normalizeColorMetadataPolicy(options: Pick<BrowserMovieConversionOptionsInput, 'colorMetadata' | 'colorSpace'>): BrowserMovieColorMetadataPolicy {
   if (options.colorMetadata) return options.colorMetadata;
   if (options.colorSpace === 'preserve') return 'copy';
@@ -274,12 +320,6 @@ function alignSize(size: { width: number; height: number }, alignment: 1 | 2 | 4
 function alignDimension(value: number, alignment: 1 | 2 | 4 | 8) {
   if (alignment === 1) return Math.max(1, Math.round(value));
   return Math.max(alignment, Math.floor(Math.round(value) / alignment) * alignment);
-}
-
-function toSource(input: BrowserMovieInput) {
-  if (input instanceof Blob) return new BlobSource(input);
-  if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) return new BufferSource(input);
-  return input;
 }
 
 export type {
