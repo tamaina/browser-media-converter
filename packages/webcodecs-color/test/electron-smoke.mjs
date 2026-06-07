@@ -1,17 +1,30 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
+import { build } from 'esbuild';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/webcodecs-color/test/electron-main.cjs');
+const smokeDir = await mkdtemp(resolve(tmpdir(), 'webcodecs-color-'));
+const smokeBundle = resolve(smokeDir, 'color.js');
+
+await build({
+  entryPoints: [resolve(root, 'packages/webcodecs-color/src/index.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  outfile: smokeBundle,
+});
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/color.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'packages/webcodecs-color/dist/index.js')));
+    response.end(await readFile(smokeBundle));
     return;
   }
   if (url.pathname === '/hdrrec2020.avif') {

@@ -1,5 +1,7 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { build } from 'esbuild';
 import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 
@@ -10,7 +12,18 @@ const outputDir = resolve(root, 'playground-output');
 const output = resolve(outputDir, 'webcodecs.avif');
 const imageBytes = await readFile(input).catch(() => readFile(fallback));
 const imageBase64 = imageBytes.toString('base64');
+const smokeDir = await mkdtemp(resolve(tmpdir(), 'webcodecs-avif-'));
+const smokeBundle = resolve(smokeDir, 'index.js');
 await mkdir(outputDir, { recursive: true });
+
+await build({
+  entryPoints: [resolve(root, 'packages/webcodecs-avif/src/index.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  outfile: smokeBundle,
+});
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
@@ -18,7 +31,7 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/dist/index.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'packages/webcodecs-avif/dist/index.js')));
+    response.end(await readFile(smokeBundle));
     return;
   }
   response.setHeader('content-type', 'text/html');

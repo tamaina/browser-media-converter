@@ -1,18 +1,32 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
+import { build } from 'esbuild';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/browser-movie-converter/test/electron-main.cjs');
 const outputDir = resolve(root, 'playground-output/movie-converter-electron');
+const smokeDir = await mkdtemp(resolve(tmpdir(), 'movie-converter-'));
+const smokeBundle = resolve(smokeDir, 'converter.js');
+
+await build({
+  entryPoints: [resolve(root, 'packages/browser-movie-converter/src/index.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  external: ['mediabunny'],
+  outfile: smokeBundle,
+});
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/converter.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'packages/browser-movie-converter/dist/index.js')));
+    response.end(await readFile(smokeBundle));
     return;
   }
   if (url.pathname === '/mediabunny.js') {

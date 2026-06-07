@@ -1,18 +1,31 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
+import { build } from 'esbuild';
 import { createServer } from 'node:http';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/browser-image-resizer-ex/test/electron-main.cjs');
 const outputDir = resolve(root, 'playground-output/browser-image-resizer-ex');
+const smokeDir = await mkdtemp(resolve(tmpdir(), 'image-resizer-'));
+const smokeBundle = resolve(smokeDir, 'resizer.js');
+
+await build({
+  entryPoints: [resolve(root, 'packages/browser-image-resizer-ex/src/index.ts')],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: 'es2022',
+  outfile: smokeBundle,
+});
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://localhost');
   if (url.pathname === '/resizer.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'packages/browser-image-resizer-ex/dist/index.js')));
+    response.end(await readFile(smokeBundle));
     return;
   }
   response.setHeader('content-type', 'text/html');
