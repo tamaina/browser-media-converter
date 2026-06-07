@@ -1,5 +1,19 @@
-import { ascii, bytesEqual, concat, cstr, u16, u32 } from '@browser-mc/binary';
-import { box, fullBox } from './isobmff.js';
+import { ascii, bytesEqual, concat, cstr, readAscii, readU16, readU32, u16, u32 } from '@browser-mc/binary';
+import {
+  cicpColorPrimariesFromNumber,
+  cicpColorPrimariesToNumber,
+  cicpMatrixCoefficientsFromNumber,
+  cicpMatrixCoefficientsToNumber,
+  cicpToVideoColorSpace,
+  cicpTransferCharacteristicsFromNumber,
+  cicpTransferCharacteristicsToNumber,
+  videoColorSpaceToCicp,
+  type CicpColorSpace,
+} from './cicp.js';
+import {
+  type ImageColorMetadata,
+} from './color-metadata.js';
+import { box, boxes, fullBox } from './isobmff.js';
 
 export type EncodedStillAv1 = {
   chunk: Uint8Array;
@@ -7,6 +21,8 @@ export type EncodedStillAv1 = {
   av1Config: Uint8Array;
   width: number;
   height: number;
+  color?: CicpColorSpace;
+  colorMetadata?: ImageColorMetadata;
   alpha?: EncodedStillAv1;
 };
 
@@ -19,6 +35,34 @@ export type AvifMetadataItem = {
 export type MuxStillAvifOptions = {
   metadata?: AvifMetadataItem[];
 };
+
+export function readAvifColorSpace(data: Uint8Array): VideoColorSpaceInit | null {
+  const color = readAvifCicpColor(data);
+  return color ? cicpToVideoColorSpace(color) : null;
+}
+
+export function readAvifCicpColor(data: Uint8Array): CicpColorSpace | null {
+  const metadata = readAvifColorMetadata(data);
+  return metadata?.type === 'cicp' ? metadata.cicp : null;
+}
+
+export function readAvifIccProfile(data: Uint8Array): Uint8Array | null {
+  const metadata = readAvifColorMetadata(data);
+  return metadata?.type === 'icc' ? metadata.profile : null;
+}
+
+export function readAvifColorMetadata(data: Uint8Array): ImageColorMetadata | null {
+  for (const box of boxes(data, 0, data.length)) {
+    if (box.type !== 'meta') continue;
+    const metaStart = box.start + box.headerSize + 4;
+    const primaryItemId = readPrimaryItemId(data, metaStart, box.end);
+    if (primaryItemId === null) continue;
+    const colr = readPrimaryColrProperty(data, metaStart, box.end, primaryItemId);
+    if (!colr) continue;
+    return readColrColorMetadata(data, colr.start + colr.headerSize, colr.end);
+  }
+  return null;
+}
 
 export function muxStillAvif(encoded: EncodedStillAv1, options: MuxStillAvifOptions = {}): Uint8Array {
   const sequenceHeaderObu = findSequenceHeaderObu(encoded.chunk);
@@ -113,7 +157,7 @@ function makeMetaBox(
         fullBox('ispe', 0, 0, u32(encoded.width), u32(encoded.height)),
         fullBox('pixi', 0, 0, new Uint8Array([sequence.monochrome ? 1 : 3, ...Array(sequence.monochrome ? 1 : 3).fill(sequence.bitDepth)])),
         box('av1C', encoded.av1Config),
-        makeColrBox(sequence, encoded.decoderConfig.colorSpace),
+        makeColrBox(sequence, encoded.colorMetadata, encoded.color, encoded.decoderConfig.colorSpace),
         encoded.alpha ? box('av1C', encoded.alpha.av1Config) : [],
         alphaSequence ? fullBox('pixi', 0, 0, new Uint8Array([alphaSequence.monochrome ? 1 : 3, ...Array(alphaSequence.monochrome ? 1 : 3).fill(alphaSequence.bitDepth)])) : [],
         alphaSequence ? fullBox('auxC', 0, 0, cstr('urn:mpeg:mpegB:cicp:systems:auxiliary:alpha')) : [],
@@ -157,62 +201,152 @@ function isAvifBaselineCompatible(encoded: EncodedStillAv1, sequence: SequenceHe
     && (sequence.bitDepth === 8 || sequence.bitDepth === 10);
 }
 
-function makeColrBox(sequence: SequenceHeaderInfo, colorSpace?: VideoColorSpaceInit) {
-  const color = colorSpace ? videoColorSpaceToNclx(colorSpace) : null;
+function makeColrBox(sequence: SequenceHeaderInfo, colorMetadata: ImageColorMetadata | undefined, color: CicpColorSpace | undefined, colorSpace?: VideoColorSpaceInit) {
+  if (colorMetadata?.type === 'icc') {
+    return box('colr', ascii(colorMetadata.restricted ? 'rICC' : 'prof'), colorMetadata.profile);
+  }
+  const metadataCicp = colorMetadata?.type === 'cicp' ? colorMetadata.cicp : undefined;
+  const colorSpaceCicp = colorSpace ? colorSpaceToColrCicp(colorSpace) : null;
   return box('colr',
     ascii('nclx'),
-    u16(color?.primaries ?? sequence.colorPrimaries),
-    u16(color?.transfer ?? sequence.transferCharacteristics),
-    u16(color?.matrix ?? sequence.matrixCoefficients),
-    new Uint8Array([(color?.fullRange ?? sequence.colorRange) ? 0x80 : 0x00]),
+    u16(resolveCicpPrimaries(metadataCicp, color, colorSpaceCicp, sequence.colorPrimaries)),
+    u16(resolveCicpTransfer(metadataCicp, color, colorSpaceCicp, sequence.transferCharacteristics)),
+    u16(resolveCicpMatrix(metadataCicp, color, colorSpaceCicp, sequence.matrixCoefficients)),
+    new Uint8Array([(metadataCicp?.fullRange ?? color?.fullRange ?? colorSpaceCicp?.fullRange ?? sequence.colorRange) ? 0x80 : 0x00]),
   );
 }
 
-function videoColorSpaceToNclx(colorSpace: VideoColorSpaceInit) {
-  const primaries = colorPrimariesToCicp(colorSpace.primaries);
-  const transfer = transferCharacteristicsToCicp(colorSpace.transfer);
-  const matrix = matrixCoefficientsToCicp(colorSpace.matrix);
-  if (primaries === null && transfer === null && matrix === null && colorSpace.fullRange === undefined) return null;
+function colorSpaceToColrCicp(colorSpace: VideoColorSpaceInit): Partial<CicpColorSpace> | null {
+  const cicp = videoColorSpaceToCicp(colorSpace);
+  const hasPrimaries = colorSpace.primaries !== undefined;
+  const hasTransfer = colorSpace.transfer !== undefined;
+  const hasMatrix = colorSpace.matrix !== undefined;
+  const hasFullRange = colorSpace.fullRange !== undefined;
+  if (!hasPrimaries && !hasTransfer && !hasMatrix && !hasFullRange) return null;
   return {
-    primaries: primaries ?? 2,
-    transfer: transfer ?? 2,
-    matrix: matrix ?? 2,
-    fullRange: colorSpace.fullRange ?? false,
+    ...cicp,
+    ...(hasPrimaries && cicp?.primaries === undefined ? { primaries: 'unspecified' as const } : {}),
+    ...(hasTransfer && cicp?.transfer === undefined ? { transfer: 'unspecified' as const } : {}),
+    ...(hasMatrix && cicp?.matrix === undefined ? { matrix: 'unspecified' as const } : {}),
+    ...(hasFullRange ? { fullRange: colorSpace.fullRange ?? undefined } : {}),
   };
 }
 
-function colorPrimariesToCicp(value: VideoColorPrimaries | null | undefined) {
-  switch (String(value ?? '')) {
-    case 'bt709': return 1;
-    case 'bt470bg': return 5;
-    case 'smpte170m': return 6;
-    case 'bt2020': return 9;
-    case 'smpte432': return 12;
-    default: return null;
-  }
+function resolveCicpPrimaries(metadataCicp: CicpColorSpace | undefined, color: CicpColorSpace | undefined, colorSpaceCicp: Partial<CicpColorSpace> | null, sequenceValue: number) {
+  const value = metadataCicp?.primaries ?? color?.primaries ?? colorSpaceCicp?.primaries;
+  return value ? cicpColorPrimariesToNumber(value) : sequenceValue;
 }
 
-function transferCharacteristicsToCicp(value: VideoTransferCharacteristics | null | undefined) {
-  switch (String(value ?? '')) {
-    case 'bt709': return 1;
-    case 'smpte170m': return 6;
-    case 'iec61966-2-1': return 13;
-    case 'pq':
-    case 'smpte2084': return 16;
-    case 'hlg':
-    case 'arib-std-b67': return 18;
-    default: return null;
-  }
+function resolveCicpTransfer(metadataCicp: CicpColorSpace | undefined, color: CicpColorSpace | undefined, colorSpaceCicp: Partial<CicpColorSpace> | null, sequenceValue: number) {
+  const value = metadataCicp?.transfer ?? color?.transfer ?? colorSpaceCicp?.transfer;
+  return value ? cicpTransferCharacteristicsToNumber(value) : sequenceValue;
 }
 
-function matrixCoefficientsToCicp(value: VideoMatrixCoefficients | null | undefined) {
-  switch (String(value ?? '')) {
-    case 'rgb': return 0;
-    case 'bt709': return 1;
-    case 'smpte170m': return 6;
-    case 'bt2020-ncl': return 9;
-    default: return null;
+function resolveCicpMatrix(metadataCicp: CicpColorSpace | undefined, color: CicpColorSpace | undefined, colorSpaceCicp: Partial<CicpColorSpace> | null, sequenceValue: number) {
+  const value = metadataCicp?.matrix ?? color?.matrix ?? colorSpaceCicp?.matrix;
+  return value ? cicpMatrixCoefficientsToNumber(value) : sequenceValue;
+}
+
+function readPrimaryItemId(data: Uint8Array, start: number, end: number) {
+  for (const box of boxes(data, start, end)) {
+    if (box.type !== 'pitm') continue;
+    const version = data[box.start + box.headerSize];
+    const base = box.start + box.headerSize + 4;
+    if (version === 0) {
+      if (base + 2 > box.end) return null;
+      return readU16(data, base);
+    }
+    if (base + 4 > box.end) return null;
+    return readU32(data, base);
   }
+  return null;
+}
+
+function readPrimaryColrProperty(data: Uint8Array, start: number, end: number, primaryItemId: number) {
+  const properties = collectAvifProperties(data, start, end);
+  const propertyIndexes = readPropertyIndexesForItem(data, start, end, primaryItemId);
+  for (const index of propertyIndexes) {
+    const property = properties[index - 1];
+    if (property?.type === 'colr') return property;
+  }
+  return null;
+}
+
+function collectAvifProperties(data: Uint8Array, start: number, end: number) {
+  const properties: Array<{ type: string; start: number; end: number; headerSize: number }> = [];
+  for (const box of boxes(data, start, end)) {
+    if (box.type !== 'iprp') continue;
+    for (const iprpChild of boxes(data, box.start + box.headerSize, box.end)) {
+      if (iprpChild.type !== 'ipco') continue;
+      for (const property of boxes(data, iprpChild.start + iprpChild.headerSize, iprpChild.end)) {
+        properties.push(property);
+      }
+    }
+  }
+  return properties;
+}
+
+function readPropertyIndexesForItem(data: Uint8Array, start: number, end: number, itemId: number) {
+  for (const box of boxes(data, start, end)) {
+    if (box.type !== 'iprp') continue;
+    for (const iprpChild of boxes(data, box.start + box.headerSize, box.end)) {
+      if (iprpChild.type !== 'ipma') continue;
+      const version = data[iprpChild.start + iprpChild.headerSize];
+      const flags = (data[iprpChild.start + iprpChild.headerSize + 1] << 16)
+        | (data[iprpChild.start + iprpChild.headerSize + 2] << 8)
+        | data[iprpChild.start + iprpChild.headerSize + 3];
+      const largePropertyIndex = (flags & 1) === 1;
+      let cursor = iprpChild.start + iprpChild.headerSize + 4;
+      if (cursor + 4 > iprpChild.end) continue;
+      const entryCount = readU32(data, cursor);
+      cursor += 4;
+      for (let entryIndex = 0; entryIndex < entryCount; entryIndex++) {
+        const itemIdSize = version < 1 ? 2 : 4;
+        if (cursor + itemIdSize + 1 > iprpChild.end) break;
+        const currentItemId = itemIdSize === 2 ? readU16(data, cursor) : readU32(data, cursor);
+        cursor += itemIdSize;
+        const associationCount = data[cursor++];
+        const propertyIndexes: number[] = [];
+        for (let associationIndex = 0; associationIndex < associationCount; associationIndex++) {
+          const associationSize = largePropertyIndex ? 2 : 1;
+          if (cursor + associationSize > iprpChild.end) break;
+          const association = associationSize === 2 ? readU16(data, cursor) : data[cursor];
+          cursor += associationSize;
+          propertyIndexes.push(association & (largePropertyIndex ? 0x7fff : 0x7f));
+        }
+        if (currentItemId === itemId) return propertyIndexes;
+      }
+    }
+  }
+  return [];
+}
+
+function readNclxCicpColor(data: Uint8Array, start: number, end: number): CicpColorSpace | null {
+  if (start + 11 > end) return null;
+  if (readAscii(data, start, 4) !== 'nclx') return null;
+  return {
+    primaries: cicpColorPrimariesFromNumber(readU16(data, start + 4)),
+    transfer: cicpTransferCharacteristicsFromNumber(readU16(data, start + 6)),
+    matrix: cicpMatrixCoefficientsFromNumber(readU16(data, start + 8)),
+    fullRange: (data[start + 10] & 0x80) !== 0,
+  };
+}
+
+function readColrColorMetadata(data: Uint8Array, start: number, end: number): ImageColorMetadata | null {
+  if (start + 4 > end) return null;
+  const colorType = readAscii(data, start, 4);
+  if (colorType === 'nclx') {
+    const cicp = readNclxCicpColor(data, start, end);
+    return cicp ? { type: 'cicp', cicp } : null;
+  }
+  if (colorType === 'prof' || colorType === 'rICC') {
+    return {
+      type: 'icc',
+      profile: data.slice(start + 4, end),
+      ...(colorType === 'rICC' ? { restricted: true } : {}),
+    };
+  }
+  return null;
 }
 
 type SequenceHeaderInfo = ReturnType<typeof parseSequenceHeaderObu>;

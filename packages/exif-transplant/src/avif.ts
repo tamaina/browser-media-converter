@@ -1,5 +1,5 @@
 import { concat, readAscii, readSized, readU16, readU32, u32 } from '@browser-mc/binary';
-import { boxes, findSequenceHeaderObu, makeAv1Config, muxStillAvif, readBox, type EncodedStillAv1 } from '@browser-mc/media-container';
+import { boxes, findSequenceHeaderObu, makeAv1Config, muxStillAvif, readAvifColorMetadata, readBox, type EncodedStillAv1 } from '@browser-mc/media-container';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 
@@ -29,9 +29,10 @@ function readPrimaryAvifImage(data: Uint8Array): EncodedStillAv1 {
     if (box.type !== 'meta') continue;
     const metaStart = box.start + box.headerSize + 4;
     const entries = collectAvifItems(data, metaStart, box.end);
-    const properties = collectAvifProperties(data, metaStart, box.end);
-    const image = entries.find((entry) => entry.type === 'av01');
+    const primaryItemId = readPrimaryItemId(data, metaStart, box.end);
+    const image = entries.find((entry) => entry.id === primaryItemId && entry.type === 'av01');
     if (!image) continue;
+    const properties = collectAvifPropertiesForItem(data, metaStart, box.end, image.id);
     if (!properties.av1Config) throw new Error('AVIF image item is missing av1C');
     if (!properties.width || !properties.height) throw new Error('AVIF image item is missing ispe');
     const chunk = data.slice(image.offset, image.offset + image.length);
@@ -40,6 +41,7 @@ function readPrimaryAvifImage(data: Uint8Array): EncodedStillAv1 {
     const codec = 'av01.0.08M.08';
     return {
       chunk,
+      colorMetadata: readAvifColorMetadata(data) ?? undefined,
       decoderConfig: {
         codec,
         codedWidth: properties.width,
@@ -52,6 +54,21 @@ function readPrimaryAvifImage(data: Uint8Array): EncodedStillAv1 {
     };
   }
   throw new Error('AVIF image item could not be found');
+}
+
+function readPrimaryItemId(data: Uint8Array, start: number, end: number) {
+  for (const box of boxes(data, start, end)) {
+    if (box.type !== 'pitm') continue;
+    const version = data[box.start + box.headerSize];
+    const base = box.start + box.headerSize + 4;
+    if (version === 0) {
+      if (base + 2 > box.end) return null;
+      return readU16(data, base);
+    }
+    if (base + 4 > box.end) return null;
+    return readU32(data, base);
+  }
+  return null;
 }
 
 function collectAvifItems(data: Uint8Array, start: number, end: number) {
@@ -136,23 +153,69 @@ function collectAvifItems(data: Uint8Array, start: number, end: number) {
 }
 
 function collectAvifProperties(data: Uint8Array, start: number, end: number) {
-  const properties: { width?: number; height?: number; av1Config?: Uint8Array } = {};
+  const properties: Array<{ type: string; start: number; end: number; headerSize: number }> = [];
   for (const box of boxes(data, start, end)) {
     if (box.type !== 'iprp') continue;
     for (const iprpChild of boxes(data, box.start + box.headerSize, box.end)) {
       if (iprpChild.type !== 'ipco') continue;
       for (const property of boxes(data, iprpChild.start + iprpChild.headerSize, iprpChild.end)) {
-        if (property.type === 'ispe') {
-          const base = property.start + property.headerSize + 4;
-          properties.width = readU32(data, base);
-          properties.height = readU32(data, base + 4);
-        } else if (property.type === 'av1C') {
-          properties.av1Config = data.slice(property.start + property.headerSize, property.end);
-        }
+        properties.push(property);
       }
     }
   }
   return properties;
+}
+
+function collectAvifPropertiesForItem(data: Uint8Array, start: number, end: number, itemId: number) {
+  const result: { width?: number; height?: number; av1Config?: Uint8Array } = {};
+  const properties = collectAvifProperties(data, start, end);
+  const propertyIndexes = readPropertyIndexesForItem(data, start, end, itemId);
+  for (const index of propertyIndexes) {
+    const property = properties[index - 1];
+    if (property?.type === 'ispe') {
+      const base = property.start + property.headerSize + 4;
+      result.width = readU32(data, base);
+      result.height = readU32(data, base + 4);
+    } else if (property?.type === 'av1C') {
+      result.av1Config = data.slice(property.start + property.headerSize, property.end);
+    }
+  }
+  return result;
+}
+
+function readPropertyIndexesForItem(data: Uint8Array, start: number, end: number, itemId: number) {
+  for (const box of boxes(data, start, end)) {
+    if (box.type !== 'iprp') continue;
+    for (const iprpChild of boxes(data, box.start + box.headerSize, box.end)) {
+      if (iprpChild.type !== 'ipma') continue;
+      const version = data[iprpChild.start + iprpChild.headerSize];
+      const flags = (data[iprpChild.start + iprpChild.headerSize + 1] << 16)
+        | (data[iprpChild.start + iprpChild.headerSize + 2] << 8)
+        | data[iprpChild.start + iprpChild.headerSize + 3];
+      const largePropertyIndex = (flags & 1) === 1;
+      let cursor = iprpChild.start + iprpChild.headerSize + 4;
+      if (cursor + 4 > iprpChild.end) continue;
+      const entryCount = readU32(data, cursor);
+      cursor += 4;
+      for (let entryIndex = 0; entryIndex < entryCount; entryIndex++) {
+        const itemIdSize = version < 1 ? 2 : 4;
+        if (cursor + itemIdSize + 1 > iprpChild.end) break;
+        const currentItemId = itemIdSize === 2 ? readU16(data, cursor) : readU32(data, cursor);
+        cursor += itemIdSize;
+        const associationCount = data[cursor++];
+        const propertyIndexes: number[] = [];
+        for (let associationIndex = 0; associationIndex < associationCount; associationIndex++) {
+          const associationSize = largePropertyIndex ? 2 : 1;
+          if (cursor + associationSize > iprpChild.end) break;
+          const association = associationSize === 2 ? readU16(data, cursor) : data[cursor];
+          cursor += associationSize;
+          propertyIndexes.push(association & (largePropertyIndex ? 0x7fff : 0x7f));
+        }
+        if (currentItemId === itemId) return propertyIndexes;
+      }
+    }
+  }
+  return [];
 }
 
 function upsert<T extends object>(map: Map<number, T>, key: number): T & { prefix: number } {

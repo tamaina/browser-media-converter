@@ -19,6 +19,33 @@ await fetch('/upload', {
 
 `encodeImageToAvif` defaults to AV1 4:4:4 chroma (`chromaSubsampling: '444'`). Pass `chromaSubsampling: '420'` when smaller 4:2:0 output or broader baseline-style compatibility is preferred.
 
+## Preserve AVIF Color Metadata
+
+Chromium's `ImageDecoder` may decode an AVIF into a `VideoFrame` whose `colorSpace` omits fields that were present in the AVIF container, such as PQ or HLG transfer characteristics. AVIF may also carry ICC profiles. When re-encoding an AVIF, read the original container color metadata and pass it explicitly:
+
+```ts
+import { encodeImageToAvif, readAvifColorMetadata } from '@browser-mc/webcodecs-avif';
+
+const input = new Uint8Array(await file.arrayBuffer());
+const colorMetadata = readAvifColorMetadata(input);
+const decoder = new ImageDecoder({
+  data: input,
+  type: 'image/avif',
+  colorSpaceConversion: 'none',
+});
+const frame = (await decoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+
+try {
+  const avif = await encodeImageToAvif(frame, {
+    quality: 0.72,
+    colorMetadata: colorMetadata ?? undefined,
+  });
+} finally {
+  frame.close();
+  decoder.close();
+}
+```
+
 ## Alpha
 
 Pass `alpha: 'keep'` to preserve transparency:
@@ -85,5 +112,5 @@ node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 - Requires WebCodecs for encoding/decoding.
 - Chromium may report 8-bit AV1 still-image encode support even when 10-bit AV1 encode is not available. This package chooses the default codec from the source frame's pixel format bit depth, not from HDR or BT.2020 color metadata alone. It does not silently change a high-bit-depth `VideoFrame` to 8-bit, because changing only the codec string does not change the frame's pixel format and can make `VideoEncoder.encode()` reject the frame. Callers that want an 8-bit fallback should convert the frame first, then pass an explicit 8-bit codec such as `av01.1.08M.08` or `av01.0.08M.08`.
 - The muxer writes a minimal still-image AVIF and does not preserve arbitrary source AVIF boxes.
-- `av1C` and `pixi` are derived from the AV1 Sequence Header OBU. `colr` uses source `VideoFrame.colorSpace` metadata when available, then falls back to the AV1 Sequence Header. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
+- `av1C` and `pixi` are derived from the AV1 Sequence Header OBU. `colr` uses explicit `EncodeAvifOptions.colorMetadata` first, then `EncodeAvifOptions.color` CICP metadata, then `EncodeAvifOptions.colorSpace` or source `VideoFrame.colorSpace` metadata, then falls back field-by-field to the AV1 Sequence Header. ICC metadata is written as `colr/prof`. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
 - Container-specific mux helpers live in `@browser-mc/media-container`; this package re-exports the AVIF helpers for convenience.

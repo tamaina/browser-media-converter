@@ -152,8 +152,9 @@ const eightBitBt2020Check = await page.evaluate(async ({ moduleUrl }) => {
 }, { moduleUrl });
 
 const hdrCheck = await page.evaluate(async ({ moduleUrl, port }) => {
-  const { encodeImageToAvif } = await import(moduleUrl);
+  const { encodeImageToAvif, readAvifColorSpace } = await import(moduleUrl);
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
+  const inputContainerColorSpace = readAvifColorSpace(input);
   const inputDecoder = new ImageDecoder({
     data: input,
     type: 'image/avif',
@@ -164,13 +165,15 @@ const hdrCheck = await page.evaluate(async ({ moduleUrl, port }) => {
   const inputFormat = inputFrame.format;
   let avif;
   try {
-    avif = await encodeImageToAvif(inputFrame, { quality: 0.72 });
+    avif = await encodeImageToAvif(inputFrame, { quality: 0.72, colorSpace: inputContainerColorSpace ?? undefined });
   } catch (error) {
     inputFrame.close();
     inputDecoder.close();
     return {
+      inputContainerColorSpace,
       inputColorSpace,
       inputFormat,
+      outputContainerColorSpace: null,
       outputColorSpace: null,
       outputFormat: null,
       error: error instanceof Error
@@ -180,6 +183,7 @@ const hdrCheck = await page.evaluate(async ({ moduleUrl, port }) => {
   }
   inputFrame.close();
   inputDecoder.close();
+  const outputContainerColorSpace = readAvifColorSpace(avif);
 
   const outputDecoder = new ImageDecoder({
     data: avif,
@@ -192,8 +196,10 @@ const hdrCheck = await page.evaluate(async ({ moduleUrl, port }) => {
   outputFrame.close();
   outputDecoder.close();
   return {
+    inputContainerColorSpace,
     inputColorSpace,
     inputFormat,
+    outputContainerColorSpace,
     outputColorSpace,
     outputFormat,
     error: null,
@@ -219,8 +225,11 @@ assert.equal(eightBitBt2020Check.colorSpace.primaries, 'bt2020');
 if (hdrCheck.error) {
   assert.match(hdrCheck.error.message, /Encoding error|VideoEncoder does not support/u);
 } else {
-  assert.equal(hdrCheck.outputColorSpace.primaries, hdrCheck.inputColorSpace.primaries);
-  assert.equal(hdrCheck.outputColorSpace.transfer, hdrCheck.inputColorSpace.transfer);
-  assert.equal(hdrCheck.outputColorSpace.matrix, hdrCheck.inputColorSpace.matrix);
+  assert.equal(hdrCheck.inputContainerColorSpace.primaries, 'bt2020');
+  assert.equal(hdrCheck.inputContainerColorSpace.transfer, 'pq');
+  assert.equal(hdrCheck.inputContainerColorSpace.matrix, 'bt2020-ncl');
+  assert.equal(hdrCheck.outputContainerColorSpace.primaries, hdrCheck.inputContainerColorSpace.primaries);
+  assert.equal(hdrCheck.outputContainerColorSpace.transfer, hdrCheck.inputContainerColorSpace.transfer);
+  assert.equal(hdrCheck.outputContainerColorSpace.matrix, hdrCheck.inputContainerColorSpace.matrix);
 }
 console.log(`wrote ${output} (${avifBytes.length} bytes)`);

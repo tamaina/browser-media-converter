@@ -9,9 +9,16 @@ import {
 import {
   checkAvifEncodeSupport,
   encodeImageToAvif,
+  readAvifCicpColor,
+  readAvifColorMetadata,
+  readAvifColorSpace,
   type AvifEncodeSupport,
   type EncodeAvifOptions,
 } from '@browser-mc/webcodecs-avif';
+import {
+  readImageColorMetadata,
+  type ImageColorMetadata,
+} from '@browser-mc/media-container';
 import {
   copyArrayBuffer,
   decodeFirstImageFrame,
@@ -218,6 +225,7 @@ export async function inspectImageInput(
 export async function resizeAndConvertImage(options: BrowserImageResizerOptions): Promise<BrowserImageConversionResult> {
   const inputBytes = await toUint8Array(options.input);
   const inputMime = options.inputMime ?? detectInputMime(inputBytes, options.input);
+  const inputColorMetadata = readSourceColorMetadata(inputBytes, inputMime);
   const inputInfo = await inspectImageTrack(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
     preferAnimation: (options.animation ?? 'preserve') !== 'first-frame',
@@ -254,11 +262,15 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
     const resized = await resizeFrameForColor(frame, size, options);
+    const preservedColorMetadata = options.colorMetadata === 'canvas-sdr' || resized.path === 'canvas'
+      ? null
+      : inputColorMetadata;
 
     try {
       const encoded = await encodeFrame(resized.frame, outputMime, {
         quality: options.quality,
         avif: options.avif,
+        inputColorMetadata: preservedColorMetadata,
         preserveAlpha: inputMime !== 'image/jpeg',
         rawChromaSubsampling: options.rawChromaSubsampling,
         warnings: resized.warnings,
@@ -298,7 +310,16 @@ export async function resizeAnimatedImageToWebp(
   return resizeAnimatedImageToWebpInternal({ ...options, input });
 }
 
-export { muxAnimatedWebp };
+export { muxAnimatedWebp, readAvifCicpColor, readAvifColorMetadata, readAvifColorSpace };
+
+function readSourceColorMetadata(data: Uint8Array, mime: string) {
+  if (mime !== 'image/avif' && mime !== 'image/jpeg' && mime !== 'image/webp') return null;
+  try {
+    return readImageColorMetadata(data, mime);
+  } catch {
+    return null;
+  }
+}
 
 function readSourceExif(data: Uint8Array) {
   try {
@@ -330,6 +351,7 @@ async function encodeFrame(
   options: {
     quality?: number;
     avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
+    inputColorMetadata?: ImageColorMetadata | null;
     preserveAlpha?: boolean;
     rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
     warnings?: string[];
@@ -345,11 +367,17 @@ async function encodeFrame(
       warnings: options.warnings,
     });
     try {
+      const inputColorMetadata = options.avif?.colorMetadata === undefined
+        && options.avif?.color === undefined
+        && options.avif?.colorSpace === undefined
+        ? options.inputColorMetadata ?? undefined
+        : undefined;
       return await encodeImageToAvif(prepared.frame, {
         ...options.avif,
         alpha,
         chromaSubsampling,
         codec: prepared.codec,
+        colorMetadata: options.avif?.colorMetadata ?? inputColorMetadata,
         width: frame.displayWidth,
         height: frame.displayHeight,
         quality: options.quality,

@@ -4,6 +4,8 @@ import {
   makeAv1Config,
   muxStillAvif,
   type EncodedStillAv1,
+  type CicpColorSpace,
+  type ImageColorMetadata,
 } from '@browser-mc/media-container';
 import {
   describePlanarFormat,
@@ -13,12 +15,17 @@ import {
 export type {
   AvifMetadataItem,
   EncodedStillAv1,
+  CicpColorSpace,
+  ImageColorMetadata,
   MuxStillAvifOptions,
 } from '@browser-mc/media-container';
 export {
   findSequenceHeaderObu,
   makeAv1Config,
   muxStillAvif,
+  readAvifCicpColor,
+  readAvifColorMetadata,
+  readAvifColorSpace,
 } from '@browser-mc/media-container';
 
 export type EncodeAvifOptions = {
@@ -30,6 +37,9 @@ export type EncodeAvifOptions = {
   bitrate?: number;
   av1Config?: Uint8Array;
   alpha?: 'discard' | 'keep';
+  colorMetadata?: ImageColorMetadata;
+  colorSpace?: VideoColorSpaceInit;
+  color?: CicpColorSpace;
 };
 
 export type AvifEncodeSupportOptions = {
@@ -131,7 +141,7 @@ async function encodeImageToAv1Color(source: CanvasImageSource | VideoFrame, opt
   const height = options.height ?? sourceHeight(source);
   const codec = options.codec ?? preferredCodecForSource(source, options.chromaSubsampling);
   const bitrate = options.bitrate ?? Math.max(80_000, Math.round(width * height * (options.quality ?? 0.8) * 0.7));
-  const colorSpace = source instanceof VideoFrame ? source.colorSpace.toJSON() : undefined;
+  const colorSpace = options.colorSpace ?? (source instanceof VideoFrame ? source.colorSpace.toJSON() : undefined);
 
   const encoderConfig: VideoEncoderConfig = {
     codec,
@@ -174,7 +184,7 @@ async function encodeImageToAv1Color(source: CanvasImageSource | VideoFrame, opt
     throw new Error('Provided av1Config does not match the encoded AV1 Sequence Header OBU');
   }
   const av1Config = generatedAv1Config;
-  return { chunk, decoderConfig, av1Config, width, height };
+  return { chunk, decoderConfig, av1Config, width, height, colorMetadata: options.colorMetadata, color: options.color };
 }
 
 function makeFrameFromCanvasSource(canvasSource: CanvasImageSource) {

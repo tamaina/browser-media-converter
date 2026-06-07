@@ -1,4 +1,4 @@
-import { ascii, concat, readAscii, u16le, u24le, u32le } from '@browser-mc/binary';
+import { ascii, concat, readAscii, readU16le, readU32le, u16le, u24le, u32le, writeAscii, writeU32le } from '@browser-mc/binary';
 import { makeRiffChunk, riffChunks } from './riff.js';
 
 export type AnimatedWebpFrame = {
@@ -51,9 +51,112 @@ export function extractStillWebpFrameChunks(data: Uint8Array): Uint8Array[] {
   return chunks;
 }
 
-function makeVp8xChunk(width: number, height: number, alpha: boolean, animation: boolean) {
+export function readWebpIccProfile(data: Uint8Array): Uint8Array | null {
+  assertWebp(data);
+  for (const chunk of riffChunks(data)) {
+    if (chunk.type === 'ICCP') return data.slice(chunk.start, chunk.end);
+  }
+  return null;
+}
+
+export function writeWebpIccProfile(data: Uint8Array, profile: Uint8Array): Uint8Array {
+  assertWebp(data);
+  const chunks: Uint8Array[] = [];
+  let cursor = 12;
+  let inserted = false;
+  let hasVp8x = false;
+
+  for (const chunk of riffChunks(data)) {
+    chunks.push(data.slice(cursor, chunk.headerStart));
+    if (chunk.type === 'ICCP') {
+      if (!inserted && hasVp8x) {
+        chunks.push(makeRiffChunk('ICCP', profile));
+        inserted = true;
+      }
+      cursor = chunk.paddedEnd;
+      continue;
+    }
+    const bytes = data.slice(chunk.headerStart, chunk.paddedEnd);
+    if (chunk.type === 'VP8X') {
+      bytes[8] |= 0x20;
+      chunks.push(bytes, makeRiffChunk('ICCP', profile));
+      hasVp8x = true;
+      inserted = true;
+      cursor = chunk.paddedEnd;
+      continue;
+    }
+    if (!hasVp8x && isStillImageChunk(chunk.type)) {
+      const dimensions = readStillWebpDimensions(data, chunk);
+      chunks.push(makeVp8xChunk(dimensions.width, dimensions.height, stillImageChunkHasAlpha(data, chunk), false, true), makeRiffChunk('ICCP', profile));
+      hasVp8x = true;
+      inserted = true;
+    }
+    chunks.push(bytes);
+    cursor = chunk.paddedEnd;
+  }
+
+  if (cursor < data.length) chunks.push(data.slice(cursor));
+  if (!inserted) throw new Error('WebP did not contain VP8X or still image data for ICC profile insertion');
+  const payload = concat(chunks);
+  return concat([makeWebpHeader(payload), payload]);
+}
+
+export function removeWebpIccProfile(data: Uint8Array): Uint8Array {
+  assertWebp(data);
+  const chunks: Uint8Array[] = [];
+  let cursor = 12;
+  for (const chunk of riffChunks(data)) {
+    chunks.push(data.slice(cursor, chunk.headerStart));
+    if (chunk.type !== 'ICCP') {
+      const bytes = data.slice(chunk.headerStart, chunk.paddedEnd);
+      if (chunk.type === 'VP8X') bytes[8] &= ~0x20;
+      chunks.push(bytes);
+    }
+    cursor = chunk.paddedEnd;
+  }
+  if (cursor < data.length) chunks.push(data.slice(cursor));
+  const payload = concat(chunks);
+  return concat([makeWebpHeader(payload), payload]);
+}
+
+function isStillImageChunk(type: string) {
+  return type === 'VP8 ' || type === 'VP8L';
+}
+
+function readStillWebpDimensions(data: Uint8Array, chunk: { type: string; start: number; end: number }) {
+  if (chunk.type === 'VP8 ') return readVp8Dimensions(data, chunk.start, chunk.end);
+  if (chunk.type === 'VP8L') return readVp8lDimensions(data, chunk.start, chunk.end);
+  throw new Error(`Unsupported WebP image chunk: ${chunk.type}`);
+}
+
+function stillImageChunkHasAlpha(data: Uint8Array, chunk: { type: string; start: number; end: number }) {
+  if (chunk.type !== 'VP8L') return false;
+  if (chunk.start + 5 > chunk.end || data[chunk.start] !== 0x2f) throw new Error('Invalid VP8L WebP frame');
+  return ((readU32le(data, chunk.start + 1) >> 28) & 1) === 1;
+}
+
+function readVp8Dimensions(data: Uint8Array, start: number, end: number) {
+  if (start + 10 > end || data[start + 3] !== 0x9d || data[start + 4] !== 0x01 || data[start + 5] !== 0x2a) {
+    throw new Error('Invalid VP8 WebP frame');
+  }
+  return {
+    width: readU16le(data, start + 6) & 0x3fff,
+    height: readU16le(data, start + 8) & 0x3fff,
+  };
+}
+
+function readVp8lDimensions(data: Uint8Array, start: number, end: number) {
+  if (start + 5 > end || data[start] !== 0x2f) throw new Error('Invalid VP8L WebP frame');
+  const bits = readU32le(data, start + 1);
+  return {
+    width: (bits & 0x3fff) + 1,
+    height: ((bits >> 14) & 0x3fff) + 1,
+  };
+}
+
+function makeVp8xChunk(width: number, height: number, alpha: boolean, animation: boolean, icc = false) {
   return makeRiffChunk('VP8X', concat([
-    new Uint8Array([Number(alpha) << 4 | Number(animation) << 1, 0, 0, 0]),
+    new Uint8Array([Number(icc) << 5 | Number(alpha) << 4 | Number(animation) << 1, 0, 0, 0]),
     u24le(width - 1),
     u24le(height - 1),
   ]));
@@ -97,4 +200,16 @@ function assertVp8xDimension(value: number, name: string) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function assertWebp(data: Uint8Array) {
+  if (readAscii(data, 0, 4) !== 'RIFF' || readAscii(data, 8, 4) !== 'WEBP') throw new Error('Not a WebP');
+}
+
+function makeWebpHeader(payload: Uint8Array) {
+  const header = new Uint8Array(12);
+  writeAscii(header, 0, 'RIFF');
+  writeU32le(header, 4, payload.length + 4);
+  writeAscii(header, 8, 'WEBP');
+  return header;
 }
