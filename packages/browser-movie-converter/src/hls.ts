@@ -23,7 +23,7 @@ import {
   type BrowserMovieQuantizerOptions,
   type BrowserMovieResizeOptions,
   type SceneDetectionOptions,
-} from './conversion-options';
+} from './conversion-options.js';
 
 export type MovieHlsAsset = {
   path: string;

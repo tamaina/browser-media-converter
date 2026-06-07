@@ -2,12 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ascii, bytesEqual, concat, cstr,
-  readAscii, writeAscii,
+  readAscii,
   readU16, writeU16, u16,
-  readU16le, writeU16le, u16le,
-  readU24le, writeU24le, u24le,
-  readU32, writeU32, u32,
-  readU32le, writeU32le, u32le,
+  readU16le, u16le,
+  readU24le, u24le,
+  readU32, u32,
+  readU32le, u32le,
   readU64,
   readSized,
   startsWith,

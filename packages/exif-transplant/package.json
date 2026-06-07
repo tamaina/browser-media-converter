@@ -15,7 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "pretypecheck": "pnpm --filter @browser-mc/media-container build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build && node --test test/tiff.test.mjs && node test/smoke.mjs"
+    "test": "pnpm build && node --test test/*.test.mjs && node test/smoke.mjs"
   },
   "dependencies": {
     "@browser-mc/binary": "workspace:^",

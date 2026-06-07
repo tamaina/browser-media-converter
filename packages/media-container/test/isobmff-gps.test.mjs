@@ -97,7 +97,7 @@ function makeKeys(keys) {
 }
 
 function makeIlst(entries) {
-  return box('ilst', entries.map(([_, value], index) => box(typeFromIndex(index + 1), makeData(value))));
+  return box('ilst', entries.map((entry, index) => box(typeFromIndex(index + 1), makeData(entry[1]))));
 }
 
 function makeData(value) {

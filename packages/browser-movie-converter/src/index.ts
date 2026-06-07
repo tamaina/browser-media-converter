@@ -4,7 +4,7 @@ import {
   type MovieHlsAsset,
   type MovieHlsOptions,
   type MovieHlsVariantOptions,
-} from './hls';
+} from './hls.js';
 import {
   buildMovieConversionOptions,
   inspectMovie,
@@ -17,7 +17,7 @@ import {
   type BrowserMovieTrackColor,
   type SceneDetectionOptions,
   type SceneKeyFrameState,
-} from './conversion-options';
+} from './conversion-options.js';
 
 export type {
   BrowserMovieColorMetadataPolicy,

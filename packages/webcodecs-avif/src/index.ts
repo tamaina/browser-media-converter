@@ -50,27 +50,32 @@ export async function encodeImageToAv1(source: CanvasImageSource | VideoFrame, o
 
   let metadataConfig: VideoDecoderConfig | undefined;
   const chunks: Uint8Array[] = [];
-  const done = new Promise<void>((resolve, reject) => {
-    const encoder = new VideoEncoder({
-      error: reject,
-      output: (chunk, metadata) => {
-        const bytes = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(bytes);
-        chunks.push(bytes);
-        if (metadata?.decoderConfig) metadataConfig = metadata.decoderConfig;
-      },
-    });
-
-    encoder.configure(config);
-    const frame = source instanceof VideoFrame ? source : new VideoFrame(source, { timestamp: 0, duration: 1_000_000 });
-    encoder.encode(frame, { keyFrame: true });
-    encoder.flush().then(() => {
-      encoder.close();
-      if (!(source instanceof VideoFrame)) frame.close();
-      resolve();
-    }, reject);
+  let rejectEncoderError: (error: Error) => void = () => {};
+  const encoderError = new Promise<never>((_, reject) => { rejectEncoderError = reject; });
+  const encoder = new VideoEncoder({
+    error: rejectEncoderError,
+    output: (chunk, metadata) => {
+      const bytes = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(bytes);
+      chunks.push(bytes);
+      if (metadata?.decoderConfig) metadataConfig = metadata.decoderConfig;
+    },
   });
-  await done;
+  let shouldCloseFrame = false;
+  const frame = source instanceof VideoFrame ? source : makeFrameFromCanvasSource(source);
+  try {
+    encoder.configure(config);
+    encoder.encode(frame, { keyFrame: true });
+    await Promise.race([encoder.flush(), encoderError]);
+  } finally {
+    encoder.close();
+    if (shouldCloseFrame) frame.close();
+  }
+
+  function makeFrameFromCanvasSource(canvasSource: CanvasImageSource) {
+    shouldCloseFrame = true;
+    return new VideoFrame(canvasSource, { timestamp: 0, duration: 1_000_000 });
+  }
 
   const chunk = concat(chunks);
   const decoderConfig = metadataConfig ?? { codec, codedWidth: width, codedHeight: height, description: options.av1Config };

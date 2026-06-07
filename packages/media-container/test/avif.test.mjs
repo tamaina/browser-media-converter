@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { findSequenceHeaderObu, makeAv1Config } from '../dist/index.js';
+import { findSequenceHeaderObu, makeAv1Config, riffChunks } from '../dist/index.js';
 
 // Build a minimal AV1 OBU byte sequence.
 // type: OBU type (1 = Sequence Header, 6 = TD, etc.)
@@ -149,3 +149,22 @@ describe('makeAv1Config', () => {
     assert.deepEqual([...config.subarray(4)], [...obuBytes]);
   });
 });
+
+describe('riffChunks', () => {
+  it('does not yield truncated chunks', () => {
+    const data = new Uint8Array([
+      ...ascii('RIFF'),
+      12, 0, 0, 0,
+      ...ascii('WEBP'),
+      ...ascii('EXIF'),
+      10, 0, 0, 0,
+      1, 2,
+    ]);
+
+    assert.deepEqual([...riffChunks(data)], []);
+  });
+});
+
+function ascii(text) {
+  return [...text].map((char) => char.charCodeAt(0));
+}

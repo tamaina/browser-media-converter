@@ -11,6 +11,7 @@
     }
   },
   "scripts": {
+    "prebuild": "pnpm --filter @browser-mc/media-container build",
     "build": "tsc -p tsconfig.json",
     "pretypecheck": "pnpm --filter @browser-mc/media-container build",
     "typecheck": "tsc -p tsconfig.json --noEmit",

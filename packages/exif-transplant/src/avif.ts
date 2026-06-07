@@ -58,16 +58,21 @@ function collectAvifItems(data: Uint8Array, start: number, end: number) {
   const items = new Map<number, { type?: string; offset?: number; length?: number; prefix: number }>();
   for (const box of boxes(data, start, end)) {
     if (box.type === 'iinf') {
+      if (box.start + box.headerSize + 8 > box.end) continue;
       const version = data[box.start + box.headerSize];
       const countOffset = box.start + box.headerSize + 4;
       const count = version === 0 ? readU16(data, countOffset) : readU32(data, countOffset);
       let childStart = countOffset + (version === 0 ? 2 : 4);
       for (let i = 0; i < count; i++) {
         const infe = readBox(data, childStart);
-        if (!infe || infe.type !== 'infe') break;
+        if (!infe || infe.type !== 'infe' || infe.end > box.end) break;
         const infeVersion = data[infe.start + infe.headerSize];
         if (infeVersion >= 2) {
           const base = infe.start + infe.headerSize + 4;
+          if (base + (infeVersion === 2 ? 8 : 10) > infe.end) {
+            childStart = infe.end;
+            continue;
+          }
           const id = infeVersion === 2 ? readU16(data, base) : readU32(data, base);
           const type = readAscii(data, base + (infeVersion === 2 ? 4 : 6), 4);
           upsert(items, id).type = type;
@@ -75,6 +80,7 @@ function collectAvifItems(data: Uint8Array, start: number, end: number) {
         childStart = infe.end;
       }
     } else if (box.type === 'iloc') {
+      if (box.start + box.headerSize + 6 > box.end) continue;
       const version = data[box.start + box.headerSize];
       const base = box.start + box.headerSize + 4;
       const sizes = data[base];
@@ -82,32 +88,51 @@ function collectAvifItems(data: Uint8Array, start: number, end: number) {
       const lengthSize = sizes & 0x0f;
       const baseOffsetSize = data[base + 1] >> 4;
       let cursor = base + 2;
+      if (cursor + (version < 2 ? 2 : 4) > box.end) continue;
       const count = version < 2 ? readU16(data, cursor) : readU32(data, cursor);
       cursor += version < 2 ? 2 : 4;
       for (let i = 0; i < count; i++) {
+        if (cursor + (version < 2 ? 2 : 4) > box.end) break;
         const id = version < 2 ? readU16(data, cursor) : readU32(data, cursor);
         cursor += version < 2 ? 2 : 4;
+        if ((version === 1 || version === 2) && cursor + 2 > box.end) break;
         if (version === 1 || version === 2) cursor += 2;
+        if (cursor + 2 + baseOffsetSize + 2 > box.end) break;
         cursor += 2;
         const baseOffset = readSized(data, cursor, baseOffsetSize);
         cursor += baseOffsetSize;
         const extentCount = readU16(data, cursor);
         cursor += 2;
         if (extentCount > 0) {
+          if ((version === 1 || version === 2) && cursor + 4 > box.end) break;
           if (version === 1 || version === 2) cursor += 4;
+          if (cursor + offsetSize + lengthSize > box.end) break;
           const offset = baseOffset + readSized(data, cursor, offsetSize);
           cursor += offsetSize;
           const length = readSized(data, cursor, lengthSize);
           cursor += lengthSize;
+          if (offset < 0 || length < 0 || offset + length > data.length) continue;
           const entry = upsert(items, id);
           entry.offset = offset;
           entry.length = length;
           entry.prefix = data[offset] === 0 && data[offset + 1] === 0 && data[offset + 2] === 0 && data[offset + 3] === 0 ? 4 : 0;
+        } else {
+          for (let extentIndex = 0; extentIndex < extentCount; extentIndex++) {
+            if ((version === 1 || version === 2) && cursor + 4 > box.end) break;
+            if (version === 1 || version === 2) cursor += 4;
+            if (cursor + offsetSize + lengthSize > box.end) break;
+            cursor += offsetSize + lengthSize;
+          }
         }
       }
     }
   }
-  return [...items.entries()].map(([id, item]) => ({ id, type: item.type, offset: item.offset ?? 0, length: item.length ?? 0, prefix: item.prefix }));
+  return [...items.entries()]
+    .filter((entry): entry is [number, { type?: string; offset: number; length: number; prefix: number }] => {
+      const item = entry[1];
+      return item.offset !== undefined && item.length !== undefined;
+    })
+    .map(([id, item]) => ({ id, type: item.type, offset: item.offset, length: item.length, prefix: item.prefix }));
 }
 
 function collectAvifProperties(data: Uint8Array, start: number, end: number) {

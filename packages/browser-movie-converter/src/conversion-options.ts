@@ -317,7 +317,8 @@ function omitKeyFrameInterval(
   base: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'> | undefined,
 ) {
   if (!base) return undefined;
-  const { keyFrameInterval: _keyFrameInterval, ...rest } = base;
+  const rest = { ...base };
+  delete rest.keyFrameInterval;
   return rest;
 }
 

@@ -15,8 +15,10 @@ export function* riffChunks(data: Uint8Array, startOffset = 12): Generator<RiffC
     const size = readU32le(data, offset + 4);
     const start = offset + 8;
     const end = start + size;
-    yield { type, headerStart: offset, start, end, paddedEnd: end + (size % 2) };
-    offset = end + (size % 2);
+    const paddedEnd = end + (size % 2);
+    if (end > data.length || paddedEnd > data.length) break;
+    yield { type, headerStart: offset, start, end, paddedEnd };
+    offset = paddedEnd;
   }
 }
 
