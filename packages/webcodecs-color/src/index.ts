@@ -53,6 +53,12 @@ export type ResizeCanvasResult = {
   colorSpace: PredefinedColorSpace;
 };
 
+export type CanvasSdrResult = {
+  frame: VideoFrame;
+  inspection: FrameColorInspection;
+  colorSpace: PredefinedColorSpace;
+};
+
 export type ResizeRawOptions = {
   width: number;
   height: number;
@@ -179,6 +185,32 @@ export function resizeFrameWithCanvas(frame: VideoFrame, options: ResizeCanvasOp
     frame: resized,
     inspection: inspectFrame(resized),
     colorSpace,
+  };
+}
+
+export function convertFrameToCanvasSdr(frame: VideoFrame): CanvasSdrResult {
+  const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
+  const context = canvas.getContext('2d', { colorSpace: 'srgb' });
+  if (!context) throw new Error('Could not create 2D canvas context');
+  context.drawImage(frame, 0, 0);
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const init: VideoFrameBufferInit = {
+    format: 'RGBA',
+    codedWidth: canvas.width,
+    codedHeight: canvas.height,
+    displayWidth: canvas.width,
+    displayHeight: canvas.height,
+    timestamp: frame.timestamp,
+    layout: [{ offset: 0, stride: canvas.width * 4 }],
+    colorSpace: sdrVideoColorSpaceInit(),
+  };
+  if (frame.duration !== null) init.duration = frame.duration;
+  const converted = new VideoFrame(image.data, init);
+  return {
+    frame: converted,
+    inspection: inspectFrame(converted),
+    colorSpace: 'srgb',
   };
 }
 
@@ -387,5 +419,14 @@ function videoColorSpaceInit(frame: VideoFrame): VideoColorSpaceInit {
     transfer: colorSpace.transfer as VideoTransferCharacteristics | null,
     matrix: colorSpace.matrix as VideoMatrixCoefficients | null,
     fullRange: colorSpace.fullRange,
+  };
+}
+
+export function sdrVideoColorSpaceInit(): VideoColorSpaceInit {
+  return {
+    primaries: 'bt709',
+    transfer: 'bt709',
+    matrix: 'bt709',
+    fullRange: false,
   };
 }

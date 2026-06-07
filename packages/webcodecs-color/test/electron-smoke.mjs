@@ -36,6 +36,7 @@ const result = await page.evaluate(async ({ port }) => {
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
   const {
     classifyFrameColor,
+    convertFrameToCanvasSdr,
     copyFrameToRgba,
     decodeImageToVideoFrame,
     inspectFrame,
@@ -45,6 +46,9 @@ const result = await page.evaluate(async ({ port }) => {
   const frame = await decodeImageToVideoFrame(input, 'image/avif', { colorSpaceConversion: 'none' });
   const inspection = inspectFrame(frame);
   const classification = classifyFrameColor(inspection);
+  const canvasSdr = convertFrameToCanvasSdr(frame);
+  const canvasSdrInspection = canvasSdr.inspection;
+  canvasSdr.frame.close();
 
   const p3Copy = await copyFrameToRgba(frame, { colorSpace: 'display-p3' }).then((copy) => ({
     byteLength: copy.data.byteLength,
@@ -73,6 +77,7 @@ const result = await page.evaluate(async ({ port }) => {
       algorithm: resized.algorithm,
     },
     resizedInspection,
+    canvasSdrInspection,
   };
 }, { port });
 
@@ -85,6 +90,11 @@ assert.equal(result.resizedInspection.displayWidth, Math.max(1, Math.floor(resul
 assert.equal(result.resizedInspection.displayHeight, Math.max(1, Math.floor(result.inspection.displayHeight / 2)));
 assert.equal(result.resizedInspection.colorSpace.primaries, result.inspection.colorSpace.primaries);
 assert.equal(result.resizedInspection.colorSpace.matrix, result.inspection.colorSpace.matrix);
+assert.equal(result.canvasSdrInspection.format, 'RGBA');
+assert.equal(result.canvasSdrInspection.colorSpace.primaries, 'bt709');
+assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'bt709');
+assert.equal(result.canvasSdrInspection.colorSpace.matrix, 'bt709');
+assert.equal(result.canvasSdrInspection.colorSpace.fullRange, false);
 
 console.log(JSON.stringify(result, null, 2));
 

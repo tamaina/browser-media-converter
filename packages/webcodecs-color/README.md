@@ -48,11 +48,14 @@ WebGPU may become useful if the pipeline can keep frames on the GPU for several 
 ## Comparison Helpers
 
 ```ts
-import { copyFrameToRgba, resizeFrameWithCanvas } from '@browser-avif-lab/webcodecs-color';
+import { convertFrameToCanvasSdr, copyFrameToRgba, resizeFrameWithCanvas } from '@browser-avif-lab/webcodecs-color';
 
 const rgba = await copyFrameToRgba(frame, { colorSpace: 'display-p3' });
 const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 });
+const canvasSdr = convertFrameToCanvasSdr(frame);
 ```
+
+`convertFrameToCanvasSdr` draws through an sRGB `OffscreenCanvas` path and returns an RGBA `VideoFrame` marked as BT.709 SDR. It is a practical browser conversion helper, not a dedicated HDR tone-mapping engine.
 
 ## Supported Raw Resize Formats
 

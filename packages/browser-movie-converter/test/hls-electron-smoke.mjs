@@ -67,15 +67,14 @@ const result = await page.evaluate(async ({ port }) => {
     keyFrameInterval: 3,
     resize: {
       width: 160,
-      path: 'raw',
     },
     variants: [
       {
         resize: {
           width: 320,
-          path: 'raw',
         },
         keyFrameInterval: 2,
+        colorMetadata: 'canvas-sdr',
       },
       {},
     ],
@@ -86,7 +85,7 @@ const result = await page.evaluate(async ({ port }) => {
       height: 36,
       minKeyFrameDistance: 0.5,
     },
-    colorMetadata: 'copy',
+    colorMetadata: 'preserve',
   })) {
     const bytes = await readStream(asset.data);
     assets.push({

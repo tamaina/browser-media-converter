@@ -186,20 +186,18 @@ Implemented `@browser-avif-lab/browser-movie-converter`.
 - Reports input video color metadata with `inspectVideoTrackColor`/`inspectMovie`.
 - Uses `webcodecs-color.resizeFrameRaw` inside `Conversion.video.process` when `resize` is set, so resizing can keep planar YUV sample data on a non-Canvas path.
 - Movie resize dimensions default to 2-pixel alignment to avoid odd-size 4:2:0/NV12 artifacts and common encoder constraints.
-- `resize.path: 'mediabunny'` is available as an explicit fallback to Mediabunny's built-in resize.
-- `colorMetadata: 'copy'` copies the source sample `VideoColorSpace` metadata onto raw-resized samples. This is metadata preservation, not a color-correction step.
+- `colorMetadata: 'preserve'` copies source sample `VideoColorSpace` metadata onto raw-resized samples. `colorMetadata: 'canvas-sdr'` draws frames through an sRGB Canvas path and marks output samples as BT.709 SDR; `colorSpace`, `copy`, and `default` color policies are no longer part of the public API.
 
 Current limitation:
 
-- Raw resize requires a `VideoFrame` format supported by `webcodecs-color` (`NV12`, `I420`, `I422`, `I444`, and Chromium 10-bit variants). Unsupported formats fail unless `resize.path: 'mediabunny'` is selected.
-- `resize.path: 'mediabunny'` may still lose or rewrite color metadata because it uses Mediabunny's built-in resize path.
+- Raw movie resize requires a `VideoFrame` format supported by `webcodecs-color` (`NV12`, `I420`, `I422`, `I444`, and Chromium 10-bit variants). Image resize automatically falls back to Canvas when raw resize is unavailable.
 - Scene detection defaults to all-frame sampling; detected scene timestamps are collected during conversion and exposed through the returned plan.
 
 Verified with Electron's Chromium build:
 
 - `bbb.mov` converted through the builder smoke to `playground-output/movie-converter-electron/resized.mp4`.
 - `bbb.mov` converted to HLS under `playground-output/movie-converter-hls-electron`.
-- `resize: { width: 320, path: 'raw' }` produced `320x180`.
+- `resize: { width: 320 }` produced `320x180`.
 
 Command:
 

@@ -16,21 +16,22 @@ import {
   type SceneKeyFrameState,
 } from '@browser-avif-lab/mediabunny-scene-keyframes';
 import {
+  convertFrameToCanvasSdr,
   resizeFrameRaw,
+  sdrVideoColorSpaceInit,
   type ResizeRawOptions,
 } from '@browser-avif-lab/webcodecs-color';
 
-export type BrowserMovieColorMetadataPolicy = 'copy' | 'default';
+export type BrowserMovieColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
 export type BrowserMovieResizeFit = 'contain' | 'cover' | 'fill';
 
-export type BrowserMovieResizePath = 'auto' | 'raw' | 'mediabunny';
+export type BrowserMovieResizePath = 'raw';
 
 export type BrowserMovieResizeOptions = {
   width?: number;
   height?: number;
   fit?: BrowserMovieResizeFit;
-  path?: BrowserMovieResizePath;
   rawAlgorithm?: ResizeRawOptions['algorithm'];
   dimensionAlignment?: 1 | 2 | 4 | 8;
 };
@@ -43,7 +44,6 @@ export type BrowserMovieConversionOptionsInput = {
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
-  colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
   tracks?: ConversionOptions['tracks'];
   videoTrackQuery?: InputTrackQuery<InputVideoTrack>;
@@ -55,7 +55,6 @@ export type BrowserMovieVideoConversionOptionsInput = {
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
-  colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
 };
 
@@ -102,7 +101,6 @@ export async function buildMovieConversionOptions(options: BrowserMovieConversio
       resize: options.resize,
       sceneDetection: options.sceneDetection,
       colorMetadata: options.colorMetadata,
-      colorSpace: options.colorSpace,
       forceTranscode: options.forceTranscode,
     }));
   }));
@@ -142,7 +140,7 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
       resize,
       sceneKeyFrames,
       forceTranscode: options.forceTranscode,
-      colorMetadata: normalizeColorMetadataPolicy(options),
+      colorMetadata: options.colorMetadata ?? 'preserve',
     }),
     sceneKeyFrames,
     videoColor,
@@ -194,11 +192,16 @@ function makeVideoOptions(options: {
   forceTranscode?: boolean;
   colorMetadata: BrowserMovieColorMetadataPolicy;
 }): ConversionVideoOptions {
-  const forceTranscode = options.forceTranscode ?? Boolean(options.sceneKeyFrames || options.resize);
-  const usesMediabunnyResize = options.resize?.path === 'mediabunny';
-  const baseProcess = options.resize && !usesMediabunnyResize
+  const forceTranscode = options.colorMetadata === 'canvas-sdr'
+    ? true
+    : (options.forceTranscode ?? Boolean(options.sceneKeyFrames || options.resize));
+  const resizeProcess = options.resize
     ? makeResizeProcessor(options.resize, options.colorMetadata)
-    : (options.colorMetadata === 'copy' ? copySampleColorMetadata : undefined);
+    : undefined;
+  const colorProcess = !resizeProcess && options.colorMetadata === 'canvas-sdr'
+    ? makeCanvasSdrProcessor()
+    : undefined;
+  const baseProcess = resizeProcess ?? colorProcess;
   const process = options.sceneKeyFrames
     ? makeStreamingSceneKeyFrameProcessor(options.sceneKeyFrames, baseProcess)
     : baseProcess;
@@ -207,16 +210,9 @@ function makeVideoOptions(options: {
     ...options.base,
     forceTranscode,
     process,
-    width: usesMediabunnyResize ? options.resize?.width : undefined,
-    height: usesMediabunnyResize ? options.resize?.height : undefined,
-    fit: usesMediabunnyResize ? 'fill' : undefined,
-    processedWidth: options.resize && !usesMediabunnyResize ? options.resize.width : undefined,
-    processedHeight: options.resize && !usesMediabunnyResize ? options.resize.height : undefined,
+    processedWidth: options.resize ? options.resize.width : undefined,
+    processedHeight: options.resize ? options.resize.height : undefined,
   };
-}
-
-function copySampleColorMetadata(sample: VideoSample): VideoSample {
-  return sample;
 }
 
 function makeStreamingSceneKeyFrameProcessor(
@@ -249,7 +245,7 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
   return {
     width: size.width,
     height: size.height,
-    path: options.path ?? 'auto',
+    path: 'raw',
     rawAlgorithm: options.rawAlgorithm ?? 'bilinear',
   };
 }
@@ -257,7 +253,7 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
 function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: BrowserMovieColorMetadataPolicy) {
   return async (sample: VideoSample): Promise<VideoSample> => {
     if (sample.displayWidth === resize.width && sample.displayHeight === resize.height) {
-      return colorMetadata === 'copy' ? copySampleColorMetadata(sample) : sample;
+      return colorMetadata === 'canvas-sdr' ? convertSampleToCanvasSdr(sample) : sample;
     }
 
     const frame = sample.toVideoFrame();
@@ -267,22 +263,48 @@ function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: Browser
         height: resize.height,
         algorithm: resize.rawAlgorithm,
       });
-      return new VideoSample(resized.frame, {
-        timestamp: sample.timestamp,
-        duration: sample.duration,
-        colorSpace: colorMetadata === 'copy' ? sample.colorSpace.toJSON() : undefined,
-        displayWidth: resize.width,
-        displayHeight: resize.height,
-      });
+      if (colorMetadata === 'canvas-sdr') {
+        const converted = convertFrameToCanvasSdr(resized.frame);
+        resized.frame.close();
+        return makeVideoSampleFromFrame(converted.frame, sample, sdrVideoColorSpaceInit(), resize);
+      }
+      return makeVideoSampleFromFrame(resized.frame, sample, sample.colorSpace.toJSON(), resize);
     } finally {
       frame.close();
     }
   };
 }
-function normalizeColorMetadataPolicy(options: Pick<BrowserMovieConversionOptionsInput, 'colorMetadata' | 'colorSpace'>): BrowserMovieColorMetadataPolicy {
-  if (options.colorMetadata) return options.colorMetadata;
-  if (options.colorSpace === 'preserve') return 'copy';
-  return 'default';
+
+function makeCanvasSdrProcessor() {
+  return (sample: VideoSample): VideoSample => convertSampleToCanvasSdr(sample);
+}
+
+function convertSampleToCanvasSdr(sample: VideoSample): VideoSample {
+  const frame = sample.toVideoFrame();
+  try {
+    const converted = convertFrameToCanvasSdr(frame);
+    return makeVideoSampleFromFrame(converted.frame, sample, sdrVideoColorSpaceInit(), {
+      width: sample.displayWidth,
+      height: sample.displayHeight,
+    });
+  } finally {
+    frame.close();
+  }
+}
+
+function makeVideoSampleFromFrame(
+  frame: VideoFrame,
+  sample: VideoSample,
+  colorSpace: VideoColorSpaceInit,
+  size: { width: number; height: number },
+): VideoSample {
+  return new VideoSample(frame, {
+    timestamp: sample.timestamp,
+    duration: sample.duration,
+    colorSpace,
+    displayWidth: size.width,
+    displayHeight: size.height,
+  });
 }
 
 function resolveTargetSize(sourceWidth: number, sourceHeight: number, options: BrowserMovieResizeOptions) {

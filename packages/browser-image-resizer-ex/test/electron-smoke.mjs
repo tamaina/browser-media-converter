@@ -98,6 +98,20 @@ const result = await page.evaluate(async ({ port }) => {
     quality: 0.75,
     animation: 'first-frame',
   });
+  const canvasSdrStill = await resizeAndConvertImage({
+    input: await makeFrame('#35a15a', 'S'),
+    inputMime: 'image/webp',
+    outputMime: 'image/avif',
+    width: 40,
+    quality: 0.75,
+    colorMetadata: 'canvas-sdr',
+  });
+  const canvasSdrAnimated = await resizeAnimatedImageToWebp(animated, {
+    inputMime: 'image/webp',
+    width: 40,
+    quality: 0.75,
+    colorMetadata: 'canvas-sdr',
+  });
 
   return {
     animated: [...animated],
@@ -124,6 +138,21 @@ const result = await page.evaluate(async ({ port }) => {
       width: firstFrameResult.width,
       height: firstFrameResult.height,
     },
+    canvasSdrStill: {
+      kind: canvasSdrStill.kind,
+      mime: canvasSdrStill.mime,
+      width: canvasSdrStill.width,
+      height: canvasSdrStill.height,
+      resizePath: canvasSdrStill.kind === 'still' ? canvasSdrStill.resizePath : null,
+      outputColorSpace: canvasSdrStill.kind === 'still' ? canvasSdrStill.output?.colorSpace : null,
+    },
+    canvasSdrAnimated: {
+      kind: canvasSdrAnimated.kind,
+      width: canvasSdrAnimated.width,
+      height: canvasSdrAnimated.height,
+      frameCount: canvasSdrAnimated.frameCount,
+      frames: canvasSdrAnimated.frames,
+    },
   };
 }, { port });
 
@@ -143,6 +172,28 @@ assert.deepEqual(
 );
 assert.deepEqual(result.auto, { kind: 'animated', mime: 'image/webp', width: 40, height: 24, frameCount: 2 });
 assert.deepEqual(result.firstFrame, { kind: 'still', mime: 'image/webp', width: 40, height: 24 });
+assert.deepEqual(
+  result.canvasSdrStill,
+  {
+    kind: 'still',
+    mime: 'image/avif',
+    width: 40,
+    height: 24,
+    resizePath: 'canvas',
+    outputColorSpace: {
+      primaries: 'bt709',
+      transfer: 'bt709',
+      matrix: 'bt709',
+      fullRange: false,
+    },
+  },
+);
+assert.deepEqual(
+  { kind: result.canvasSdrAnimated.kind, width: result.canvasSdrAnimated.width, height: result.canvasSdrAnimated.height, frameCount: result.canvasSdrAnimated.frameCount },
+  { kind: 'animated', width: 40, height: 24, frameCount: 2 },
+);
+assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas'));
+assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.inspection.colorSpace.primaries === 'bt709'));
 assert.equal(result.resized.frames.length, 2);
 assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'canvas'));
 

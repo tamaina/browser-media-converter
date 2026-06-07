@@ -44,7 +44,7 @@ const result = await resizeAndConvertImage({
   height: 1024,
   fit: 'contain',
   exif: 'keep',
-  resizePath: 'auto',
+  colorMetadata: 'preserve',
 });
 
 if (result.kind === 'animated') {
@@ -75,7 +75,8 @@ console.log(result.blob);
 
 ## Notes
 
-- `resizePath: 'auto'` uses raw planar resize for HDR-like formats when `VideoFrame.copyTo()` exposes a supported planar format.
+- Resizing automatically uses raw planar resize for HDR-like formats when `VideoFrame.copyTo()` exposes a supported planar format, and otherwise uses Canvas.
+- `colorMetadata: 'preserve'` is the default. Use `colorMetadata: 'canvas-sdr'` to draw through an sRGB Canvas path and mark the output frame as BT.709 SDR.
 - JPEG/WebP encoding currently goes through `OffscreenCanvas.convertToBlob()`, so strict HDR preservation is not expected there.
 - Animated WebP currently writes full-canvas frames and does not yet optimize changed rectangles.
 - AVIF EXIF writing remuxes to a minimal AVIF structure through `@browser-avif-lab/media-container`. Nonessential original AVIF boxes are not preserved.

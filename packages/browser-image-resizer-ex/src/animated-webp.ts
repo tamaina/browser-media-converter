@@ -14,6 +14,7 @@ import {
   encodeFrameWithCanvas,
   resizeFrameForColor,
   resolveTargetSize,
+  type BrowserImageColorMetadataPolicy,
 } from './frame-utils.js';
 
 export type {
@@ -29,8 +30,8 @@ export type BrowserAnimatedImageResizerOptions = {
   width?: number;
   height?: number;
   fit?: 'contain' | 'cover' | 'fill';
-  resizePath?: 'auto' | 'raw' | 'canvas';
   rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  colorMetadata?: BrowserImageColorMetadataPolicy;
   quality?: number;
   loopCount?: number;
   backgroundColor?: AnimatedWebpMuxOptions['backgroundColor'];

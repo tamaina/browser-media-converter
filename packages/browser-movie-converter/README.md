@@ -53,13 +53,12 @@ const plan = await buildMovieConversionOptions({
   },
   resize: {
     width: 1280,
-    path: 'raw',
   },
   sceneDetection: {
     sampleRate: 'all',
     threshold: 0.2,
   },
-  colorMetadata: 'copy',
+  colorMetadata: 'preserve',
 });
 
 const conversion = await Conversion.init(plan.options);
@@ -101,13 +100,11 @@ for await (const asset of convertMovieToHls({
   targetDuration: 2,
   resize: {
     width: 640,
-    path: 'auto',
   },
   variants: [
     {
       resize: {
         width: 1280,
-        path: 'auto',
       },
       video: {
         bitrate: 4_000_000,
@@ -139,8 +136,6 @@ for await (const asset of convertMovieToHls({
 - When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFrameRaw()` inside Mediabunny's `process` hook.
 - `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
 - Resize dimensions are rounded down to a multiple of `dimensionAlignment`, defaulting to `2`, which avoids odd-size 4:2:0/NV12 artifacts and encoder constraints.
-- `resize.path: 'auto'` and `'raw'` use the raw resize path and fail for unsupported frame formats. Use `resize.path: 'mediabunny'` to explicitly use Mediabunny's built-in resize.
 - Scene detection defaults to `sampleRate: 'all'`, so every decoded video sample is considered while conversion runs. Detected scene samples are marked immediately with Mediabunny `VideoSample` encode options to force key frames.
-- `colorMetadata: 'copy'` copies the source sample's `VideoColorSpace` metadata to raw-resized samples. It does not repair pixels that were already converted by another resize path.
-- `resize.path: 'mediabunny'` delegates resizing to Mediabunny, so this package does not claim color metadata preservation for that path.
+- `colorMetadata: 'preserve'` copies the source sample's `VideoColorSpace` metadata to raw-resized samples. `colorMetadata: 'canvas-sdr'` draws frames through an sRGB Canvas path and marks output samples as BT.709 SDR; it is a practical browser conversion path, not a dedicated HDR tone-mapping engine.
 - For browser tests with H.264/AAC material, use a browser build that has proprietary codec support, such as installed Chrome/Electron rather than Playwright's bundled Chromium.

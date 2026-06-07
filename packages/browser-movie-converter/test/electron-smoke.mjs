@@ -73,7 +73,6 @@ const result = await page.evaluate(async ({ port }) => {
     },
     resize: {
       width: 320,
-      path: 'raw',
     },
     sceneDetection: {
       sensitivity: 'high',
@@ -82,7 +81,7 @@ const result = await page.evaluate(async ({ port }) => {
       height: 36,
       minKeyFrameDistance: 0.5,
     },
-    colorMetadata: 'copy',
+    colorMetadata: 'preserve',
   });
   const conversion = await Conversion.init(plan.options);
   if (!conversion.isValid) {
@@ -90,6 +89,30 @@ const result = await page.evaluate(async ({ port }) => {
   }
   await conversion.execute();
   if (!target.buffer) throw new Error('Mediabunny did not produce an output buffer');
+
+  const sdrTarget = new BufferTarget();
+  const sdrOutput = new Output({
+    target: sdrTarget,
+    format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+  });
+  const sdrPlan = await buildMovieConversionOptions({
+    input: new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    }),
+    output: sdrOutput,
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
+    colorMetadata: 'canvas-sdr',
+    sceneDetection: false,
+  });
+  const sdrConversion = await Conversion.init(sdrPlan.options);
+  if (!sdrConversion.isValid) {
+    throw new Error(`Mediabunny could not create a valid SDR conversion: ${sdrConversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
+  }
+  await sdrConversion.execute();
+  if (!sdrTarget.buffer) throw new Error('Mediabunny did not produce a canvas SDR output buffer');
 
   const outputBytes = new Uint8Array(target.buffer);
   const outputInput = new Input({
@@ -109,6 +132,10 @@ const result = await page.evaluate(async ({ port }) => {
     videoColor: plan.videoColor,
     scenePlan: plan.sceneKeyFrames?.state ?? null,
     keyPacketTimestamps,
+    sdr: {
+      length: sdrTarget.buffer.byteLength,
+      forcedProcess: typeof sdrPlan.options.video === 'function',
+    },
     bytes: [...outputBytes],
   };
 }, { port });
@@ -119,6 +146,8 @@ assert.ok(result.videoColor, 'expected input video color metadata');
 assert.ok(result.scenePlan?.changes.length > 0, 'expected scene detection to find changes');
 assert.ok(result.scenePlan?.keyFrameTimestamps.length > 1, 'expected scene key frame timestamps');
 assert.ok(result.keyPacketTimestamps.length > 1, 'expected scene-forced key packets in the output');
+assert.ok(result.sdr.length > 0, 'expected a non-empty canvas SDR conversion');
+assert.equal(result.sdr.forcedProcess, true, 'expected canvas-sdr to force a video process path');
 for (const timestamp of result.scenePlan.keyFrameTimestamps) {
   assert.ok(
     result.keyPacketTimestamps.some((keyTimestamp) => Math.abs(keyTimestamp - timestamp) < 1e-6),

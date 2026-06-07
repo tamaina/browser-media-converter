@@ -15,6 +15,7 @@ import {
   resizeFrameForColor,
   resolveTargetSize,
   toUint8Array,
+  type BrowserImageColorMetadataPolicy,
   type BrowserImageResizeFit,
   type BrowserImageResizePath,
   type ImageInputInspection,
@@ -46,6 +47,7 @@ export type {
   AnimatedWebpMuxOptions,
   BrowserAnimatedImageResizerOptions,
   BrowserAnimatedImageResizerResult,
+  BrowserImageColorMetadataPolicy,
   BrowserImageResizeFit,
   BrowserImageResizePath,
   ImageInputInspection,
@@ -61,8 +63,8 @@ export type BrowserImageResizerOptions = {
   exif?: BrowserImageExifPolicy;
   animation?: BrowserImageAnimationPolicy;
   colorSpaceConversion?: ColorSpaceConversion;
-  resizePath?: 'auto' | 'raw' | 'canvas';
   rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  colorMetadata?: BrowserImageColorMetadataPolicy;
   quality?: number;
   avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
 };
@@ -121,10 +123,10 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
       width: options.width,
       height: options.height,
       fit: options.fit,
-      resizePath: options.resizePath,
       rawResizeAlgorithm: options.rawResizeAlgorithm,
       quality: options.quality,
       colorSpaceConversion: options.colorSpaceConversion,
+      colorMetadata: options.colorMetadata,
     });
   }
 

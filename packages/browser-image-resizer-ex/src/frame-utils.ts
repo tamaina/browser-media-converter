@@ -1,5 +1,6 @@
 import {
   classifyFrameColor,
+  convertFrameToCanvasSdr,
   resizeFrameRaw,
   resizeFrameWithCanvas,
   type ResizeRawOptions,
@@ -12,12 +13,14 @@ export type BrowserImageResizeFit = 'contain' | 'cover' | 'fill';
 
 export type BrowserImageResizePath = 'none' | 'raw' | 'canvas';
 
+export type BrowserImageColorMetadataPolicy = 'preserve' | 'canvas-sdr';
+
 export type FrameResizeOptions = {
   width?: number;
   height?: number;
   fit?: BrowserImageResizeFit;
-  resizePath?: 'auto' | 'raw' | 'canvas';
   rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  colorMetadata?: BrowserImageColorMetadataPolicy;
 };
 
 export type DecodeImageFrameOptions = {
@@ -129,18 +132,32 @@ export function resolveTargetSize(sourceWidth: number, sourceHeight: number, opt
 export async function resizeFrameForColor(
   frame: VideoFrame,
   size: { width: number; height: number },
-  options: Pick<FrameResizeOptions, 'resizePath' | 'rawResizeAlgorithm'>,
+  options: Pick<FrameResizeOptions, 'rawResizeAlgorithm' | 'colorMetadata'>,
 ): Promise<{ frame: VideoFrame; path: BrowserImageResizePath; warnings: string[] }> {
+  const colorMetadata = options.colorMetadata ?? 'preserve';
   if (size.width === frame.displayWidth && size.height === frame.displayHeight) {
+    if (colorMetadata === 'canvas-sdr') {
+      return { frame: convertFrameToCanvasSdr(frame).frame, path: 'canvas', warnings: [] };
+    }
     return { frame, path: 'none', warnings: [] };
   }
 
   const warnings: string[] = [];
-  const requestedPath = options.resizePath ?? 'auto';
   const color = classifyFrameColor(frame);
-  const shouldTryRaw = requestedPath === 'raw' || (requestedPath === 'auto' && color.recommendedPath === 'raw-hdr');
+  if (colorMetadata === 'canvas-sdr') {
+    const canvasResized = resizeFrameWithCanvas(frame, { ...size, colorSpace: 'srgb' });
+    try {
+      const converted = convertFrameToCanvasSdr(canvasResized.frame);
+      if (color.recommendedPath === 'raw-hdr') {
+        warnings.push('Canvas SDR conversion uses the browser Canvas sRGB path for HDR/BT.2020 content.');
+      }
+      return { frame: converted.frame, path: 'canvas', warnings };
+    } finally {
+      canvasResized.frame.close();
+    }
+  }
 
-  if (shouldTryRaw) {
+  if (color.recommendedPath === 'raw-hdr') {
     try {
       const resized = await resizeFrameRaw(frame, {
         ...size,
@@ -148,7 +165,6 @@ export async function resizeFrameForColor(
       });
       return { frame: resized.frame, path: 'raw', warnings };
     } catch (error) {
-      if (requestedPath === 'raw') throw error;
       warnings.push(`raw resize was not available and Canvas fallback was used: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

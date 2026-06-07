@@ -35,8 +35,6 @@ export type MovieHlsVariantOptions = {
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
-  /** @deprecated Use colorMetadata. This option only copied metadata and did not perform color conversion. */
-  colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
   keyFrameInterval?: number;
 };
@@ -53,8 +51,6 @@ export type MovieHlsOptions = {
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
-  /** @deprecated Use colorMetadata. This option only copied metadata and did not perform color conversion. */
-  colorSpace?: 'preserve' | 'default';
   forceTranscode?: boolean;
   keyFrameInterval?: number;
   onProgress?: (progress: number, processedTime: number) => unknown;
@@ -151,7 +147,6 @@ async function buildMovieHlsConversionOptions(input: Input, output: Output, opti
             resize: resolved.resize,
             sceneDetection: resolved.sceneDetection,
             colorMetadata: resolved.colorMetadata,
-            colorSpace: resolved.colorSpace,
             forceTranscode: resolved.forceTranscode,
           });
 
@@ -179,7 +174,6 @@ function resolveVariantOptions(options: MovieHlsOptions, variant: MovieHlsVarian
     resize: variant.resize ?? options.resize,
     sceneDetection: variant.sceneDetection ?? options.sceneDetection,
     colorMetadata: variant.colorMetadata ?? options.colorMetadata,
-    colorSpace: variant.colorSpace ?? options.colorSpace,
     forceTranscode: variant.forceTranscode ?? options.forceTranscode ?? true,
     keyFrameInterval: variant.keyFrameInterval ?? options.keyFrameInterval ?? options.targetDuration ?? 2,
   };
