@@ -39,7 +39,7 @@ console.log(resized4208.inspection);
 resized4208.frame.close();
 ```
 
-`resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
+`resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, plus 8-bit `NV12`, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. `NV12` resize preserves `NV12` when bit depth and chroma are preserved; explicit planar conversion can unpack `NV12` to `I420`. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
 
 Packed formats such as `RGBA` and `BGRA` are intentionally out of scope for this helper; use the Canvas helpers for those paths.
 
@@ -83,7 +83,7 @@ import {
 } from '@browser-mc/webcodecs-color';
 ```
 
-`describePlanarFormat(format)` returns planar bit depth, chroma layout, alpha presence, bytes per sample, and plane layout metadata for the supported planar YUV/YUVA formats. `frameFormatCanHaveAlpha(frame)` returns `true` for alpha-capable `VideoFrame` formats such as `RGBA`, `BGRA`, and planar `*A` variants. Unknown `VideoFrame.format` values are treated conservatively as alpha-capable.
+`describePlanarFormat(format)` returns planar bit depth, chroma layout, alpha presence, bytes per sample, and plane layout metadata for the supported planar YUV/YUVA formats and `NV12`. `frameFormatCanHaveAlpha(frame)` returns `true` for alpha-capable `VideoFrame` formats such as `RGBA`, `BGRA`, and planar `*A` variants. Unknown `VideoFrame.format` values are treated conservatively as alpha-capable.
 
 ## Commands
 

@@ -19,6 +19,16 @@ export function frameFormatCanHaveAlpha(frame: VideoFrame) {
 
 export function describePlanarFormat(format: string): PlanarFormatDescriptor | null {
   switch (format) {
+    case 'NV12':
+      return {
+        bytesPerSample: 1,
+        bitDepth: 8,
+        hasAlpha: false,
+        planes: [
+          { subsampleX: 1, subsampleY: 1 },
+          { subsampleX: 2, subsampleY: 2, samplesPerPixel: 2 },
+        ],
+      };
     case 'I420':
       return planarDescriptor(8, false, 2, 2);
     case 'I420P10':

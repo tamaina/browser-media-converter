@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-color
 
+## 0.1.1
+
+### Patch Changes
+
+- Restore NV12 support in `resizeFramePlanar`, including NV12-preserving resize and explicit NV12 to I420 unpacking.
+
 ## 0.1.0
 
 ### Minor Changes

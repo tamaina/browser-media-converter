@@ -240,13 +240,15 @@ export async function resizeFramePlanar(
   if (!sourceFormat) throw new Error('Cannot process a VideoFrame with unknown format');
   const sourceDescriptor = describePlanarFormat(sourceFormat);
   if (!sourceDescriptor) throw new Error(`Planar processing does not support VideoFrame format ${sourceFormat}`);
-  if (sourceDescriptor.planes.length !== 3 && sourceDescriptor.planes.length !== 4) {
-    throw new Error(`Planar processing currently supports 3-plane YUV and 4-plane YUVA formats, got ${sourceFormat}`);
+  if (sourceDescriptor.planes.length !== 2 && sourceDescriptor.planes.length !== 3 && sourceDescriptor.planes.length !== 4) {
+    throw new Error(`Planar processing currently supports 2-plane NV12, 3-plane YUV, and 4-plane YUVA formats, got ${sourceFormat}`);
   }
 
   const chromaSubsampling = options.chromaSubsampling ?? chromaSubsamplingFor(sourceDescriptor);
   const bitDepth = options.bitDepth ?? bitDepthFor(sourceDescriptor);
-  const destinationFormat = planarFormatFor(chromaSubsampling, bitDepth, sourceDescriptor.hasAlpha);
+  const destinationFormat = options.chromaSubsampling === undefined && options.bitDepth === undefined
+    ? sourceFormat
+    : planarFormatFor(chromaSubsampling, bitDepth, sourceDescriptor.hasAlpha);
   if (!destinationFormat) throw new Error(`No WebCodecs planar format is known for ${chromaSubsampling}/${bitDepth}`);
   const destinationDescriptor = describePlanarFormat(destinationFormat);
   if (!destinationDescriptor) throw new Error(`Planar conversion does not support destination format ${destinationFormat}`);
@@ -264,13 +266,14 @@ export async function resizeFramePlanar(
   ));
   const algorithm = options.algorithm ?? 'bilinear';
 
-  for (let planeIndex = 0; planeIndex < sourceDescriptor.planes.length; planeIndex++) {
-    const sourcePlane = sourceDescriptor.planes[planeIndex];
+  for (let planeIndex = 0; planeIndex < destinationDescriptor.planes.length; planeIndex++) {
+    const sourcePlaneIndex = sourcePlaneIndexForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex);
+    const sourcePlane = sourceDescriptor.planes[sourcePlaneIndex];
     const destinationPlane = destinationDescriptor.planes[planeIndex];
     convertPlane({
       source,
       destination,
-      sourceLayout: sourceLayout[planeIndex],
+      sourceLayout: sourceLayout[sourcePlaneIndex],
       destinationLayout: destinationLayout[planeIndex],
       sourceWidth: planeDimension(sourceRect.width, sourcePlane.subsampleX),
       sourceHeight: planeDimension(sourceRect.height, sourcePlane.subsampleY),
@@ -282,6 +285,7 @@ export async function resizeFramePlanar(
       destinationBitDepth: destinationDescriptor.bitDepth,
       sourceSamplesPerPixel: sourcePlane.samplesPerPixel ?? 1,
       destinationSamplesPerPixel: destinationPlane.samplesPerPixel ?? 1,
+      sourceComponent: sourceComponentForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex),
       algorithm,
     });
   }
@@ -418,10 +422,11 @@ function convertPlane(options: {
   destinationBitDepth: PlanarBitDepth;
   sourceSamplesPerPixel: 1 | 2;
   destinationSamplesPerPixel: 1 | 2;
+  sourceComponent: 0 | 1;
   algorithm: PlanarResizeAlgorithm;
 }) {
-  if (options.sourceSamplesPerPixel !== options.destinationSamplesPerPixel) {
-    throw new Error('Planar conversion does not support packed-to-planar or planar-to-packed conversion');
+  if (options.sourceSamplesPerPixel !== options.destinationSamplesPerPixel && options.destinationSamplesPerPixel !== 1) {
+    throw new Error('Planar conversion does not support planar-to-packed conversion');
   }
 
   for (let y = 0; y < options.destinationHeight; y++) {
@@ -429,6 +434,9 @@ function convertPlane(options: {
     for (let x = 0; x < options.destinationWidth; x++) {
       const sourceX = mapPixelCenter(x, options.destinationWidth, options.sourceWidth);
       for (let component = 0; component < options.destinationSamplesPerPixel; component++) {
+        const sourceComponent = options.sourceSamplesPerPixel === options.destinationSamplesPerPixel
+          ? component
+          : options.sourceComponent;
         const value = options.algorithm === 'nearest'
           ? sampleNearest({
             source: options.source,
@@ -441,7 +449,7 @@ function convertPlane(options: {
             bytesPerSample: options.sourceBytesPerSample,
             samplesPerPixel: options.sourceSamplesPerPixel,
             algorithm: options.algorithm,
-          }, sourceX, sourceY, component)
+          }, sourceX, sourceY, sourceComponent)
           : sampleBilinear({
             source: options.source,
             sourceLayout: options.sourceLayout,
@@ -453,7 +461,7 @@ function convertPlane(options: {
             bytesPerSample: options.sourceBytesPerSample,
             samplesPerPixel: options.sourceSamplesPerPixel,
             algorithm: options.algorithm,
-          }, sourceX, sourceY, component);
+          }, sourceX, sourceY, sourceComponent);
         writeSample(
           options.destination,
           options.destinationLayout,
@@ -485,22 +493,55 @@ function assertCanConvertChroma(
   sourceFormat: string,
   destinationFormat: string,
 ) {
-  if (source.planes.length !== destination.planes.length) {
+  if (!canMapPlanes(source, destination)) {
     throw new Error(`Cannot convert ${sourceFormat} to incompatible planar format ${destinationFormat}`);
   }
   if (source.hasAlpha !== destination.hasAlpha) {
     throw new Error(`Cannot add or remove alpha while converting ${sourceFormat} to ${destinationFormat}`);
   }
-  for (let index = 0; index < source.planes.length; index++) {
-    const sourcePlane = source.planes[index];
+  for (let index = 0; index < destination.planes.length; index++) {
+    const sourcePlane = source.planes[sourcePlaneIndexForDestinationPlane(source, destination, index)];
     const destinationPlane = destination.planes[index];
-    if ((sourcePlane.samplesPerPixel ?? 1) !== (destinationPlane.samplesPerPixel ?? 1)) {
+    if ((sourcePlane.samplesPerPixel ?? 1) !== (destinationPlane.samplesPerPixel ?? 1) && (destinationPlane.samplesPerPixel ?? 1) !== 1) {
       throw new Error(`Cannot convert ${sourceFormat} to incompatible planar format ${destinationFormat}`);
     }
     if (destinationPlane.subsampleX < sourcePlane.subsampleX || destinationPlane.subsampleY < sourcePlane.subsampleY) {
       throw new Error(`Planar conversion can downsample chroma but cannot upsample ${sourceFormat} to ${destinationFormat}`);
     }
   }
+}
+
+function canMapPlanes(source: PlanarFormatDescriptor, destination: PlanarFormatDescriptor) {
+  if (source.planes.length === destination.planes.length) return true;
+  return source.planes.length === 2
+    && destination.planes.length === 3
+    && (source.planes[1].samplesPerPixel ?? 1) === 2
+    && (destination.planes[1].samplesPerPixel ?? 1) === 1
+    && (destination.planes[2].samplesPerPixel ?? 1) === 1;
+}
+
+function sourcePlaneIndexForDestinationPlane(
+  source: PlanarFormatDescriptor,
+  destination: PlanarFormatDescriptor,
+  destinationPlaneIndex: number,
+) {
+  if (source.planes.length === destination.planes.length) return destinationPlaneIndex;
+  if (source.planes.length === 2 && destination.planes.length === 3) {
+    return destinationPlaneIndex === 0 ? 0 : 1;
+  }
+  throw new Error('Cannot map incompatible planar planes');
+}
+
+function sourceComponentForDestinationPlane(
+  source: PlanarFormatDescriptor,
+  destination: PlanarFormatDescriptor,
+  destinationPlaneIndex: number,
+): 0 | 1 {
+  if (source.planes.length === destination.planes.length) return 0;
+  if (source.planes.length === 2 && destination.planes.length === 3) {
+    return destinationPlaneIndex === 2 ? 1 : 0;
+  }
+  throw new Error('Cannot map incompatible planar plane components');
 }
 
 function clamp(value: number, min: number, max: number) {

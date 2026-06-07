@@ -105,6 +105,14 @@ const result = await page.evaluate(async ({ port }) => {
     chromaSubsampling: '420',
     expectedFormat: 'I420',
   });
+  const syntheticNv12Resize = await probeSyntheticPlanar('NV12', {
+    expectedFormat: 'NV12',
+  });
+  const syntheticNv12ToI420 = await probeSyntheticPlanar('NV12', {
+    bitDepth: 8,
+    chromaSubsampling: '420',
+    expectedFormat: 'I420',
+  });
   const syntheticAlpha = await probeSyntheticPlanar('I444AP12', {
     bitDepth: 8,
     chromaSubsampling: '420',
@@ -151,6 +159,8 @@ const result = await page.evaluate(async ({ port }) => {
     planar420Inspection,
     resizedPlanar4208Inspection,
     syntheticP12,
+    syntheticNv12Resize,
+    syntheticNv12ToI420,
     syntheticAlpha,
     canvasSdrInspection,
   };
@@ -174,6 +184,7 @@ const result = await page.evaluate(async ({ port }) => {
         chromaSubsampling: options.chromaSubsampling,
       });
       const convertedInspection = converted.inspection;
+      const convertedSamples = await sampleSyntheticFrame(converted.frame);
       converted.frame.close();
       return {
         supported: true,
@@ -185,10 +196,29 @@ const result = await page.evaluate(async ({ port }) => {
           displayHeight: convertedInspection.displayHeight,
           colorSpace: convertedInspection.colorSpace,
         },
+        samples: convertedSamples,
       };
     } finally {
       synthetic.close();
     }
+  }
+
+  async function sampleSyntheticFrame(frame) {
+    const descriptor = syntheticDescriptor(frame.format);
+    const allocation = frame.allocationSize();
+    const data = new Uint8Array(allocation);
+    const layout = await frame.copyTo(data);
+    return descriptor.planes.map((plane, index) => {
+      const bytesPerSample = descriptor.bytesPerSample;
+      const samplesPerPixel = plane.samplesPerPixel ?? 1;
+      const offset = layout[index].offset;
+      const values = [];
+      for (let component = 0; component < samplesPerPixel; component++) {
+        const componentOffset = offset + component * bytesPerSample;
+        values.push(bytesPerSample === 1 ? data[componentOffset] : data[componentOffset] | (data[componentOffset + 1] << 8));
+      }
+      return values;
+    });
   }
 
   function makeSyntheticPlanarFrame(format, width, height) {
@@ -199,17 +229,25 @@ const result = await page.evaluate(async ({ port }) => {
     for (const plane of descriptor.planes) {
       const planeWidth = Math.ceil(width / plane.subsampleX);
       const planeHeight = Math.ceil(height / plane.subsampleY);
-      const stride = planeWidth * descriptor.bytesPerSample;
+      const stride = planeWidth * (plane.samplesPerPixel ?? 1) * descriptor.bytesPerSample;
       layout.push({ offset, stride });
       const byteLength = stride * planeHeight;
-      planeBytes.push({ offset, byteLength, value: plane.value });
+      planeBytes.push({
+        offset,
+        byteLength,
+        samplesPerPixel: plane.samplesPerPixel ?? 1,
+        value: plane.value,
+      });
       offset += byteLength;
     }
     const data = new Uint8Array(offset);
     for (const plane of planeBytes) {
       for (let index = 0; index < plane.byteLength; index += descriptor.bytesPerSample) {
-        data[plane.offset + index] = plane.value & 0xff;
-        if (descriptor.bytesPerSample === 2) data[plane.offset + index + 1] = plane.value >> 8;
+        const sampleIndex = Math.floor(index / descriptor.bytesPerSample);
+        const component = sampleIndex % plane.samplesPerPixel;
+        const value = Array.isArray(plane.value) ? plane.value[component] : plane.value;
+        data[plane.offset + index] = value & 0xff;
+        if (descriptor.bytesPerSample === 2) data[plane.offset + index + 1] = value >> 8;
       }
     }
     return new VideoFrame(data, {
@@ -227,6 +265,15 @@ const result = await page.evaluate(async ({ port }) => {
   function syntheticDescriptor(format) {
     const bitDepth = format.includes('P12') ? 12 : format.includes('P10') ? 10 : 8;
     const bytesPerSample = bitDepth === 8 ? 1 : 2;
+    if (format === 'NV12') {
+      return {
+        bytesPerSample,
+        planes: [
+          { subsampleX: 1, subsampleY: 1, value: 115 },
+          { subsampleX: 2, subsampleY: 2, samplesPerPixel: 2, value: [90, 166] },
+        ],
+      };
+    }
     const alpha = format.includes('A');
     const chroma = format.startsWith('I420') ? { subsampleX: 2, subsampleY: 2 }
       : format.startsWith('I422') ? { subsampleX: 2, subsampleY: 1 }
@@ -282,6 +329,18 @@ if (result.syntheticP12.supported) {
   assert.equal(result.syntheticP12.converted.format, result.syntheticP12.expectedFormat);
   assert.equal(result.syntheticP12.converted.displayWidth, 8);
   assert.equal(result.syntheticP12.converted.displayHeight, 8);
+}
+if (result.syntheticNv12Resize.supported) {
+  assert.equal(result.syntheticNv12Resize.converted.format, result.syntheticNv12Resize.expectedFormat);
+  assert.equal(result.syntheticNv12Resize.converted.displayWidth, 8);
+  assert.equal(result.syntheticNv12Resize.converted.displayHeight, 8);
+  assert.deepEqual(result.syntheticNv12Resize.samples, [[115], [90, 166]]);
+}
+if (result.syntheticNv12ToI420.supported) {
+  assert.equal(result.syntheticNv12ToI420.converted.format, result.syntheticNv12ToI420.expectedFormat);
+  assert.equal(result.syntheticNv12ToI420.converted.displayWidth, 8);
+  assert.equal(result.syntheticNv12ToI420.converted.displayHeight, 8);
+  assert.deepEqual(result.syntheticNv12ToI420.samples, [[115], [90], [166]]);
 }
 if (result.syntheticAlpha.supported) {
   assert.equal(result.syntheticAlpha.converted.format, result.syntheticAlpha.expectedFormat);
