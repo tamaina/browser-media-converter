@@ -79,6 +79,10 @@ const result = await page.evaluate(async ({ port }) => {
     },
     targetDuration: 2,
     keyFrameInterval: 3,
+    quantizer: {
+      keyFrame: 30,
+      deltaFrame: 38,
+    },
     resize: {
       width: 160,
     },
@@ -88,6 +92,10 @@ const result = await page.evaluate(async ({ port }) => {
           width: 320,
         },
         keyFrameInterval: 2,
+        quantizer: {
+          keyFrame: 28,
+          deltaFrame: 36,
+        },
         colorMetadata: 'canvas-sdr',
       },
       {},

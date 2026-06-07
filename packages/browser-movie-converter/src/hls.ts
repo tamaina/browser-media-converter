@@ -20,6 +20,7 @@ import {
   getSelectedAudioTracks,
   getSelectedVideoTracks,
   type BrowserMovieColorMetadataPolicy,
+  type BrowserMovieQuantizerOptions,
   type BrowserMovieResizeOptions,
   type SceneDetectionOptions,
 } from './conversion-options';
@@ -34,6 +35,7 @@ export type MovieHlsVariantOptions = {
   video?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight' | 'group'>;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
+  quantizer?: BrowserMovieQuantizerOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
   forceTranscode?: boolean;
   keyFrameInterval?: number;
@@ -50,6 +52,7 @@ export type MovieHlsOptions = {
   audio?: ConversionAudioOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
+  quantizer?: BrowserMovieQuantizerOptions;
   colorMetadata?: BrowserMovieColorMetadataPolicy;
   forceTranscode?: boolean;
   keyFrameInterval?: number;
@@ -146,6 +149,7 @@ async function buildMovieHlsConversionOptions(input: Input, output: Output, opti
             },
             resize: resolved.resize,
             sceneDetection: resolved.sceneDetection,
+            quantizer: resolved.quantizer,
             colorMetadata: resolved.colorMetadata,
             forceTranscode: resolved.forceTranscode,
           });
@@ -173,6 +177,7 @@ function resolveVariantOptions(options: MovieHlsOptions, variant: MovieHlsVarian
     video: variant.video,
     resize: variant.resize ?? options.resize,
     sceneDetection: variant.sceneDetection ?? options.sceneDetection,
+    quantizer: variant.quantizer ?? options.quantizer,
     colorMetadata: variant.colorMetadata ?? options.colorMetadata,
     forceTranscode: variant.forceTranscode ?? options.forceTranscode ?? true,
     keyFrameInterval: variant.keyFrameInterval ?? options.keyFrameInterval ?? options.targetDuration ?? 2,

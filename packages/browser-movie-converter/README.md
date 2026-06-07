@@ -51,6 +51,10 @@ const plan = await buildMovieConversionOptions({
     codec: 'avc',
     bitrate: { quality: 0.75 },
   },
+  quantizer: {
+    keyFrame: 28,
+    deltaFrame: 36,
+  },
   resize: {
     width: 1280,
   },
@@ -134,7 +138,9 @@ for await (const asset of convertMovieToHls({
 
 - This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle.
 - When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFrameRaw()` inside Mediabunny's `process` hook.
-- `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
+- `quantizer` accepts either a single integer or `{ keyFrame, deltaFrame }`; lower values preserve more quality, and higher values compress more aggressively. Values must be integers from 0 to 63.
+- When split `quantizer` values are used with `keyFrameInterval`, the interval is handled by this package so interval key frames can receive the `keyFrame` quantizer.
+- `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, quantizer, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
 - Resize dimensions are rounded down to a multiple of `dimensionAlignment`, defaulting to `2`, which avoids odd-size 4:2:0/NV12 artifacts and encoder constraints.
 - Scene detection defaults to `sampleRate: 'all'`, so every decoded video sample is considered while conversion runs. Detected scene samples are marked immediately with Mediabunny `VideoSample` encode options to force key frames.
 - `colorMetadata: 'preserve'` copies the source sample's `VideoColorSpace` metadata to raw-resized samples. `colorMetadata: 'canvas-sdr'` draws frames through an sRGB Canvas path and marks output samples as BT.709 SDR; it is a practical browser conversion path, not a dedicated HDR tone-mapping engine.

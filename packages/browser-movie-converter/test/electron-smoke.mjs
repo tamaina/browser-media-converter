@@ -88,6 +88,13 @@ const result = await page.evaluate(async ({ port }) => {
     resize: {
       width: 320,
     },
+    video: {
+      keyFrameInterval: 1,
+    },
+    quantizer: {
+      keyFrame: 28,
+      deltaFrame: 36,
+    },
     sceneDetection: {
       sensitivity: 'high',
       sampleRate: 'all',
@@ -128,6 +135,106 @@ const result = await page.evaluate(async ({ port }) => {
   await sdrConversion.execute();
   if (!sdrTarget.buffer) throw new Error('Mediabunny did not produce a canvas SDR output buffer');
 
+  const intervalInput = new Input({
+    source: new BufferSource(input),
+    formats: [new QuickTimeInputFormat()],
+  });
+  const intervalOutput = new Output({
+    target: new BufferTarget(),
+    format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+  });
+  const intervalPlan = await buildMovieConversionOptions({
+    input: intervalInput,
+    output: intervalOutput,
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
+    video: {
+      keyFrameInterval: 2,
+    },
+    sceneDetection: false,
+    quantizer: {
+      keyFrame: 28,
+      deltaFrame: 36,
+    },
+  });
+  const intervalTrack = await intervalInput.getPrimaryVideoTrack({
+    filter: (track) => track.number === 1,
+  });
+  if (!intervalTrack) throw new Error('expected interval test video track');
+  const intervalVideoOptions = await intervalPlan.options.video(intervalTrack);
+
+  const singleQuantizerInput = new Input({
+    source: new BufferSource(input),
+    formats: [new QuickTimeInputFormat()],
+  });
+  const singleQuantizerOutput = new Output({
+    target: new BufferTarget(),
+    format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+  });
+  const singleQuantizerPlan = await buildMovieConversionOptions({
+    input: singleQuantizerInput,
+    output: singleQuantizerOutput,
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
+    video: {
+      keyFrameInterval: 2,
+    },
+    sceneDetection: false,
+    quantizer: 32,
+  });
+  const singleQuantizerTrack = await singleQuantizerInput.getPrimaryVideoTrack({
+    filter: (track) => track.number === 1,
+  });
+  if (!singleQuantizerTrack) throw new Error('expected single quantizer test video track');
+  const singleQuantizerVideoOptions = await singleQuantizerPlan.options.video(singleQuantizerTrack);
+
+  const invalidQuantizerErrors = [];
+  for (const invalidQuantizer of [64, -1, 1.5, Number.NaN]) {
+    try {
+      await buildMovieConversionOptions({
+        input: new Input({
+          source: new BufferSource(input),
+          formats: [new QuickTimeInputFormat()],
+        }),
+        output: new Output({
+          target: new BufferTarget(),
+          format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+        }),
+        videoTrackQuery: {
+          filter: (track) => track.number === 1,
+        },
+        sceneDetection: false,
+        quantizer: invalidQuantizer,
+      });
+    } catch (error) {
+      invalidQuantizerErrors.push(error instanceof RangeError ? error.message : String(error));
+    }
+  }
+  try {
+    await buildMovieConversionOptions({
+      input: new Input({
+        source: new BufferSource(input),
+        formats: [new QuickTimeInputFormat()],
+      }),
+      output: new Output({
+        target: new BufferTarget(),
+        format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+      }),
+      videoTrackQuery: {
+        filter: (track) => track.number === 1,
+      },
+      sceneDetection: false,
+      quantizer: {
+        keyFrame: 64,
+        deltaFrame: 32,
+      },
+    });
+  } catch (error) {
+    invalidQuantizerErrors.push(error instanceof RangeError ? error.message : String(error));
+  }
+
   const outputBytes = new Uint8Array(target.buffer);
   const outputInput = new Input({
     source: new BlobSource(new Blob([outputBytes], { type: 'video/mp4' })),
@@ -150,6 +257,15 @@ const result = await page.evaluate(async ({ port }) => {
       length: sdrTarget.buffer.byteLength,
       forcedProcess: typeof sdrPlan.options.video === 'function',
     },
+    intervalVideoOptions: {
+      hasProcess: typeof intervalVideoOptions.process === 'function',
+      keyFrameInterval: intervalVideoOptions.keyFrameInterval ?? null,
+    },
+    singleQuantizerVideoOptions: {
+      hasProcess: typeof singleQuantizerVideoOptions.process === 'function',
+      keyFrameInterval: singleQuantizerVideoOptions.keyFrameInterval ?? null,
+    },
+    invalidQuantizerErrors,
     bytes: [...outputBytes],
   };
 }, { port });
@@ -162,6 +278,23 @@ assert.ok(result.scenePlan?.keyFrameTimestamps.length > 1, 'expected scene key f
 assert.ok(result.keyPacketTimestamps.length > 1, 'expected scene-forced key packets in the output');
 assert.ok(result.sdr.length > 0, 'expected a non-empty canvas SDR conversion');
 assert.equal(result.sdr.forcedProcess, true, 'expected canvas-sdr to force a video process path');
+assert.deepEqual(
+  result.intervalVideoOptions,
+  { hasProcess: true, keyFrameInterval: null },
+  'expected split quantizer to consume keyFrameInterval internally',
+);
+assert.deepEqual(
+  result.singleQuantizerVideoOptions,
+  { hasProcess: true, keyFrameInterval: 2 },
+  'expected single quantizer to preserve Mediabunny keyFrameInterval',
+);
+assert.deepEqual(result.invalidQuantizerErrors, [
+  'quantizer must be an integer from 0 to 63.',
+  'quantizer must be an integer from 0 to 63.',
+  'quantizer must be an integer from 0 to 63.',
+  'quantizer must be an integer from 0 to 63.',
+  'quantizer.keyFrame must be an integer from 0 to 63.',
+]);
 for (const timestamp of result.scenePlan.keyFrameTimestamps) {
   assert.ok(
     result.keyPacketTimestamps.some((keyTimestamp) => Math.abs(keyTimestamp - timestamp) < 1e-6),

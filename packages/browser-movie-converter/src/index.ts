@@ -10,6 +10,7 @@ import {
   inspectMovie,
   inspectVideoTrackColor,
   type BrowserMovieColorMetadataPolicy,
+  type BrowserMovieQuantizerOptions,
   type BrowserMovieResizeFit,
   type BrowserMovieResizeOptions,
   type BrowserMovieResizePath,
@@ -20,6 +21,7 @@ import {
 
 export type {
   BrowserMovieColorMetadataPolicy,
+  BrowserMovieQuantizerOptions,
   BrowserMovieResizeFit,
   BrowserMovieResizeOptions,
   BrowserMovieResizePath,
