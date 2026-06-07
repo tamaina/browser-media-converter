@@ -16,9 +16,11 @@ pnpm add @browser-mc/browser-image-resizer-ex
 ## Convert to AVIF
 
 ```ts
-import { resizeImageToAvif } from '@browser-mc/browser-image-resizer-ex';
+import { resizeAndConvertImage } from '@browser-mc/browser-image-resizer-ex';
 
-const result = await resizeImageToAvif(file, {
+const result = await resizeAndConvertImage({
+  input: file,
+  outputMime: 'image/avif',
   width: 1600,
   exif: 'drop-gps',
   quality: 0.82,

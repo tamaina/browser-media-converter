@@ -175,12 +175,6 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
   }
 }
 
-export async function resizeImageToAvif(input: Blob | ArrayBuffer | Uint8Array, options: Omit<BrowserImageResizerOptions, 'input' | 'outputMime'> = {}) {
-  const result = await resizeAndConvertImage({ ...options, input, outputMime: 'image/avif' });
-  if (result.kind !== 'still') throw new Error('resizeImageToAvif does not support animated output');
-  return result;
-}
-
 export async function resizeAnimatedImageToWebp(
   input: Blob | ArrayBuffer | Uint8Array,
   options: Omit<BrowserAnimatedImageResizerOptions, 'input'> = {},
