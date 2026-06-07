@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches:
-      - stage
+      - main
 
 permissions:
   contents: write
@@ -17,7 +17,6 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
-    environment: stage
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,11 +43,5 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Create Release Pull Request Or Publish
-        uses: changesets/action@v1
-        with:
-          version: pnpm version-packages
-          publish: pnpm release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+      - name: Stage browser-image-resizer-ex
+        run: npm stage publish ./packages/browser-image-resizer-ex --access public
