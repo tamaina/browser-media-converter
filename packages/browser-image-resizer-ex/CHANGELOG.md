@@ -1,5 +1,13 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies
+  - @browser-mc/media-container@0.1.0
+  - @browser-mc/webcodecs-avif@0.1.0
+
 ## 0.2.0
 
 ### Minor Changes
