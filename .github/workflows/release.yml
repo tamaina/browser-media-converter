@@ -43,5 +43,8 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Pack browser-image-resizer-ex
+        run: pnpm --filter @browser-mc/browser-image-resizer-ex pack --pack-destination .npm-pack
+
       - name: Stage browser-image-resizer-ex
-        run: npm stage publish ./packages/browser-image-resizer-ex --access public
+        run: npm stage publish .npm-pack/*.tgz --access public
