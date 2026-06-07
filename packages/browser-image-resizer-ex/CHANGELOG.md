@@ -1,5 +1,13 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.5.1
+
+### Patch Changes
+
+- Update the published `@browser-mc/webcodecs-color` dependency to `0.1.1`.
+- Updated dependencies
+  - @browser-mc/webcodecs-avif@0.4.1
+
 ## 0.5.0
 
 ### Minor Changes

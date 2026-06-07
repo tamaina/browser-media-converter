@@ -12,13 +12,14 @@ Use this workflow when preparing and publishing package changes from this reposi
 - Releases are triggered by pushing to `main`; do not publish packages from a local shell.
 - Keep the working tree reviewable before release. Check `git status --short` and inspect all changed files.
 - Update the affected package changelog before pushing a release commit.
+- When bumping a lower-level package, include any higher-level packages that depend on it in the bump set when their published dependency ranges or user-facing behavior need to move with the lower-level release.
 - Run the same local checks that the release workflow runs when practical: `pnpm build` and `pnpm test`.
 - Push the release commit to `main`, then monitor the `Release` GitHub Actions workflow.
 
 ## Steps
 
 1. Inspect changes with `git status --short` and `git diff`.
-2. Confirm the affected package version and changelog entry.
+2. Confirm the affected package versions and changelog entries, including higher-level dependents when a lower-level package is bumped.
 3. Run `pnpm build`.
 4. Run `pnpm test`.
 5. Commit the code, changelog, and release instructions together.

@@ -1,5 +1,11 @@
 # @browser-mc/browser-movie-converter
 
+## 0.1.1
+
+### Patch Changes
+
+- Update the published `@browser-mc/webcodecs-color` dependency to `0.1.1`.
+
 ## 0.1.0
 
 ### Minor Changes

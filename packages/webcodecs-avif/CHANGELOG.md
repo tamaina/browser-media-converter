@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-avif
 
+## 0.4.1
+
+### Patch Changes
+
+- Update the published `@browser-mc/webcodecs-color` dependency to `0.1.1`.
+
 ## 0.4.0
 
 ### Minor Changes
