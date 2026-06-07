@@ -196,9 +196,7 @@ export function resizeFrameWithCanvas(frame: VideoFrame, options: ResizeCanvasOp
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = options.imageSmoothingQuality ?? 'high';
   context.drawImage(frame, 0, 0, options.width, options.height);
-  const init: VideoFrameInit = { timestamp: frame.timestamp };
-  if (frame.duration !== null) init.duration = frame.duration;
-  const resized = new VideoFrame(canvas, init);
+  const resized = makeFrameFromCanvasPixels(canvas, context, frame, colorSpace);
   return {
     frame: resized,
     inspection: inspectFrame(resized),
@@ -207,29 +205,39 @@ export function resizeFrameWithCanvas(frame: VideoFrame, options: ResizeCanvasOp
 }
 
 export function convertFrameToCanvasSdr(frame: VideoFrame): CanvasSdrResult {
+  const colorSpace = 'srgb';
   const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
-  const context = canvas.getContext('2d', { colorSpace: 'srgb' });
+  const context = canvas.getContext('2d', { colorSpace });
   if (!context) throw new Error('Could not create 2D canvas context');
   context.drawImage(frame, 0, 0);
 
-  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const converted = makeFrameFromCanvasPixels(canvas, context, frame, colorSpace);
+  return {
+    frame: converted,
+    inspection: inspectFrame(converted),
+    colorSpace,
+  };
+}
+
+function makeFrameFromCanvasPixels(
+  canvas: OffscreenCanvas,
+  context: OffscreenCanvasRenderingContext2D,
+  source: VideoFrame,
+  colorSpace: PredefinedColorSpace,
+): VideoFrame {
+  const image = context.getImageData(0, 0, canvas.width, canvas.height, { colorSpace });
   const init: VideoFrameBufferInit = {
     format: 'RGBA',
     codedWidth: canvas.width,
     codedHeight: canvas.height,
     displayWidth: canvas.width,
     displayHeight: canvas.height,
-    timestamp: frame.timestamp,
+    timestamp: source.timestamp,
     layout: [{ offset: 0, stride: canvas.width * 4 }],
-    colorSpace: sdrVideoColorSpaceInit(),
+    colorSpace: canvasVideoColorSpaceInit(colorSpace),
   };
-  if (frame.duration !== null) init.duration = frame.duration;
-  const converted = new VideoFrame(image.data, init);
-  return {
-    frame: converted,
-    inspection: inspectFrame(converted),
-    colorSpace: 'srgb',
-  };
+  if (source.duration !== null) init.duration = source.duration;
+  return new VideoFrame(image.data, init);
 }
 
 export async function resizeFramePlanar(
@@ -691,10 +699,22 @@ function videoColorSpaceInit(frame: VideoFrame): VideoColorSpaceInit {
 }
 
 export function sdrVideoColorSpaceInit(): VideoColorSpaceInit {
+  return canvasVideoColorSpaceInit('srgb');
+}
+
+export function canvasVideoColorSpaceInit(colorSpace: PredefinedColorSpace): VideoColorSpaceInit {
+  if (colorSpace === 'display-p3') {
+    return {
+      primaries: 'smpte432' as VideoColorPrimaries,
+      transfer: 'iec61966-2-1',
+      matrix: 'rgb',
+      fullRange: true,
+    };
+  }
   return {
     primaries: 'bt709',
-    transfer: 'bt709',
-    matrix: 'bt709',
-    fullRange: false,
+    transfer: 'iec61966-2-1',
+    matrix: 'rgb',
+    fullRange: true,
   };
 }

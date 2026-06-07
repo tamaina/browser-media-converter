@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-color
 
+## 0.2.1
+
+### Patch Changes
+
+- Mark canvas-created RGBA frames as RGB/full-range sRGB or Display P3 color instead of limited-range BT.709 video color.
+
 ## 0.2.0
 
 ### Minor Changes

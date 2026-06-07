@@ -53,6 +53,7 @@ const result = await page.evaluate(async ({ port }) => {
     copyFrameToRgba,
     decodeImageToVideoFrame,
     inspectFrame,
+    resizeFrameWithCanvas,
     resizeFramePlanar,
   } = await import(`http://127.0.0.1:${port}/color.js`);
 
@@ -62,6 +63,13 @@ const result = await page.evaluate(async ({ port }) => {
   const canvasSdr = convertFrameToCanvasSdr(frame);
   const canvasSdrInspection = canvasSdr.inspection;
   canvasSdr.frame.close();
+  const canvasP3Resize = resizeFrameWithCanvas(frame, {
+    width: Math.max(1, Math.floor(frame.displayWidth / 2)),
+    height: Math.max(1, Math.floor(frame.displayHeight / 2)),
+    colorSpace: 'display-p3',
+  });
+  const canvasP3ResizeInspection = canvasP3Resize.inspection;
+  canvasP3Resize.frame.close();
 
   const p3Copy = await copyFrameToRgba(frame, { colorSpace: 'display-p3' }).then((copy) => ({
     byteLength: copy.data.byteLength,
@@ -163,6 +171,7 @@ const result = await page.evaluate(async ({ port }) => {
     syntheticNv12ToI420,
     syntheticAlpha,
     canvasSdrInspection,
+    canvasP3ResizeInspection,
   };
 
   async function probeSyntheticPlanar(format, options) {
@@ -349,9 +358,14 @@ if (result.syntheticAlpha.supported) {
 }
 assert.equal(result.canvasSdrInspection.format, 'RGBA');
 assert.equal(result.canvasSdrInspection.colorSpace.primaries, 'bt709');
-assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'bt709');
-assert.equal(result.canvasSdrInspection.colorSpace.matrix, 'bt709');
-assert.equal(result.canvasSdrInspection.colorSpace.fullRange, false);
+assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');
+assert.equal(result.canvasSdrInspection.colorSpace.matrix, 'rgb');
+assert.equal(result.canvasSdrInspection.colorSpace.fullRange, true);
+assert.equal(result.canvasP3ResizeInspection.format, 'RGBA');
+assert.equal(result.canvasP3ResizeInspection.colorSpace.primaries, 'smpte432');
+assert.equal(result.canvasP3ResizeInspection.colorSpace.transfer, 'iec61966-2-1');
+assert.equal(result.canvasP3ResizeInspection.colorSpace.matrix, 'rgb');
+assert.equal(result.canvasP3ResizeInspection.colorSpace.fullRange, true);
 
 console.log(JSON.stringify(result, null, 2));
 

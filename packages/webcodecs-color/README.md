@@ -63,7 +63,7 @@ const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 })
 const canvasSdr = convertFrameToCanvasSdr(frame);
 ```
 
-`convertFrameToCanvasSdr` draws through an sRGB `OffscreenCanvas` path and returns an RGBA `VideoFrame` marked as BT.709 SDR. It is a practical browser conversion helper, not a dedicated HDR tone-mapping engine.
+`convertFrameToCanvasSdr` draws through an sRGB `OffscreenCanvas` path and returns an RGBA `VideoFrame` marked as RGB/full-range sRGB. It is a practical browser conversion helper, not a dedicated HDR tone-mapping engine.
 
 ## Supported Planar Formats
 
