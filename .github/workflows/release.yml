@@ -44,9 +44,6 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Publish browser-image-resizer-ex
-        run: npm publish ./packages/browser-image-resizer-ex --access public --provenance
-
       - name: Create Release Pull Request Or Publish
         uses: changesets/action@v1
         with:
