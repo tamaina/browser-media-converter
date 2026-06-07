@@ -1,4 +1,4 @@
-import { ascii, concat, readAscii, u16le, u24le, u32le } from '@browser-avif-lab/binary';
+import { ascii, concat, readAscii, u16le, u24le, u32le } from '@browser-mc/binary';
 import { makeRiffChunk, riffChunks } from './riff.js';
 
 export type AnimatedWebpFrame = {

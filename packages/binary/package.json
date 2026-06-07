@@ -1,5 +1,5 @@
 {
-  "name": "@browser-avif-lab/binary",
+  "name": "@browser-mc/binary",
   "version": "0.0.0",
   "type": "module",
   "main": "./dist/index.js",

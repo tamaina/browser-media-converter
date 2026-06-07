@@ -49,28 +49,28 @@ importers:
 
   packages/browser-image-resizer-ex:
     dependencies:
-      '@browser-avif-lab/binary':
+      '@browser-mc/binary':
         specifier: workspace:^
         version: link:../binary
-      '@browser-avif-lab/exif-transplant':
+      '@browser-mc/exif-transplant':
         specifier: workspace:^
         version: link:../exif-transplant
-      '@browser-avif-lab/media-container':
+      '@browser-mc/media-container':
         specifier: workspace:^
         version: link:../media-container
-      '@browser-avif-lab/webcodecs-avif':
+      '@browser-mc/webcodecs-avif':
         specifier: workspace:^
         version: link:../webcodecs-avif
-      '@browser-avif-lab/webcodecs-color':
+      '@browser-mc/webcodecs-color':
         specifier: workspace:^
         version: link:../webcodecs-color
 
   packages/browser-movie-converter:
     dependencies:
-      '@browser-avif-lab/mediabunny-scene-keyframes':
+      '@browser-mc/mediabunny-scene-keyframes':
         specifier: workspace:^
         version: link:../mediabunny-scene-keyframes
-      '@browser-avif-lab/webcodecs-color':
+      '@browser-mc/webcodecs-color':
         specifier: workspace:^
         version: link:../webcodecs-color
       mediabunny:
@@ -79,16 +79,16 @@ importers:
 
   packages/exif-transplant:
     dependencies:
-      '@browser-avif-lab/binary':
+      '@browser-mc/binary':
         specifier: workspace:^
         version: link:../binary
-      '@browser-avif-lab/media-container':
+      '@browser-mc/media-container':
         specifier: workspace:^
         version: link:../media-container
 
   packages/media-container:
     dependencies:
-      '@browser-avif-lab/binary':
+      '@browser-mc/binary':
         specifier: workspace:^
         version: link:../binary
 
@@ -100,16 +100,16 @@ importers:
 
   packages/webcodecs-avif:
     dependencies:
-      '@browser-avif-lab/binary':
+      '@browser-mc/binary':
         specifier: workspace:^
         version: link:../binary
-      '@browser-avif-lab/media-container':
+      '@browser-mc/media-container':
         specifier: workspace:^
         version: link:../media-container
 
   packages/webcodecs-color:
     dependencies:
-      '@browser-avif-lab/binary':
+      '@browser-mc/binary':
         specifier: workspace:^
         version: link:../binary
 

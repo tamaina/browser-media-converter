@@ -1,32 +1,32 @@
-# browser-avif-lab
+# browser-mc
 
 WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 
 ## Workspaces
 
-- `@browser-avif-lab/webcodecs-avif`: encodes a still image with `VideoEncoder` AV1 and muxes a minimal AVIF ISOBMFF file, including optional metadata items.
-- `@browser-avif-lab/webcodecs-color`: inspects `VideoFrame` color spaces and experiments with raw-copy and self-managed planar resize paths for SDR, wide-gamut, and HDR-like frames.
-- `@browser-avif-lab/binary`: shared byte, integer, and ASCII helpers.
-- `@browser-avif-lab/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
-- `@browser-avif-lab/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
-- `@browser-avif-lab/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
-- `@browser-avif-lab/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware raw resize.
-- `@browser-avif-lab/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware raw resize, scene-keyframe forcing, and stream-only HLS output.
+- `@browser-mc/webcodecs-avif`: encodes a still image with `VideoEncoder` AV1 and muxes a minimal AVIF ISOBMFF file, including optional metadata items.
+- `@browser-mc/webcodecs-color`: inspects `VideoFrame` color spaces and experiments with raw-copy and self-managed planar resize paths for SDR, wide-gamut, and HDR-like frames.
+- `@browser-mc/binary`: shared byte, integer, and ASCII helpers.
+- `@browser-mc/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
+- `@browser-mc/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
+- `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
+- `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware raw resize.
+- `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware raw resize, scene-keyframe forcing, and stream-only HLS output.
 
 ## Commands
 
 ```sh
 pnpm build
 pnpm typecheck
-pnpm --filter @browser-avif-lab/media-container build
-pnpm --filter @browser-avif-lab/exif-transplant test
-pnpm --filter @browser-avif-lab/webcodecs-color test:electron
+pnpm --filter @browser-mc/media-container build
+pnpm --filter @browser-mc/exif-transplant test
+pnpm --filter @browser-mc/webcodecs-color test:electron
 node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
-pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
-pnpm --filter @browser-avif-lab/browser-image-resizer-ex test:electron
-pnpm --filter @browser-avif-lab/browser-movie-converter build
-pnpm --filter @browser-avif-lab/browser-movie-converter test:electron
-pnpm --filter @browser-avif-lab/browser-movie-converter test:hls:electron
+pnpm --filter @browser-mc/mediabunny-scene-keyframes test:electron
+pnpm --filter @browser-mc/browser-image-resizer-ex test:electron
+pnpm --filter @browser-mc/browser-movie-converter build
+pnpm --filter @browser-mc/browser-movie-converter test:electron
+pnpm --filter @browser-mc/browser-movie-converter test:hls:electron
 ```
 
 `P2180334.jpg` is used by the AVIF smoke script when present; otherwise it falls back to `fujioka.jpg`.
@@ -61,7 +61,7 @@ Verified outputs:
 
 ## HDR and wide-gamut resize
 
-`@browser-avif-lab/webcodecs-color` is the current experiment for handling non-sRGB `VideoFrame`s without forcing them through Canvas.
+`@browser-mc/webcodecs-color` is the current experiment for handling non-sRGB `VideoFrame`s without forcing them through Canvas.
 
 - `decodeImageToVideoFrame` decodes `hdrrec2020.avif` with `ImageDecoder`.
 - `inspectFrame` reads `VideoFrame.format` and `VideoFrame.colorSpace`.

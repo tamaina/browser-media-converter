@@ -1,21 +1,21 @@
-import { bytesEqual, concat } from '@browser-avif-lab/binary';
+import { bytesEqual, concat } from '@browser-mc/binary';
 import {
   findSequenceHeaderObu,
   makeAv1Config,
   muxStillAvif,
   type EncodedStillAv1,
-} from '@browser-avif-lab/media-container';
+} from '@browser-mc/media-container';
 
 export type {
   AvifMetadataItem,
   EncodedStillAv1,
   MuxStillAvifOptions,
-} from '@browser-avif-lab/media-container';
+} from '@browser-mc/media-container';
 export {
   findSequenceHeaderObu,
   makeAv1Config,
   muxStillAvif,
-} from '@browser-avif-lab/media-container';
+} from '@browser-mc/media-container';
 
 export type EncodeAvifOptions = {
   quality?: number;

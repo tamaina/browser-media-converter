@@ -1,4 +1,4 @@
-import { readAscii, readU16 } from '@browser-avif-lab/binary';
+import { readAscii, readU16 } from '@browser-mc/binary';
 import { readAvifExif, rewriteAvifExif } from './avif.js';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 import { JPEG_SOI, readJpegExif, rewriteJpegExif } from './jpeg.js';

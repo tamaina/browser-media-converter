@@ -1,5 +1,5 @@
 {
-  "name": "@browser-avif-lab/webcodecs-color",
+  "name": "@browser-mc/webcodecs-color",
   "version": "0.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,15 +11,15 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-avif-lab/binary build",
+    "prebuild": "pnpm --filter @browser-mc/binary build",
     "build": "tsc -p tsconfig.json",
-    "pretypecheck": "pnpm --filter @browser-avif-lab/binary build",
+    "pretypecheck": "pnpm --filter @browser-mc/binary build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/binary": "workspace:^"
+    "@browser-mc/binary": "workspace:^"
   },
   "files": [
     "dist",

@@ -1,4 +1,4 @@
-import { copyArrayBuffer } from '@browser-avif-lab/binary';
+import { copyArrayBuffer } from '@browser-mc/binary';
 
 export type FrameColorInspection = {
   format: VideoPixelFormat | null;

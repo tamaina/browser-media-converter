@@ -1,4 +1,4 @@
-# @browser-avif-lab/mediabunny-scene-keyframes
+# @browser-mc/mediabunny-scene-keyframes
 
 Streaming scene detection helpers for forcing key frames during Mediabunny transcodes.
 
@@ -6,7 +6,7 @@ Streaming scene detection helpers for forcing key frames during Mediabunny trans
 
 ```ts
 import { Input, Mp4InputFormat, BlobSource } from 'mediabunny';
-import { SceneKeyFrameDetector } from '@browser-avif-lab/mediabunny-scene-keyframes';
+import { SceneKeyFrameDetector } from '@browser-mc/mediabunny-scene-keyframes';
 
 const input = new Input({
   source: new BlobSource(file),
@@ -42,12 +42,12 @@ if (track) {
 
 This package detects scene changes and tracks scene-derived key-frame timestamps. It does not wrap Mediabunny `Conversion` and does not transcode media.
 
-`SceneKeyFrameDetector` is the streaming API used by `@browser-avif-lab/browser-movie-converter`; `planSceneKeyFrames` remains available when a caller wants an offline pre-scan.
+`SceneKeyFrameDetector` is the streaming API used by `@browser-mc/browser-movie-converter`; `planSceneKeyFrames` remains available when a caller wants an offline pre-scan.
 
 ## Sensitivity Presets
 
 ```ts
-import { resolveSceneDetectionOptions, sceneDetectionPresets } from '@browser-avif-lab/mediabunny-scene-keyframes';
+import { resolveSceneDetectionOptions, sceneDetectionPresets } from '@browser-mc/mediabunny-scene-keyframes';
 
 console.log(sceneDetectionPresets);
 
@@ -68,7 +68,7 @@ Explicit options override preset values, so `{ sensitivity: 'low', threshold: 0.
 ## Pure Detection Tests
 
 ```ts
-import { detectSceneChangesInFingerprints } from '@browser-avif-lab/mediabunny-scene-keyframes';
+import { detectSceneChangesInFingerprints } from '@browser-mc/mediabunny-scene-keyframes';
 ```
 
 The pure fingerprint API is useful for deterministic unit tests without WebCodecs.
@@ -76,10 +76,10 @@ The pure fingerprint API is useful for deterministic unit tests without WebCodec
 ## Commands
 
 ```sh
-pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build
-pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes typecheck
-pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test
-pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
+pnpm --filter @browser-mc/mediabunny-scene-keyframes build
+pnpm --filter @browser-mc/mediabunny-scene-keyframes typecheck
+pnpm --filter @browser-mc/mediabunny-scene-keyframes test
+pnpm --filter @browser-mc/mediabunny-scene-keyframes test:electron
 ```
 
 The Electron smoke test decodes `bbb.mov` and verifies that a scene plan can be produced in a browser runtime.

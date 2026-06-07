@@ -1,18 +1,18 @@
-# @browser-avif-lab/browser-movie-converter
+# @browser-mc/browser-movie-converter
 
 Browser movie conversion package using Mediabunny for demux/mux/encode orchestration and the local WebCodecs color helpers for resizing.
 
 - Caller-provided Mediabunny `Input` for MP4/MOV/WebM and other supported sources
 - MP4/WebM output through Mediabunny `Conversion`
 - HLS output through local Mediabunny helpers
-- Streaming scene detection and keyframe forcing through `@browser-avif-lab/mediabunny-scene-keyframes`
-- Raw planar resize through `@browser-avif-lab/webcodecs-color`
+- Streaming scene detection and keyframe forcing through `@browser-mc/mediabunny-scene-keyframes`
+- Raw planar resize through `@browser-mc/webcodecs-color`
 - Input color-space inspection and color metadata copying for raw-resized samples
 
 ## Install
 
 ```sh
-pnpm add @browser-avif-lab/browser-movie-converter mediabunny
+pnpm add @browser-mc/browser-movie-converter mediabunny
 ```
 
 ## Build Mediabunny conversion options
@@ -29,7 +29,7 @@ import {
 } from 'mediabunny';
 import {
   buildMovieConversionOptions,
-} from '@browser-avif-lab/browser-movie-converter';
+} from '@browser-mc/browser-movie-converter';
 
 const input = new Input({
   source: new BlobSource(file),
@@ -88,7 +88,7 @@ import {
 import {
   convertMovieToHls,
   decodeMovieHlsText,
-} from '@browser-avif-lab/browser-movie-converter';
+} from '@browser-mc/browser-movie-converter';
 
 const input = new Input({
   source: new BlobSource(file),

@@ -1,4 +1,4 @@
-import { readAscii, readU16, readU16le, readU32, readU32le } from '@browser-avif-lab/binary';
+import { readAscii, readU16, readU16le, readU32, readU32le } from '@browser-mc/binary';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 
 const GPS_IFD_POINTER = 0x8825;

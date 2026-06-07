@@ -1,4 +1,4 @@
-import { concat, startsWith } from '@browser-avif-lab/binary';
+import { concat, startsWith } from '@browser-mc/binary';
 
 export const EXIF_ASCII = new Uint8Array([0x45, 0x78, 0x69, 0x66, 0x00, 0x00]);
 

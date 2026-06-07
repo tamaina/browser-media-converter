@@ -2,12 +2,12 @@ import {
   muxAnimatedWebp,
   type AnimatedWebpFrame,
   type AnimatedWebpMuxOptions,
-} from '@browser-avif-lab/media-container';
+} from '@browser-mc/media-container';
 import {
   inspectFrame,
   type FrameColorInspection,
   type ResizeRawOptions,
-} from '@browser-avif-lab/webcodecs-color';
+} from '@browser-mc/webcodecs-color';
 import {
   copyArrayBuffer,
   createImageDecoder,

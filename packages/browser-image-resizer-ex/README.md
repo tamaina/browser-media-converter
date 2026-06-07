@@ -1,22 +1,22 @@
-# @browser-avif-lab/browser-image-resizer-ex
+# @browser-mc/browser-image-resizer-ex
 
 Browser-side image resize/convert facade built from the lab packages.
 
-- AVIF output through `@browser-avif-lab/webcodecs-avif`
-- Animated WebP output through `@browser-avif-lab/media-container` RIFF `VP8X`/`ANIM`/`ANMF` muxing
-- EXIF keep/drop/drop-GPS through `@browser-avif-lab/exif-transplant`
-- HDR/wide-gamut inspection and raw planar resize through `@browser-avif-lab/webcodecs-color`
+- AVIF output through `@browser-mc/webcodecs-avif`
+- Animated WebP output through `@browser-mc/media-container` RIFF `VP8X`/`ANIM`/`ANMF` muxing
+- EXIF keep/drop/drop-GPS through `@browser-mc/exif-transplant`
+- HDR/wide-gamut inspection and raw planar resize through `@browser-mc/webcodecs-color`
 
 ## Install
 
 ```sh
-pnpm add @browser-avif-lab/browser-image-resizer-ex
+pnpm add @browser-mc/browser-image-resizer-ex
 ```
 
 ## Convert to AVIF
 
 ```ts
-import { resizeImageToAvif } from '@browser-avif-lab/browser-image-resizer-ex';
+import { resizeImageToAvif } from '@browser-mc/browser-image-resizer-ex';
 
 const result = await resizeImageToAvif(file, {
   width: 1600,
@@ -33,7 +33,7 @@ await fetch('/upload', {
 ## Generic conversion
 
 ```ts
-import { inspectImageInput, resizeAndConvertImage } from '@browser-avif-lab/browser-image-resizer-ex';
+import { inspectImageInput, resizeAndConvertImage } from '@browser-mc/browser-image-resizer-ex';
 
 const input = await inspectImageInput(file, file.type);
 console.log(input.animated, input.frameCount);
@@ -61,7 +61,7 @@ if (result.kind === 'animated') {
 ## Animated WebP
 
 ```ts
-import { resizeAnimatedImageToWebp } from '@browser-avif-lab/browser-image-resizer-ex';
+import { resizeAnimatedImageToWebp } from '@browser-mc/browser-image-resizer-ex';
 
 const result = await resizeAnimatedImageToWebp(file, {
   inputMime: file.type,
@@ -79,4 +79,4 @@ console.log(result.blob);
 - `colorMetadata: 'preserve'` is the default. Use `colorMetadata: 'canvas-sdr'` to draw through an sRGB Canvas path and mark the output frame as BT.709 SDR.
 - JPEG/WebP encoding currently goes through `OffscreenCanvas.convertToBlob()`, so strict HDR preservation is not expected there.
 - Animated WebP currently writes full-canvas frames and does not yet optimize changed rectangles.
-- AVIF EXIF writing remuxes to a minimal AVIF structure through `@browser-avif-lab/media-container`. Nonessential original AVIF boxes are not preserved.
+- AVIF EXIF writing remuxes to a minimal AVIF structure through `@browser-mc/media-container`. Nonessential original AVIF boxes are not preserved.

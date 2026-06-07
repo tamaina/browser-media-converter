@@ -14,13 +14,13 @@ import {
   SceneKeyFrameDetector,
   type SceneDetectionOptions,
   type SceneKeyFrameState,
-} from '@browser-avif-lab/mediabunny-scene-keyframes';
+} from '@browser-mc/mediabunny-scene-keyframes';
 import {
   convertFrameToCanvasSdr,
   resizeFrameRaw,
   sdrVideoColorSpaceInit,
   type ResizeRawOptions,
-} from '@browser-avif-lab/webcodecs-color';
+} from '@browser-mc/webcodecs-color';
 
 export type BrowserMovieColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 

@@ -1,6 +1,6 @@
-# @browser-avif-lab/media-container
+# @browser-mc/media-container
 
-Media container helpers layered above `@browser-avif-lab/binary`.
+Media container helpers layered above `@browser-mc/binary`.
 
 ## Layers
 
@@ -13,7 +13,7 @@ Media container helpers layered above `@browser-avif-lab/binary`.
 ## Usage
 
 ```ts
-import { muxStillAvif, muxAnimatedWebp } from '@browser-avif-lab/media-container';
+import { muxStillAvif, muxAnimatedWebp } from '@browser-mc/media-container';
 ```
 
 ## MOV/MP4 GPS Sanitization
@@ -25,7 +25,7 @@ GPS-bearing payloads are replaced or zeroed while preserving the original box st
 ## Commands
 
 ```sh
-pnpm --filter @browser-avif-lab/media-container build
-pnpm --filter @browser-avif-lab/media-container typecheck
-pnpm --filter @browser-avif-lab/media-container test
+pnpm --filter @browser-mc/media-container build
+pnpm --filter @browser-mc/media-container typecheck
+pnpm --filter @browser-mc/media-container test
 ```

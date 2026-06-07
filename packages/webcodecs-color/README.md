@@ -1,4 +1,4 @@
-# @browser-avif-lab/webcodecs-color
+# @browser-mc/webcodecs-color
 
 Experiments for inspecting and resizing non-sRGB `VideoFrame`s.
 
@@ -9,7 +9,7 @@ import {
   classifyFrameColor,
   decodeImageToVideoFrame,
   inspectFrame,
-} from '@browser-avif-lab/webcodecs-color';
+} from '@browser-mc/webcodecs-color';
 
 const bytes = new Uint8Array(await file.arrayBuffer());
 const frame = await decodeImageToVideoFrame(bytes, 'image/avif', {
@@ -25,7 +25,7 @@ frame.close();
 ## Canvas-Free Raw Resize
 
 ```ts
-import { resizeFrameRaw } from '@browser-avif-lab/webcodecs-color';
+import { resizeFrameRaw } from '@browser-mc/webcodecs-color';
 
 const resized = await resizeFrameRaw(frame, {
   width: 1024,
@@ -48,7 +48,7 @@ WebGPU may become useful if the pipeline can keep frames on the GPU for several 
 ## Comparison Helpers
 
 ```ts
-import { convertFrameToCanvasSdr, copyFrameToRgba, resizeFrameWithCanvas } from '@browser-avif-lab/webcodecs-color';
+import { convertFrameToCanvasSdr, copyFrameToRgba, resizeFrameWithCanvas } from '@browser-mc/webcodecs-color';
 
 const rgba = await copyFrameToRgba(frame, { colorSpace: 'display-p3' });
 const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 });
@@ -65,9 +65,9 @@ const canvasSdr = convertFrameToCanvasSdr(frame);
 ## Commands
 
 ```sh
-pnpm --filter @browser-avif-lab/webcodecs-color build
-pnpm --filter @browser-avif-lab/webcodecs-color typecheck
-pnpm --filter @browser-avif-lab/webcodecs-color test:electron
+pnpm --filter @browser-mc/webcodecs-color build
+pnpm --filter @browser-mc/webcodecs-color typecheck
+pnpm --filter @browser-mc/webcodecs-color test:electron
 ```
 
 `test:electron` uses `hdrrec2020.avif`. Current result keeps `I444P10` and `bt2020` metadata through raw resize.

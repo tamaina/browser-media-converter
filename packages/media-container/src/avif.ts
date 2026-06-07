@@ -1,4 +1,4 @@
-import { ascii, bytesEqual, concat, cstr, u16, u32 } from '@browser-avif-lab/binary';
+import { ascii, bytesEqual, concat, cstr, u16, u32 } from '@browser-mc/binary';
 import { box, fullBox } from './isobmff.js';
 
 export type EncodedStillAv1 = {

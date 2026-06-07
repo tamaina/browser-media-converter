@@ -1,4 +1,4 @@
-import { readAscii, readU32, readU64 } from '@browser-avif-lab/binary';
+import { readAscii, readU32, readU64 } from '@browser-mc/binary';
 
 import { boxes, readBox, type IsobmffBox } from './isobmff.js';
 

@@ -5,8 +5,8 @@ import {
   writeExif,
   type ExifPayload,
   type ImageMime,
-} from '@browser-avif-lab/exif-transplant';
-import { encodeImageToAvif, type EncodeAvifOptions } from '@browser-avif-lab/webcodecs-avif';
+} from '@browser-mc/exif-transplant';
+import { encodeImageToAvif, type EncodeAvifOptions } from '@browser-mc/webcodecs-avif';
 import {
   copyArrayBuffer,
   decodeFirstImageFrame,
@@ -34,7 +34,7 @@ import {
   type FrameColorClassification,
   type FrameColorInspection,
   type ResizeRawOptions,
-} from '@browser-avif-lab/webcodecs-color';
+} from '@browser-mc/webcodecs-color';
 
 export type BrowserImageOutputMime = 'image/avif' | 'image/jpeg' | 'image/webp';
 

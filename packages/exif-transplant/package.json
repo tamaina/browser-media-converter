@@ -1,5 +1,5 @@
 {
-  "name": "@browser-avif-lab/exif-transplant",
+  "name": "@browser-mc/exif-transplant",
   "version": "0.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,15 +11,15 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-avif-lab/media-container build",
+    "prebuild": "pnpm --filter @browser-mc/media-container build",
     "build": "tsc -p tsconfig.json",
-    "pretypecheck": "pnpm --filter @browser-avif-lab/media-container build",
+    "pretypecheck": "pnpm --filter @browser-mc/media-container build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && node --test test/tiff.test.mjs && node test/smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/binary": "workspace:^",
-    "@browser-avif-lab/media-container": "workspace:^"
+    "@browser-mc/binary": "workspace:^",
+    "@browser-mc/media-container": "workspace:^"
   },
   "files": [
     "dist",

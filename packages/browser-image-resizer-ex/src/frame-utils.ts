@@ -4,8 +4,8 @@ import {
   resizeFrameRaw,
   resizeFrameWithCanvas,
   type ResizeRawOptions,
-} from '@browser-avif-lab/webcodecs-color';
-import { copyArrayBuffer } from '@browser-avif-lab/binary';
+} from '@browser-mc/webcodecs-color';
+import { copyArrayBuffer } from '@browser-mc/binary';
 
 export { copyArrayBuffer };
 

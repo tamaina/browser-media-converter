@@ -1,5 +1,5 @@
 {
-  "name": "@browser-avif-lab/browser-movie-converter",
+  "name": "@browser-mc/browser-movie-converter",
   "version": "0.0.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,17 +11,17 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/webcodecs-color build",
+    "prebuild": "pnpm --filter @browser-mc/mediabunny-scene-keyframes build && pnpm --filter @browser-mc/webcodecs-color build",
     "build": "tsc -p tsconfig.json",
-    "pretypecheck": "pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes build && pnpm --filter @browser-avif-lab/webcodecs-color build",
+    "pretypecheck": "pnpm --filter @browser-mc/mediabunny-scene-keyframes build && pnpm --filter @browser-mc/webcodecs-color build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs",
     "test:hls:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/hls-electron-smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/mediabunny-scene-keyframes": "workspace:^",
-    "@browser-avif-lab/webcodecs-color": "workspace:^",
+    "@browser-mc/mediabunny-scene-keyframes": "workspace:^",
+    "@browser-mc/webcodecs-color": "workspace:^",
     "mediabunny": "^1.46.0"
   },
   "files": [

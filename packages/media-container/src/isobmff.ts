@@ -1,4 +1,4 @@
-import { concat, readAscii, readU32, readU64, writeAscii, writeU32 } from '@browser-avif-lab/binary';
+import { concat, readAscii, readU32, readU64, writeAscii, writeU32 } from '@browser-mc/binary';
 
 export type BoxInput = Uint8Array | BoxInput[];
 

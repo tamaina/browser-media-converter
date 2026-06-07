@@ -1,11 +1,11 @@
-# @browser-avif-lab/webcodecs-avif
+# @browser-mc/webcodecs-avif
 
-WebCodecs AV1 still-image encoder plus a minimal AVIF muxer re-exported from `@browser-avif-lab/media-container`.
+WebCodecs AV1 still-image encoder plus a minimal AVIF muxer re-exported from `@browser-mc/media-container`.
 
 ## Encode A Canvas Source To AVIF
 
 ```ts
-import { encodeImageToAvif } from '@browser-avif-lab/webcodecs-avif';
+import { encodeImageToAvif } from '@browser-mc/webcodecs-avif';
 
 const bitmap = await createImageBitmap(file);
 const avif = await encodeImageToAvif(bitmap, { quality: 0.72 });
@@ -20,7 +20,7 @@ await fetch('/upload', {
 ## Mux An Existing AV1 Still Frame
 
 ```ts
-import { muxStillAvif, type EncodedStillAv1 } from '@browser-avif-lab/webcodecs-avif';
+import { muxStillAvif, type EncodedStillAv1 } from '@browser-mc/webcodecs-avif';
 
 const encoded: EncodedStillAv1 = {
   chunk: av1Chunk,
@@ -36,7 +36,7 @@ const avif = muxStillAvif(encoded);
 ## Add Metadata Items
 
 ```ts
-import { muxStillAvif } from '@browser-avif-lab/webcodecs-avif';
+import { muxStillAvif } from '@browser-mc/webcodecs-avif';
 
 const avif = muxStillAvif(encoded, {
   metadata: [
@@ -54,8 +54,8 @@ const avif = muxStillAvif(encoded, {
 ## Commands
 
 ```sh
-pnpm --filter @browser-avif-lab/webcodecs-avif build
-pnpm --filter @browser-avif-lab/webcodecs-avif typecheck
+pnpm --filter @browser-mc/webcodecs-avif build
+pnpm --filter @browser-mc/webcodecs-avif typecheck
 node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 ```
 
@@ -65,4 +65,4 @@ node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 - Alpha is rejected until auxiliary alpha item muxing is implemented.
 - The muxer writes a minimal still-image AVIF and does not preserve arbitrary source AVIF boxes.
 - `av1C`, `pixi`, and `colr` are derived from the AV1 Sequence Header OBU. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
-- Container-specific mux helpers live in `@browser-avif-lab/media-container`; this package re-exports the AVIF helpers for convenience.
+- Container-specific mux helpers live in `@browser-mc/media-container`; this package re-exports the AVIF helpers for convenience.

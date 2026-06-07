@@ -1,4 +1,4 @@
-import { concat, readU16, startsWith, writeU16 } from '@browser-avif-lab/binary';
+import { concat, readU16, startsWith, writeU16 } from '@browser-mc/binary';
 import { EXIF_ASCII } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 

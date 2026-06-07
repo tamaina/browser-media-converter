@@ -1,4 +1,4 @@
-import { readAscii, readU32le, writeAscii, writeU32le } from '@browser-avif-lab/binary';
+import { readAscii, readU32le, writeAscii, writeU32le } from '@browser-mc/binary';
 
 export type RiffChunk = {
   type: string;
