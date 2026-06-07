@@ -1,12 +1,12 @@
 # @browser-avif-lab/mediabunny-scene-keyframes
 
-Scene detection helpers for planning key frames during Mediabunny transcodes.
+Streaming scene detection helpers for forcing key frames during Mediabunny transcodes.
 
-## Detect Scene Changes
+## Streaming Detection
 
 ```ts
 import { Input, Mp4InputFormat, BlobSource } from 'mediabunny';
-import { planSceneKeyFrames } from '@browser-avif-lab/mediabunny-scene-keyframes';
+import { SceneKeyFrameDetector } from '@browser-avif-lab/mediabunny-scene-keyframes';
 
 const input = new Input({
   source: new BlobSource(file),
@@ -15,23 +15,34 @@ const input = new Input({
 
 const track = await input.getPrimaryVideoTrack();
 if (track) {
-  const plan = await planSceneKeyFrames(track, {
+  const detector = new SceneKeyFrameDetector({
     sensitivity: 'medium',
+    sampleRate: 'all',
     minKeyFrameDistance: 2,
     maxKeyFrameInterval: 6,
   });
 
-  console.log(plan.changes);
-  console.log(plan.keyFrameTimestamps);
-  console.log(plan.recommendedKeyFrameInterval);
+  const process = (sample) => {
+    const decision = detector.detectSample(sample);
+    sample.setEncodeOptions({
+      ...sample.encodeOptions,
+      keyFrame: decision.keyFrame,
+    });
+    return sample;
+  };
+
+  console.log(detector.state.changes);
+  console.log(detector.state.keyFrameTimestamps);
 }
 ```
 
+> **注意**: `keyFrame: decision.keyFrame` をすべてのフレームに設定する場合、エンコーダーの `keyFrameInterval` オプションは **設定しない**でください。`decision.keyFrame` が `false` のフレームに明示的な `false` が付くと、エンコーダー側の `keyFrameInterval` による間隔挿入が無効化されます。`maxKeyFrameInterval` による間隔保証はこのライブラリの `shouldForceKeyFrame` が担っているため、エンコーダーへの重複指定は不要です。
+
 ## Scope
 
-This package only detects scene changes and builds a key-frame plan. It does not wrap Mediabunny `Conversion` and does not transcode media.
+This package detects scene changes and tracks scene-derived key-frame timestamps. It does not wrap Mediabunny `Conversion` and does not transcode media.
 
-Current Mediabunny `Conversion` exposes interval-based key-frame control. `keyFrameTimestamps` is a plan that suppresses scene-derived key frames closer than `minKeyFrameDistance`; applying that plan to an actual conversion belongs in `@browser-avif-lab/browser-movie-converter`.
+`SceneKeyFrameDetector` is the streaming API used by `@browser-avif-lab/browser-movie-converter`; `planSceneKeyFrames` remains available when a caller wants an offline pre-scan.
 
 ## Sensitivity Presets
 

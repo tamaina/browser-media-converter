@@ -12,8 +12,8 @@ H.264/AAC WebCodecs smoke tests are verified with Electron's Chromium build in t
 Commands:
 
 ```sh
-pnpm --filter @browser-avif-lab/mediabunny-hls test:electron
 pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
+pnpm --filter @browser-avif-lab/browser-movie-converter test:hls:electron
 ```
 
 ## 1. WebCodecs AVIF
@@ -46,12 +46,11 @@ node -e "import sharp from 'sharp'; console.log(await sharp('playground-output/w
 Implemented `@browser-avif-lab/mediabunny-scene-keyframes`.
 
 - Samples decoded frames with `VideoSampleSink`.
-- Computes mean RGB frame difference at a configurable sampling rate.
+- Computes mean RGB frame difference at a configurable sampling rate, including `sampleRate: 'all'` for every decoded video sample.
 - Provides sensitivity presets: `low`, `medium`, and `high`; explicit options override preset values.
-- Derives a recommended `keyFrameInterval`.
-- Plans scene-derived key-frame timestamps with `minKeyFrameDistance` suppression and optional `maxKeyFrameInterval` fallback.
+- Provides `SceneKeyFrameDetector` for streaming scene detection, key-frame decisions, and key-frame timestamp state.
+- Offline `planSceneKeyFrames` still works with any Mediabunny `InputVideoTrack`.
 - Does not wrap Mediabunny `Conversion`; conversion/transcoding is handled by `@browser-avif-lab/browser-movie-converter`.
-- `planSceneKeyFrames` works with any Mediabunny `InputVideoTrack`.
 
 Verified with Electron's Chromium build:
 
@@ -65,26 +64,23 @@ Command:
 pnpm --filter @browser-avif-lab/mediabunny-scene-keyframes test:electron
 ```
 
-## 3. Mediabunny HLS
+## 3. Browser Movie Converter HLS
 
-Implemented `@browser-avif-lab/mediabunny-hls`.
+Implemented HLS output inside `@browser-avif-lab/browser-movie-converter`.
 
-- Uses `HlsOutputFormat` + `MpegTsOutputFormat`.
-- Returns in-memory HLS assets: master/media playlists and `.ts` segments.
+- HLS helpers live under the movie converter package instead of a separate workspace package.
+- Uses Mediabunny `HlsOutputFormat` + `MpegTsOutputFormat`.
+- Streams HLS assets: master/media playlists and `.ts` segments.
 - Supports MP4 and QuickTime/MOV input formats.
 
-Local verification now uses Electron's Chromium build because official Google Chrome is not available for Linux arm64 and snap Chromium cannot run inside this non-systemd container.
+Verified with Electron's Chromium build:
 
-Verified `bbb.mov` H.264/AAC support in Electron:
-
-- `VideoDecoder.isConfigSupported({ codec: 'avc1.4d401f' })`: supported
-- `AudioDecoder.isConfigSupported({ codec: 'mp4a.40.2' })`: supported
-- `bbb.mov` converted to HLS under `playground-output/hls-electron`
+- `bbb.mov` converted to HLS under `playground-output/movie-converter-hls-electron`
 
 Command:
 
 ```sh
-pnpm --filter @browser-avif-lab/mediabunny-hls test:electron
+pnpm --filter @browser-avif-lab/browser-movie-converter test:hls:electron
 ```
 
 ## 3.5 ISOBMFF GPS Metadata
@@ -183,10 +179,10 @@ pnpm --filter @browser-avif-lab/browser-image-resizer-ex test:electron
 
 Implemented `@browser-avif-lab/browser-movie-converter`.
 
-- Provides `convertMovie` on top of Mediabunny `Conversion` for container/codec work.
+- Provides `buildMovieConversionOptions` for Mediabunny `Conversion` setup.
 - Supports MP4/MOV/WebM input formats.
-- Uses `mediabunny-scene-keyframes` to build a scene plan and recommended `keyFrameInterval`.
-- Re-exports an HLS conversion helper through `convertMovieToHls`.
+- Uses `mediabunny-scene-keyframes` during `Conversion.video.process` to detect scenes and force key frames through Mediabunny `VideoSample` encode options in the same pass.
+- Provides stream-only HLS conversion through `convertMovieToHls`.
 - Reports input video color metadata with `inspectVideoTrackColor`/`inspectMovie`.
 - Uses `webcodecs-color.resizeFrameRaw` inside `Conversion.video.process` when `resize` is set, so resizing can keep planar YUV sample data on a non-Canvas path.
 - Movie resize dimensions default to 2-pixel alignment to avoid odd-size 4:2:0/NV12 artifacts and common encoder constraints.
@@ -197,15 +193,17 @@ Current limitation:
 
 - Raw resize requires a `VideoFrame` format supported by `webcodecs-color` (`NV12`, `I420`, `I422`, `I444`, and Chromium 10-bit variants). Unsupported formats fail unless `resize.path: 'mediabunny'` is selected.
 - `resize.path: 'mediabunny'` may still lose or rewrite color metadata because it uses Mediabunny's built-in resize path.
-- Mediabunny exposes `keyFrameInterval` here, not exact per-frame keyframe forcing. Scene timestamps are returned in the plan for callers and future hooks.
+- Scene detection defaults to all-frame sampling; detected scene timestamps are collected during conversion and exposed through the returned plan.
 
 Verified with Electron's Chromium build:
 
-- `bbb.mov` converted to `playground-output/movie-converter-electron/resized.mp4`.
+- `bbb.mov` converted through the builder smoke to `playground-output/movie-converter-electron/resized.mp4`.
+- `bbb.mov` converted to HLS under `playground-output/movie-converter-hls-electron`.
 - `resize: { width: 320, path: 'raw' }` produced `320x180`.
 
 Command:
 
 ```sh
 pnpm --filter @browser-avif-lab/browser-movie-converter test:electron
+pnpm --filter @browser-avif-lab/browser-movie-converter test:hls:electron
 ```

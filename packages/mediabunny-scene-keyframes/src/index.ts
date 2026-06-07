@@ -13,7 +13,7 @@ export type SceneDetectionSensitivity = 'low' | 'medium' | 'high';
 
 export type SceneDetectionOptions = {
   sensitivity?: SceneDetectionSensitivity;
-  sampleRate?: number;
+  sampleRate?: number | 'all';
   threshold?: number;
   width?: number;
   height?: number;
@@ -22,10 +22,17 @@ export type SceneDetectionOptions = {
   maxKeyFrameInterval?: number;
 };
 
-export type SceneKeyFramePlan = {
+export type SceneKeyFrameState = {
   changes: SceneChange[];
   keyFrameTimestamps: number[];
-  recommendedKeyFrameInterval: number;
+};
+
+export type SceneKeyFramePlan = SceneKeyFrameState;
+
+export type SceneKeyFrameDecision = {
+  change: SceneChange | null;
+  keyFrame: boolean;
+  timestamp: number;
 };
 
 export type FrameFingerprint = {
@@ -81,6 +88,16 @@ export function resolveSceneDetectionOptions(options: SceneDetectionOptions = {}
 export async function detectSceneChanges(track: InputVideoTrack, options: SceneDetectionOptions = {}): Promise<SceneChange[]> {
   const resolved = resolveSceneDetectionOptions(options);
   const sink = new VideoSampleSink(track);
+
+  if (resolved.sampleRate === 'all') {
+    const detector = new SceneChangeDetector(resolved);
+    for await (const sample of sink.samples()) {
+      detector.detectSample(sample);
+      sample.close();
+    }
+    return detector.changes;
+  }
+
   const duration = await track.computeDuration();
   const timestamps = [];
   for (let time = 0; time < duration; time += 1 / resolved.sampleRate) timestamps.push(time);
@@ -104,9 +121,7 @@ export async function planSceneKeyFrames(track: InputVideoTrack, options: SceneD
     minKeyFrameDistance: resolved.minKeyFrameDistance ?? resolved.minSceneDuration,
     maxKeyFrameInterval: resolved.maxKeyFrameInterval,
   });
-  const intervals = changes.slice(1).map((change, index) => change.timestamp - changes[index].timestamp);
-  const recommendedKeyFrameInterval = clamp(percentile(intervals, 0.35) || resolved.minSceneDuration || 2, 0.5, 5);
-  return { changes, keyFrameTimestamps, recommendedKeyFrameInterval };
+  return { changes, keyFrameTimestamps };
 }
 
 export function detectSceneChangesInFingerprints(fingerprints: FrameFingerprint[], options: SceneDetectionOptions = {}): SceneChange[] {
@@ -127,6 +142,131 @@ export function detectSceneChangesInFingerprints(fingerprints: FrameFingerprint[
     previous = fingerprint.data;
   }
   return changes;
+}
+
+/**
+ * Streaming detector responsible only for scene-change detection.
+ *
+ * Compares per-frame fingerprints and records scene changes whose difference
+ * score exceeds the threshold in {@link changes}.
+ * Does not make key-frame decisions. Use for encoder-independent analysis
+ * or as the underlying implementation of {@link SceneKeyFrameDetector}.
+ *
+ * @see {@link SceneKeyFrameDetector} Higher-level class that also decides key frames
+ */
+export class SceneChangeDetector {
+  readonly options: ResolvedSceneDetectionOptions;
+  readonly changes: SceneChange[] = [];
+  private previous: Uint8ClampedArray | null = null;
+  private lastSampledTimestamp = -Infinity;
+  private lastChangeTimestamp = -Infinity;
+
+  constructor(options: SceneDetectionOptions = {}) {
+    this.options = resolveSceneDetectionOptions(options);
+  }
+
+  /**
+   * Processes a single frame.
+   *
+   * Records a scene change in {@link changes} when the sample satisfies
+   * the sampling rate, difference threshold, and `minSceneDuration` constraints.
+   *
+   * @param sample - Video sample to process. The caller retains responsibility for closing it.
+   * @returns The detected {@link SceneChange}, or `null` if the frame was skipped or below threshold.
+   */
+  detectSample(sample: VideoSample): SceneChange | null {
+    if (this.options.sampleRate !== 'all' && sample.timestamp - this.lastSampledTimestamp < 1 / this.options.sampleRate) {
+      return null;
+    }
+    this.lastSampledTimestamp = sample.timestamp;
+
+    const data = sampleFingerprint(sample, this.options.width, this.options.height);
+    if (!this.previous) {
+      this.previous = data;
+      return null;
+    }
+
+    const score = scoreFrameDifference(this.previous, data);
+    this.previous = data;
+    if (score < this.options.threshold || sample.timestamp - this.lastChangeTimestamp < this.options.minSceneDuration) {
+      return null;
+    }
+
+    const change = { timestamp: sample.timestamp, score };
+    this.changes.push(change);
+    this.lastChangeTimestamp = sample.timestamp;
+    return change;
+  }
+}
+
+/**
+ * Streaming detector combining scene-change detection with key-frame decisions.
+ *
+ * Wraps a {@link SceneChangeDetector} and additionally enforces a
+ * `maxKeyFrameInterval` ceiling. Pass the return value of {@link detectSample}
+ * directly to `setEncodeOptions` to control key frames in a single encode pass.
+ *
+ * @remarks
+ * This class owns the `maxKeyFrameInterval` guarantee. Do **not** also set
+ * the Mediabunny encoder's `keyFrameInterval` option — an explicit `keyFrame: false`
+ * on every non-scene frame overrides the encoder's own interval logic,
+ * making the two mechanisms conflict.
+ *
+ * @see {@link SceneChangeDetector} Lower-level class for detection only
+ */
+export class SceneKeyFrameDetector {
+  readonly changeDetector: SceneChangeDetector;
+  readonly changes: SceneChange[];
+  readonly keyFrameTimestamps = [0];
+  private lastKeyFrameTimestamp = 0;
+  private readonly minKeyFrameDistance: number;
+  private readonly maxKeyFrameInterval: number;
+
+  constructor(options: SceneDetectionOptions = {}) {
+    this.changeDetector = new SceneChangeDetector(options);
+    this.changes = this.changeDetector.changes;
+    this.minKeyFrameDistance = this.options.minKeyFrameDistance ?? this.options.minSceneDuration;
+    this.maxKeyFrameInterval = this.options.maxKeyFrameInterval ?? Infinity;
+  }
+
+  get options() {
+    return this.changeDetector.options;
+  }
+
+  get state(): SceneKeyFrameState {
+    return {
+      changes: this.changes,
+      keyFrameTimestamps: this.keyFrameTimestamps,
+    };
+  }
+
+  /**
+   * Processes a single frame and decides whether it should be a key frame.
+   *
+   * Returns `keyFrame: true` for scene key frames and interval key frames.
+   * Appends the actual frame timestamp to {@link keyFrameTimestamps}.
+   * For interval key frames, the internal counter is snapped to the ideal boundary
+   * (rather than the actual sample timestamp) to prevent cumulative drift.
+   *
+   * @param sample - Video sample to process. The caller retains responsibility for closing it.
+   * @returns Key-frame decision. Pass `decision.keyFrame` directly to `setEncodeOptions`.
+   */
+  detectSample(sample: VideoSample): SceneKeyFrameDecision {
+    const change = this.changeDetector.detectSample(sample);
+    const sceneKeyFrame = Boolean(change) && sample.timestamp - this.lastKeyFrameTimestamp >= this.minKeyFrameDistance;
+    const intervalKeyFrame = Number.isFinite(this.maxKeyFrameInterval) && sample.timestamp - this.lastKeyFrameTimestamp >= this.maxKeyFrameInterval;
+    const keyFrame = sceneKeyFrame || intervalKeyFrame;
+    if (keyFrame) {
+      this.keyFrameTimestamps.push(sample.timestamp);
+      // For interval key frames, snap to the ideal boundary to avoid drift;
+      // for scene key frames, use the actual frame timestamp.
+      this.lastKeyFrameTimestamp = sceneKeyFrame
+        ? sample.timestamp
+        : this.lastKeyFrameTimestamp + this.maxKeyFrameInterval;
+    }
+
+    return { change, keyFrame, timestamp: sample.timestamp };
+  }
 }
 
 export function planKeyFrameTimestamps(
@@ -192,14 +332,4 @@ function meanAbsoluteDifference(a: Uint8ClampedArray, b: Uint8ClampedArray) {
     sum += Math.abs(a[i + 2] - b[i + 2]);
   }
   return sum / (a.length / 4 * 3 * 255);
-}
-
-function percentile(values: number[], p: number) {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * p)))];
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }

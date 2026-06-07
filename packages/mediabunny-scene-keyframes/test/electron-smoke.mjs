@@ -79,8 +79,6 @@ const result = await page.evaluate(async ({ port }) => {
 assert.ok(result.scenePlan, 'expected a scene plan for bbb.mov');
 assert.ok(result.scenePlan.changes.length > 0, 'expected at least one detected scene change');
 assert.ok(result.scenePlan.keyFrameTimestamps.length > 0, 'expected at least one planned key frame timestamp');
-assert.ok(result.scenePlan.recommendedKeyFrameInterval >= 0.5);
-assert.ok(result.scenePlan.recommendedKeyFrameInterval <= 5);
 for (let i = 1; i < result.scenePlan.changes.length; i++) {
   assert.ok(result.scenePlan.changes[i].timestamp > result.scenePlan.changes[i - 1].timestamp, 'scene changes must be strictly ordered');
 }
