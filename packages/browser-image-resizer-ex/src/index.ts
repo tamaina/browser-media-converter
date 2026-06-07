@@ -13,12 +13,10 @@ import {
   readAvifColorMetadata,
   readAvifColorSpace,
   type AvifEncodeSupport,
+  type CicpColorSpace,
   type EncodeAvifOptions,
 } from '@browser-mc/webcodecs-avif';
-import {
-  readImageColorMetadata,
-  type ImageColorMetadata,
-} from '@browser-mc/media-container';
+import { readImageColorMetadata, type ImageColorMetadata } from '@browser-mc/media-container';
 import {
   copyArrayBuffer,
   decodeFirstImageFrame,
@@ -262,9 +260,10 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
     const resized = await resizeFrameForColor(frame, size, options);
-    const preservedColorMetadata = options.colorMetadata === 'canvas-sdr' || resized.path === 'canvas'
-      ? null
-      : inputColorMetadata;
+    const preservedColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
+      canvasColorSpace: resized.canvasColorSpace,
+      preserveInput: options.colorMetadata !== 'canvas-sdr',
+    });
 
     try {
       const encoded = await encodeFrame(resized.frame, outputMime, {
@@ -319,6 +318,38 @@ function readSourceColorMetadata(data: Uint8Array, mime: string) {
   } catch {
     return null;
   }
+}
+
+function compatibleOutputColorMetadata(
+  metadata: ImageColorMetadata | null,
+  outputMime: BrowserImageOutputMime,
+  options: { canvasColorSpace?: PredefinedColorSpace; preserveInput: boolean } = { preserveInput: true },
+): ImageColorMetadata | null {
+  if (outputMime !== 'image/avif') return options.canvasColorSpace ? null : metadata;
+  const canvasCicp = options.canvasColorSpace ? canvasColorSpaceToCicp(options.canvasColorSpace) : null;
+  if (canvasCicp) return { type: 'cicp', cicp: canvasCicp };
+  if (!options.preserveInput) return null;
+  return metadata;
+}
+
+function canvasColorSpaceToCicp(colorSpace: PredefinedColorSpace): CicpColorSpace | null {
+  if (colorSpace === 'srgb') {
+    return {
+      primaries: 'bt709',
+      transfer: 'iec61966-2-1',
+      matrix: 'rgb',
+      fullRange: true,
+    };
+  }
+  if (colorSpace === 'display-p3') {
+    return {
+      primaries: 'smpte432',
+      transfer: 'iec61966-2-1',
+      matrix: 'rgb',
+      fullRange: true,
+    };
+  }
+  return null;
 }
 
 function readSourceExif(data: Uint8Array) {

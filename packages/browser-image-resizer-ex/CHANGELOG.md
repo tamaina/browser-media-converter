@@ -1,5 +1,14 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.5.2
+
+### Patch Changes
+
+- Fix AVIF color metadata handling for multiple `colr` properties, AV1 codec reconstruction during EXIF remuxing, and canvas-resized AVIF color metadata output.
+- Updated dependencies
+  - @browser-mc/media-container@0.3.1
+  - @browser-mc/exif-transplant@0.0.4
+
 ## 0.5.1
 
 ### Patch Changes

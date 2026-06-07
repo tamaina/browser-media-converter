@@ -1,5 +1,11 @@
 # @browser-mc/media-container
 
+## 0.3.1
+
+### Patch Changes
+
+- Fix AVIF color metadata handling for multiple `colr` properties, AV1 codec reconstruction during EXIF remuxing, and canvas-resized AVIF color metadata output.
+
 ## 0.3.0
 
 ### Minor Changes

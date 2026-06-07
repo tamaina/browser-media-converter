@@ -42,24 +42,30 @@ export function readAvifColorSpace(data: Uint8Array): VideoColorSpaceInit | null
 }
 
 export function readAvifCicpColor(data: Uint8Array): CicpColorSpace | null {
-  const metadata = readAvifColorMetadata(data);
+  const metadata = readAvifColorMetadataByType(data, 'cicp');
   return metadata?.type === 'cicp' ? metadata.cicp : null;
 }
 
 export function readAvifIccProfile(data: Uint8Array): Uint8Array | null {
-  const metadata = readAvifColorMetadata(data);
+  const metadata = readAvifColorMetadataByType(data, 'icc');
   return metadata?.type === 'icc' ? metadata.profile : null;
 }
 
 export function readAvifColorMetadata(data: Uint8Array): ImageColorMetadata | null {
+  return readAvifColorMetadataByType(data, 'icc') ?? readAvifColorMetadataByType(data, 'cicp');
+}
+
+function readAvifColorMetadataByType(data: Uint8Array, type: ImageColorMetadata['type']): ImageColorMetadata | null {
   for (const box of boxes(data, 0, data.length)) {
     if (box.type !== 'meta') continue;
     const metaStart = box.start + box.headerSize + 4;
     const primaryItemId = readPrimaryItemId(data, metaStart, box.end);
     if (primaryItemId === null) continue;
-    const colr = readPrimaryColrProperty(data, metaStart, box.end, primaryItemId);
-    if (!colr) continue;
-    return readColrColorMetadata(data, colr.start + colr.headerSize, colr.end);
+    const colrs = readPrimaryColrProperties(data, metaStart, box.end, primaryItemId);
+    for (const colr of colrs) {
+      const metadata = readColrColorMetadata(data, colr.start + colr.headerSize, colr.end);
+      if (metadata?.type === type) return metadata;
+    }
   }
   return null;
 }
@@ -262,14 +268,15 @@ function readPrimaryItemId(data: Uint8Array, start: number, end: number) {
   return null;
 }
 
-function readPrimaryColrProperty(data: Uint8Array, start: number, end: number, primaryItemId: number) {
+function readPrimaryColrProperties(data: Uint8Array, start: number, end: number, primaryItemId: number) {
   const properties = collectAvifProperties(data, start, end);
   const propertyIndexes = readPropertyIndexesForItem(data, start, end, primaryItemId);
+  const colrs = [];
   for (const index of propertyIndexes) {
     const property = properties[index - 1];
-    if (property?.type === 'colr') return property;
+    if (property?.type === 'colr') colrs.push(property);
   }
-  return null;
+  return colrs;
 }
 
 function collectAvifProperties(data: Uint8Array, start: number, end: number) {

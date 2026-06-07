@@ -38,7 +38,7 @@ function readPrimaryAvifImage(data: Uint8Array): EncodedStillAv1 {
     const chunk = data.slice(image.offset, image.offset + image.length);
     const sequenceHeaderObu = findSequenceHeaderObu(chunk);
     if (!sequenceHeaderObu) throw new Error('AVIF image item does not contain an AV1 Sequence Header OBU');
-    const codec = 'av01.0.08M.08';
+    const codec = codecFromAv1Config(properties.av1Config);
     return {
       chunk,
       colorMetadata: readAvifColorMetadata(data) ?? undefined,
@@ -54,6 +54,17 @@ function readPrimaryAvifImage(data: Uint8Array): EncodedStillAv1 {
     };
   }
   throw new Error('AVIF image item could not be found');
+}
+
+function codecFromAv1Config(av1Config: Uint8Array) {
+  if (av1Config.length < 4 || av1Config[0] !== 0x81) return 'av01.0.08M.08';
+  const profile = (av1Config[1] >> 5) & 0x07;
+  const level = av1Config[1] & 0x1f;
+  const tier = (av1Config[2] & 0x80) ? 'H' : 'M';
+  const highBitdepth = (av1Config[2] & 0x40) !== 0;
+  const twelveBit = (av1Config[2] & 0x20) !== 0;
+  const bitDepth = twelveBit ? 12 : (highBitdepth ? 10 : 8);
+  return `av01.${profile}.${String(level).padStart(2, '0')}${tier}.${String(bitDepth).padStart(2, '0')}`;
 }
 
 function readPrimaryItemId(data: Uint8Array, start: number, end: number) {
