@@ -11,11 +11,12 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-mc/media-container build",
-    "build": "tsc -p tsconfig.json",
-    "pretypecheck": "pnpm --filter @browser-mc/media-container build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm build && node --test test/*.test.mjs && node test/smoke.mjs"
+    "build": "pnpm --filter @browser-mc/exif-transplant... build:package",
+    "build:package": "tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter @browser-mc/exif-transplant... typecheck:package",
+    "typecheck:package": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && pnpm test:package",
+    "test:package": "node --test test/*.test.mjs && node test/smoke.mjs"
   },
   "dependencies": {
     "@browser-mc/binary": "workspace:^",

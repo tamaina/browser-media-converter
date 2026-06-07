@@ -1,5 +1,11 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.1.1
+
+### Patch Changes
+
+- Preserve transparency when converting non-JPEG images to AVIF.
+
 ## 0.1.0
 
 ### Minor Changes

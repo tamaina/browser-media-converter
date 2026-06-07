@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -51,8 +52,32 @@ const avifBytes = await page.evaluate(async ({ imageBase64, moduleUrl }) => {
   bitmap.close();
   return [...avif];
 }, { imageBase64, moduleUrl });
+
+const alphaCheck = await page.evaluate(async ({ moduleUrl }) => {
+  const { encodeImageToAvif } = await import(moduleUrl);
+  const canvas = new OffscreenCanvas(2, 1);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create canvas context');
+  const image = context.createImageData(2, 1);
+  image.data.set([
+    255, 0, 0, 0,
+    0, 255, 0, 255,
+  ]);
+  context.putImageData(image, 0, 0);
+  const avif = await encodeImageToAvif(canvas, { quality: 0.9, alpha: 'keep' });
+  const bitmap = await createImageBitmap(new Blob([avif], { type: 'image/avif' }));
+  const decoded = new OffscreenCanvas(2, 1);
+  const decodedContext = decoded.getContext('2d');
+  if (!decodedContext) throw new Error('Could not create decoded canvas context');
+  decodedContext.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return [...decodedContext.getImageData(0, 0, 2, 1).data];
+}, { moduleUrl });
+
 await browser.close();
 server.close();
 
 await writeFile(output, Buffer.from(avifBytes));
+assert.ok(alphaCheck[3] < 32, `expected first pixel alpha to stay transparent, got ${alphaCheck[3]}`);
+assert.ok(alphaCheck[7] > 224, `expected second pixel alpha to stay opaque, got ${alphaCheck[7]}`);
 console.log(`wrote ${output} (${avifBytes.length} bytes)`);

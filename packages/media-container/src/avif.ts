@@ -7,6 +7,7 @@ export type EncodedStillAv1 = {
   av1Config: Uint8Array;
   width: number;
   height: number;
+  alpha?: EncodedStillAv1;
 };
 
 export type AvifMetadataItem = {
@@ -30,33 +31,41 @@ export function muxStillAvif(encoded: EncodedStillAv1, options: MuxStillAvifOpti
   if (sequence.monochrome) throw new Error('Monochrome AVIF output is not supported yet');
   if (sequence.bitDepth !== 8 && sequence.bitDepth !== 10 && sequence.bitDepth !== 12) throw new Error(`Unsupported AV1 bit depth: ${sequence.bitDepth}`);
   const imageItemId = 1;
+  const alphaItemId = encoded.alpha ? 2 : null;
   const metadata = options.metadata ?? [];
-  const itemData = [encoded.chunk, ...metadata.map((item) => item.data)];
+  const encodedItems = encoded.alpha ? [encoded, encoded.alpha] : [encoded];
+  const itemData = [...encodedItems.map((item) => item.chunk), ...metadata.map((item) => item.data)];
   const metadataItems = metadata.map((item, index) => ({
     ...item,
-    id: imageItemId + index + 1,
+    id: imageItemId + encodedItems.length + index,
     offset: 0,
   }));
-  const meta = makeMetaBox(encoded, imageItemId, 0, sequence, metadataItems);
+  const meta = makeMetaBox(encoded, imageItemId, alphaItemId, 0, sequence, metadataItems);
   const ftyp = makeFtypBox(encoded, sequence);
   const mdatPayload = concat(itemData);
   const mdat = box('mdat', mdatPayload);
   let offset = ftyp.length + meta.length + 8;
   const fixedMetadataItems = metadataItems.map((item, index) => {
-    offset += index === 0 ? encoded.chunk.length : metadata[index - 1].data.length;
+    offset += index === 0 ? encodedItems.reduce((sum, encodedItem) => sum + encodedItem.chunk.length, 0) : metadata[index - 1].data.length;
     return { ...item, offset };
   });
-  const fixedMeta = makeMetaBox(encoded, imageItemId, ftyp.length + meta.length + 8, sequence, fixedMetadataItems);
+  const fixedMeta = makeMetaBox(encoded, imageItemId, alphaItemId, ftyp.length + meta.length + 8, sequence, fixedMetadataItems);
   return concat([ftyp, fixedMeta, mdat]);
 }
 
 function makeMetaBox(
   encoded: EncodedStillAv1,
   imageItemId: number,
+  alphaItemId: number | null,
   dataOffset: number,
   sequence: SequenceHeaderInfo,
   metadataItems: Array<AvifMetadataItem & { id: number; offset: number }> = [],
 ) {
+  const alphaSequenceHeaderObu = encoded.alpha ? findSequenceHeaderObu(encoded.alpha.chunk) : null;
+  const alphaSequence = alphaSequenceHeaderObu ? parseSequenceHeaderObu(alphaSequenceHeaderObu) : null;
+  const encodedItems = encoded.alpha ? [encoded, encoded.alpha] : [encoded];
+  const itemCount = encodedItems.length + metadataItems.length;
+  const alphaOffset = dataOffset + encoded.chunk.length;
   return fullBox('meta', 0, 0,
     fullBox('hdlr', 0, 0,
       u32(0),
@@ -67,18 +76,25 @@ function makeMetaBox(
     fullBox('pitm', 0, 0, u16(imageItemId)),
     fullBox('iloc', 0, 0,
       new Uint8Array([0x44, 0x00]),
-      u16(1 + metadataItems.length),
+      u16(itemCount),
       makeIlocItem(imageItemId, dataOffset, encoded.chunk.length),
+      encoded.alpha && alphaItemId ? makeIlocItem(alphaItemId, alphaOffset, encoded.alpha.chunk.length) : [],
       metadataItems.map((item) => makeIlocItem(item.id, item.offset, item.data.length)),
     ),
     fullBox('iinf', 0, 0,
-      u16(1 + metadataItems.length),
+      u16(itemCount),
       fullBox('infe', 2, 0,
         u16(imageItemId),
         u16(0),
         ascii('av01'),
         cstr('Color'),
       ),
+      encoded.alpha && alphaItemId ? fullBox('infe', 2, 0,
+        u16(alphaItemId),
+        u16(0),
+        ascii('av01'),
+        cstr('Alpha'),
+      ) : [],
       metadataItems.map((item) => fullBox('infe', 2, 0,
         u16(item.id),
         u16(0),
@@ -86,9 +102,10 @@ function makeMetaBox(
         cstr(item.name ?? item.type),
       )),
     ),
-    metadataItems.length === 0
+    metadataItems.length === 0 && !alphaItemId
       ? []
       : fullBox('iref', 0, 0,
+        alphaItemId ? box('auxl', u16(alphaItemId), u16(1), u16(imageItemId)) : [],
         metadataItems.map((item) => box('cdsc', u16(item.id), u16(1), u16(imageItemId))),
       ),
     box('iprp',
@@ -97,11 +114,18 @@ function makeMetaBox(
         fullBox('pixi', 0, 0, new Uint8Array([sequence.monochrome ? 1 : 3, ...Array(sequence.monochrome ? 1 : 3).fill(sequence.bitDepth)])),
         box('av1C', encoded.av1Config),
         makeColrBox(sequence),
+        encoded.alpha ? box('av1C', encoded.alpha.av1Config) : [],
+        alphaSequence ? fullBox('pixi', 0, 0, new Uint8Array([alphaSequence.monochrome ? 1 : 3, ...Array(alphaSequence.monochrome ? 1 : 3).fill(alphaSequence.bitDepth)])) : [],
+        alphaSequence ? fullBox('auxC', 0, 0, cstr('urn:mpeg:mpegB:cicp:systems:auxiliary:alpha')) : [],
       ),
       fullBox('ipma', 0, 0,
-        u32(1),
+        u32(encoded.alpha && alphaItemId ? 2 : 1),
         u16(imageItemId),
         new Uint8Array([4, 0x81, 0x02, 0x03, 0x04]),
+        encoded.alpha && alphaItemId ? [
+          u16(alphaItemId),
+          new Uint8Array([4, 0x85, 0x01, 0x06, 0x87]),
+        ] : [],
       ),
     ),
   );

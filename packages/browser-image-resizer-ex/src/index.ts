@@ -146,6 +146,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
       const encoded = await encodeFrame(resized.frame, outputMime, {
         quality: options.quality,
         avif: options.avif,
+        preserveAlpha: inputMime !== 'image/jpeg',
       });
       const withExif = applyExifPolicy(encoded, outputMime, sourceExif, exifPolicy);
       const blob = new Blob([copyArrayBuffer(withExif)], { type: outputMime });
@@ -211,11 +212,13 @@ function defaultOutputMime(inputMime: string, inputInfo?: Pick<ImageInputInspect
 async function encodeFrame(
   frame: VideoFrame,
   mime: BrowserImageOutputMime,
-  options: { quality?: number; avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'> },
+  options: { quality?: number; avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>; preserveAlpha?: boolean },
 ) {
   if (mime === 'image/avif') {
+    const alpha = options.avif?.alpha ?? (options.preserveAlpha ? 'keep' : 'discard');
     return encodeImageToAvif(frame, {
       ...options.avif,
+      alpha,
       width: frame.displayWidth,
       height: frame.displayHeight,
       quality: options.quality,

@@ -11,10 +11,10 @@
     }
   },
   "scripts": {
-    "prebuild": "pnpm --filter @browser-mc/binary build",
-    "build": "tsc -p tsconfig.json",
-    "pretypecheck": "pnpm --filter @browser-mc/binary build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "pnpm --filter @browser-mc/webcodecs-color... build:package",
+    "build:package": "tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter @browser-mc/webcodecs-color... typecheck:package",
+    "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },

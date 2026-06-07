@@ -4,10 +4,10 @@
   "type": "module",
   "packageManager": "pnpm@11.4.0",
   "scripts": {
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r --sort build:package",
+    "typecheck": "pnpm build && pnpm -r --sort typecheck:package",
     "lint": "eslint .",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --sort --if-present test:package",
     "test:electron": "pnpm -r --if-present test:electron && pnpm --filter @browser-mc/browser-movie-converter test:hls:electron",
     "changeset": "changeset",
     "version-packages": "changeset version",
