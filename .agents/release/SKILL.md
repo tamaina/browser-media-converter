@@ -27,6 +27,6 @@ Use this workflow when preparing and publishing package changes from this reposi
 
 ## Notes
 
-- `.github/workflows/release.yml` currently packs and stages `@browser-mc/browser-image-resizer-ex`.
-- If the package set changes, update the workflow before releasing.
+- `.github/workflows/release.yml` stages release packages in dependency order and skips versions already published to npm.
+- If the package set changes, update the workflow package list before releasing.
 - If Actions fails, fix the repository state and push another commit instead of trying to publish manually.

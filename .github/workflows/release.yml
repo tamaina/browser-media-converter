@@ -46,8 +46,24 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Pack browser-image-resizer-ex
-        run: pnpm --filter @browser-mc/browser-image-resizer-ex pack --pack-destination .npm-pack
-
-      - name: Stage browser-image-resizer-ex
-        run: npm stage publish .npm-pack/*.tgz --access public
+      - name: Stage packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(
+            packages/media-container
+            packages/webcodecs-avif
+            packages/browser-image-resizer-ex
+          )
+          mkdir -p .npm-pack
+          for package_dir in "${packages[@]}"; do
+            name="$(node -p "require('./${package_dir}/package.json').name")"
+            version="$(node -p "require('./${package_dir}/package.json').version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "Skipping ${name}@${version}; already published."
+              continue
+            fi
+            rm -f .npm-pack/*.tgz
+            pnpm --filter "${name}" pack --pack-destination .npm-pack
+            npm stage publish .npm-pack/*.tgz --access public
+          done
