@@ -7,9 +7,13 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@eslint/js": "^9.39.1",
     "@misskey-dev/eslint-plugin": "^2.2.1",
     "@types/node": "^24.10.1",

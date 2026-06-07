@@ -20,8 +20,15 @@
     "test:hls:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/hls-electron-smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/mediabunny-scene-keyframes": "workspace:*",
-    "@browser-avif-lab/webcodecs-color": "workspace:*",
+    "@browser-avif-lab/mediabunny-scene-keyframes": "workspace:^",
+    "@browser-avif-lab/webcodecs-color": "workspace:^",
     "mediabunny": "^1.46.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

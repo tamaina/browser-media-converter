@@ -19,10 +19,17 @@
     "test": "pnpm build"
   },
   "dependencies": {
-    "@browser-avif-lab/binary": "workspace:*",
-    "@browser-avif-lab/exif-transplant": "workspace:*",
-    "@browser-avif-lab/media-container": "workspace:*",
-    "@browser-avif-lab/webcodecs-avif": "workspace:*",
-    "@browser-avif-lab/webcodecs-color": "workspace:*"
+    "@browser-avif-lab/binary": "workspace:^",
+    "@browser-avif-lab/exif-transplant": "workspace:^",
+    "@browser-avif-lab/media-container": "workspace:^",
+    "@browser-avif-lab/webcodecs-avif": "workspace:^",
+    "@browser-avif-lab/webcodecs-color": "workspace:^"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

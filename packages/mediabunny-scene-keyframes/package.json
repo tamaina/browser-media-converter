@@ -18,5 +18,12 @@
   },
   "dependencies": {
     "mediabunny": "^1.46.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -19,6 +19,13 @@
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/binary": "workspace:*"
+    "@browser-avif-lab/binary": "workspace:^"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

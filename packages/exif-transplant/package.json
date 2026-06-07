@@ -18,7 +18,14 @@
     "test": "pnpm build && node --test test/tiff.test.mjs && node test/smoke.mjs"
   },
   "dependencies": {
-    "@browser-avif-lab/binary": "workspace:*",
-    "@browser-avif-lab/media-container": "workspace:*"
+    "@browser-avif-lab/binary": "workspace:^",
+    "@browser-avif-lab/media-container": "workspace:^"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

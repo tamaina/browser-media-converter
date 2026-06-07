@@ -31,6 +31,18 @@ pnpm --filter @browser-avif-lab/browser-movie-converter test:hls:electron
 
 `P2180334.jpg` is used by the AVIF smoke script when present; otherwise it falls back to `fujioka.jpg`.
 
+## Releases
+
+This monorepo uses Changesets for independent package versions.
+
+```sh
+pnpm changeset
+```
+
+Add a changeset in the feature PR for every package that should receive a patch, minor, or major release. After the PR lands on `main`, the release workflow opens a Version Packages PR. Merging that PR publishes the changed packages to npm with provenance.
+
+Internal workspace dependencies should use `workspace:^`; Changesets rewrites them to npm semver ranges during publishing. Package tarballs include only `dist` and `README.md`.
+
 ## Electron verification
 
 The local browser runtime for H.264/AAC WebCodecs smoke tests is Electron's Chromium build.
