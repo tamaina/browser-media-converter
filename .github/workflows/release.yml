@@ -66,5 +66,13 @@ jobs:
             fi
             rm -f .npm-pack/*.tgz
             pnpm --filter "${name}" pack --pack-destination .npm-pack
-            npm stage publish .npm-pack/*.tgz --access public
+            if ! stage_output="$(npm stage publish .npm-pack/*.tgz --access public 2>&1)"; then
+              echo "${stage_output}"
+              if grep -q "Cannot stage previously published version" <<<"${stage_output}"; then
+                echo "Skipping ${name}@${version}; already staged."
+                continue
+              fi
+              exit 1
+            fi
+            echo "${stage_output}"
           done
