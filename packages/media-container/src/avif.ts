@@ -3,7 +3,7 @@ import { box, fullBox } from './isobmff.js';
 
 export type EncodedStillAv1 = {
   chunk: Uint8Array;
-  decoderConfig: VideoDecoderConfig;
+  decoderConfig: VideoDecoderConfig & { colorSpace?: VideoColorSpaceInit };
   av1Config: Uint8Array;
   width: number;
   height: number;
@@ -113,7 +113,7 @@ function makeMetaBox(
         fullBox('ispe', 0, 0, u32(encoded.width), u32(encoded.height)),
         fullBox('pixi', 0, 0, new Uint8Array([sequence.monochrome ? 1 : 3, ...Array(sequence.monochrome ? 1 : 3).fill(sequence.bitDepth)])),
         box('av1C', encoded.av1Config),
-        makeColrBox(sequence),
+        makeColrBox(sequence, encoded.decoderConfig.colorSpace),
         encoded.alpha ? box('av1C', encoded.alpha.av1Config) : [],
         alphaSequence ? fullBox('pixi', 0, 0, new Uint8Array([alphaSequence.monochrome ? 1 : 3, ...Array(alphaSequence.monochrome ? 1 : 3).fill(alphaSequence.bitDepth)])) : [],
         alphaSequence ? fullBox('auxC', 0, 0, cstr('urn:mpeg:mpegB:cicp:systems:auxiliary:alpha')) : [],
@@ -157,14 +157,62 @@ function isAvifBaselineCompatible(encoded: EncodedStillAv1, sequence: SequenceHe
     && (sequence.bitDepth === 8 || sequence.bitDepth === 10);
 }
 
-function makeColrBox(sequence: SequenceHeaderInfo) {
+function makeColrBox(sequence: SequenceHeaderInfo, colorSpace?: VideoColorSpaceInit) {
+  const color = colorSpace ? videoColorSpaceToNclx(colorSpace) : null;
   return box('colr',
     ascii('nclx'),
-    u16(sequence.colorPrimaries),
-    u16(sequence.transferCharacteristics),
-    u16(sequence.matrixCoefficients),
-    new Uint8Array([sequence.colorRange ? 0x80 : 0x00]),
+    u16(color?.primaries ?? sequence.colorPrimaries),
+    u16(color?.transfer ?? sequence.transferCharacteristics),
+    u16(color?.matrix ?? sequence.matrixCoefficients),
+    new Uint8Array([(color?.fullRange ?? sequence.colorRange) ? 0x80 : 0x00]),
   );
+}
+
+function videoColorSpaceToNclx(colorSpace: VideoColorSpaceInit) {
+  const primaries = colorPrimariesToCicp(colorSpace.primaries);
+  const transfer = transferCharacteristicsToCicp(colorSpace.transfer);
+  const matrix = matrixCoefficientsToCicp(colorSpace.matrix);
+  if (primaries === null && transfer === null && matrix === null && colorSpace.fullRange === undefined) return null;
+  return {
+    primaries: primaries ?? 2,
+    transfer: transfer ?? 2,
+    matrix: matrix ?? 2,
+    fullRange: colorSpace.fullRange ?? false,
+  };
+}
+
+function colorPrimariesToCicp(value: VideoColorPrimaries | null | undefined) {
+  switch (String(value ?? '')) {
+    case 'bt709': return 1;
+    case 'bt470bg': return 5;
+    case 'smpte170m': return 6;
+    case 'bt2020': return 9;
+    case 'smpte432': return 12;
+    default: return null;
+  }
+}
+
+function transferCharacteristicsToCicp(value: VideoTransferCharacteristics | null | undefined) {
+  switch (String(value ?? '')) {
+    case 'bt709': return 1;
+    case 'smpte170m': return 6;
+    case 'iec61966-2-1': return 13;
+    case 'pq':
+    case 'smpte2084': return 16;
+    case 'hlg':
+    case 'arib-std-b67': return 18;
+    default: return null;
+  }
+}
+
+function matrixCoefficientsToCicp(value: VideoMatrixCoefficients | null | undefined) {
+  switch (String(value ?? '')) {
+    case 'rgb': return 0;
+    case 'bt709': return 1;
+    case 'smpte170m': return 6;
+    case 'bt2020-ncl': return 9;
+    default: return null;
+  }
 }
 
 type SequenceHeaderInfo = ReturnType<typeof parseSequenceHeaderObu>;

@@ -52,6 +52,7 @@ jobs:
           set -euo pipefail
           packages=(
             packages/media-container
+            packages/exif-transplant
             packages/webcodecs-avif
             packages/browser-image-resizer-ex
           )

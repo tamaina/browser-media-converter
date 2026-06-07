@@ -17,6 +17,8 @@ await fetch('/upload', {
 });
 ```
 
+`encodeImageToAvif` defaults to AV1 4:4:4 chroma (`chromaSubsampling: '444'`). Pass `chromaSubsampling: '420'` when smaller 4:2:0 output or broader baseline-style compatibility is preferred.
+
 ## Mux An Existing AV1 Still Frame
 
 ```ts
@@ -62,7 +64,7 @@ node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 ## Notes
 
 - Requires WebCodecs for encoding/decoding.
-- Alpha is rejected until auxiliary alpha item muxing is implemented.
+- Alpha can be kept with `alpha: 'keep'`, which writes an auxiliary alpha AVIF item.
 - The muxer writes a minimal still-image AVIF and does not preserve arbitrary source AVIF boxes.
-- `av1C`, `pixi`, and `colr` are derived from the AV1 Sequence Header OBU. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
+- `av1C` and `pixi` are derived from the AV1 Sequence Header OBU. `colr` uses source `VideoFrame.colorSpace` metadata when available, then falls back to the AV1 Sequence Header. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
 - Container-specific mux helpers live in `@browser-mc/media-container`; this package re-exports the AVIF helpers for convenience.

@@ -1,5 +1,12 @@
 # @browser-mc/exif-transplant
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @browser-mc/media-container@0.2.0
+
 ## 0.0.1
 
 ### Patch Changes

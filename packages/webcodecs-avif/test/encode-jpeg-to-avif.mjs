@@ -9,6 +9,7 @@ import { chromium } from 'playwright';
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const input = resolve(root, process.argv[2] ?? 'P2180334.jpg');
 const fallback = resolve(root, 'fujioka.jpg');
+const hdrInput = resolve(root, 'hdrrec2020.avif');
 const outputDir = resolve(root, 'playground-output');
 const output = resolve(outputDir, 'webcodecs.avif');
 const imageBytes = await readFile(input).catch(() => readFile(fallback));
@@ -33,6 +34,11 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/dist/index.js') {
     response.setHeader('content-type', 'text/javascript');
     response.end(await readFile(smokeBundle));
+    return;
+  }
+  if (url.pathname === '/hdrrec2020.avif') {
+    response.setHeader('content-type', 'image/avif');
+    response.end(await readFile(hdrInput));
     return;
   }
   response.setHeader('content-type', 'text/html');
@@ -74,10 +80,67 @@ const alphaCheck = await page.evaluate(async ({ moduleUrl }) => {
   return [...decodedContext.getImageData(0, 0, 2, 1).data];
 }, { moduleUrl });
 
+const chromaCheck = await page.evaluate(async ({ moduleUrl }) => {
+  const { encodeImageToAv1 } = await import(moduleUrl);
+  const canvas = new OffscreenCanvas(2, 2);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create canvas context');
+  context.fillStyle = '#123456';
+  context.fillRect(0, 0, 2, 2);
+  const defaultAv1 = await encodeImageToAv1(canvas, { quality: 0.9 });
+  const yuv420Av1 = await encodeImageToAv1(canvas, { quality: 0.9, chromaSubsampling: '420' });
+  return {
+    defaultCodec: defaultAv1.decoderConfig.codec,
+    defaultAv1Config: [...defaultAv1.av1Config.slice(0, 4)],
+    yuv420Codec: yuv420Av1.decoderConfig.codec,
+    yuv420Av1Config: [...yuv420Av1.av1Config.slice(0, 4)],
+  };
+}, { moduleUrl });
+
+const hdrCheck = await page.evaluate(async ({ moduleUrl, port }) => {
+  const { encodeImageToAvif } = await import(moduleUrl);
+  const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
+  const inputDecoder = new ImageDecoder({
+    data: input,
+    type: 'image/avif',
+    colorSpaceConversion: 'none',
+  });
+  const inputFrame = (await inputDecoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+  const inputColorSpace = inputFrame.colorSpace.toJSON();
+  const inputFormat = inputFrame.format;
+  const avif = await encodeImageToAvif(inputFrame, { quality: 0.72 });
+  inputFrame.close();
+  inputDecoder.close();
+
+  const outputDecoder = new ImageDecoder({
+    data: avif,
+    type: 'image/avif',
+    colorSpaceConversion: 'none',
+  });
+  const outputFrame = (await outputDecoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+  const outputColorSpace = outputFrame.colorSpace.toJSON();
+  const outputFormat = outputFrame.format;
+  outputFrame.close();
+  outputDecoder.close();
+  return {
+    inputColorSpace,
+    inputFormat,
+    outputColorSpace,
+    outputFormat,
+  };
+}, { moduleUrl, port });
+
 await browser.close();
 server.close();
 
 await writeFile(output, Buffer.from(avifBytes));
 assert.ok(alphaCheck[3] < 32, `expected first pixel alpha to stay transparent, got ${alphaCheck[3]}`);
 assert.ok(alphaCheck[7] > 224, `expected second pixel alpha to stay opaque, got ${alphaCheck[7]}`);
+assert.match(chromaCheck.defaultCodec, /^av01\.1\./);
+assert.equal(chromaCheck.defaultAv1Config[2] & 0x0c, 0, 'expected default AVIF encode to use 4:4:4 chroma');
+assert.match(chromaCheck.yuv420Codec, /^av01\.0\./);
+assert.equal(chromaCheck.yuv420Av1Config[2] & 0x0c, 0x0c, 'expected chromaSubsampling: 420 to use 4:2:0 chroma');
+assert.equal(hdrCheck.outputColorSpace.primaries, hdrCheck.inputColorSpace.primaries);
+assert.equal(hdrCheck.outputColorSpace.transfer, hdrCheck.inputColorSpace.transfer);
+assert.equal(hdrCheck.outputColorSpace.matrix, hdrCheck.inputColorSpace.matrix);
 console.log(`wrote ${output} (${avifBytes.length} bytes)`);
