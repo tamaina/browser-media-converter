@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-avif
 
+## 0.3.0
+
+### Minor Changes
+
+- Add browser capability helpers for AVIF encoding and image decode checks, including `VideoEncoder.isConfigSupported()` based AVIF variant detection.
+
 ## 0.2.0
 
 ### Minor Changes

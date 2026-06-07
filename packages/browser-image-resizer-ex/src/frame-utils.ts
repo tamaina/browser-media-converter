@@ -30,6 +30,8 @@ export type DecodeImageFrameOptions = {
   preferAnimation?: boolean;
 };
 
+export type InspectImageTrackOptions = Pick<DecodeImageFrameOptions, 'colorSpaceConversion' | 'preferAnimation'>;
+
 export type ImageInputInspection = {
   animated: boolean;
   frameCount: number;
@@ -59,7 +61,7 @@ export async function createImageDecoder(
 export async function inspectImageTrack(
   input: Blob | ArrayBuffer | Uint8Array,
   type: string,
-  options: Pick<DecodeImageFrameOptions, 'colorSpaceConversion'> = {},
+  options: InspectImageTrackOptions = {},
 ): Promise<ImageInputInspection> {
   if (typeof ImageDecoder === 'undefined') {
     return { animated: false, frameCount: 1, repetitionCount: 0, decoder: 'fallback' };
@@ -67,7 +69,7 @@ export async function inspectImageTrack(
 
   const decoder = await createImageDecoder(input, type, {
     colorSpaceConversion: options.colorSpaceConversion,
-    preferAnimation: true,
+    preferAnimation: options.preferAnimation ?? true,
   });
   try {
     const track = decoder.tracks.selectedTrack;

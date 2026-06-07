@@ -28,9 +28,79 @@ export type EncodeAvifOptions = {
   alpha?: 'discard' | 'keep';
 };
 
+export type AvifEncodeSupportOptions = {
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  alpha?: 'discard' | 'keep';
+};
+
+export type AvifEncodeSupport = {
+  supported: boolean;
+  variants: {
+    yuv444: { bit8: boolean; bit10: boolean };
+    yuv420: { bit8: boolean; bit10: boolean };
+  };
+  preferredCodec: string | null;
+  error: { name: string; message: string } | null;
+};
+
 type ColorManagedVideoDecoderConfig = VideoDecoderConfig & {
   colorSpace?: VideoColorSpaceInit;
 };
+
+export async function checkAvifEncodeSupport(options: AvifEncodeSupportOptions = {}): Promise<AvifEncodeSupport> {
+  if (typeof VideoEncoder === 'undefined') {
+    return {
+      supported: false,
+      variants: {
+        yuv444: { bit8: false, bit10: false },
+        yuv420: { bit8: false, bit10: false },
+      },
+      preferredCodec: null,
+      error: { name: 'Error', message: 'VideoEncoder API is not available in this environment' },
+    };
+  }
+
+  try {
+    const [yuv444Bit8, yuv444Bit10, yuv420Bit8, yuv420Bit10] = await Promise.all([
+      isAvifCodecSupported(codecForSubsampling('444', 8), options),
+      isAvifCodecSupported(codecForSubsampling('444', 10), options),
+      isAvifCodecSupported(codecForSubsampling('420', 8), options),
+      isAvifCodecSupported(codecForSubsampling('420', 10), options),
+    ]);
+    const preferredCodec = yuv444Bit8
+      ? codecForSubsampling('444', 8)
+      : yuv420Bit8
+        ? codecForSubsampling('420', 8)
+        : yuv444Bit10
+          ? codecForSubsampling('444', 10)
+          : yuv420Bit10
+            ? codecForSubsampling('420', 10)
+            : null;
+    return {
+      supported: preferredCodec !== null,
+      variants: {
+        yuv444: { bit8: yuv444Bit8, bit10: yuv444Bit10 },
+        yuv420: { bit8: yuv420Bit8, bit10: yuv420Bit10 },
+      },
+      preferredCodec,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      variants: {
+        yuv444: { bit8: false, bit10: false },
+        yuv420: { bit8: false, bit10: false },
+      },
+      preferredCodec: null,
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: 'Error', message: String(error) },
+    };
+  }
+}
 
 export async function encodeImageToAv1(source: CanvasImageSource | VideoFrame, options: EncodeAvifOptions = {}): Promise<EncodedStillAv1> {
   assertWebCodecs();
@@ -181,6 +251,19 @@ async function supportedEncoderConfig(config: VideoEncoderConfig, allowEightBitF
     ...config,
     codec: config.codec.replace(/\.10(?=$|[.])/u, '.08'),
   });
+}
+
+async function isAvifCodecSupported(codec: string, options: AvifEncodeSupportOptions) {
+  const support = await VideoEncoder.isConfigSupported({
+    codec,
+    width: options.width ?? 2,
+    height: options.height ?? 2,
+    bitrate: options.bitrate ?? 80_000,
+    framerate: 1,
+    alpha: options.alpha ?? 'discard',
+    latencyMode: 'quality',
+  });
+  return support.supported === true;
 }
 
 function preferredCodecForSource(source: CanvasImageSource | VideoFrame, chromaSubsampling: EncodeAvifOptions['chromaSubsampling']) {

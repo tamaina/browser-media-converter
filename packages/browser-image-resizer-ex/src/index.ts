@@ -6,7 +6,12 @@ import {
   type ExifPayload,
   type ImageMime,
 } from '@browser-mc/exif-transplant';
-import { encodeImageToAvif, type EncodeAvifOptions } from '@browser-mc/webcodecs-avif';
+import {
+  checkAvifEncodeSupport,
+  encodeImageToAvif,
+  type AvifEncodeSupport,
+  type EncodeAvifOptions,
+} from '@browser-mc/webcodecs-avif';
 import {
   copyArrayBuffer,
   decodeFirstImageFrame,
@@ -90,6 +95,103 @@ export type BrowserImageResizerResult = {
 
 export type BrowserImageConversionResult = BrowserImageResizerResult | BrowserAnimatedImageResizerResult;
 
+export type BrowserImageResizerSupport = {
+  imageDecoder: boolean;
+  imageEncoder: {
+    jpeg: boolean;
+    webp: boolean;
+  };
+  webCodecs: {
+    videoFrame: boolean;
+    videoEncoder: boolean;
+    videoDecoder: boolean;
+  };
+  canvas: {
+    offscreenCanvas: boolean;
+    convertToBlob: boolean;
+    colorSpace2d: boolean;
+  };
+};
+
+export type BrowserImageResizerSupportResult = BrowserImageResizerSupport & {
+  imageEncoder: BrowserImageResizerSupport['imageEncoder'] & {
+    avif: AvifEncodeSupport;
+  };
+};
+
+export type BrowserImageDecodeSupportResult = {
+  supported: boolean;
+  mime: string;
+  animated: boolean | null;
+  frameCount: number | null;
+  error: { name: string; message: string } | null;
+};
+
+export function getBrowserImageResizerSupport(): BrowserImageResizerSupport {
+  const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : null;
+  const context = canvas?.getContext('2d', { colorSpace: 'srgb' });
+  return {
+    imageDecoder: typeof ImageDecoder !== 'undefined',
+    imageEncoder: {
+      jpeg: canCanvasEncode('image/jpeg'),
+      webp: canCanvasEncode('image/webp'),
+    },
+    webCodecs: {
+      videoFrame: typeof VideoFrame !== 'undefined',
+      videoEncoder: typeof VideoEncoder !== 'undefined',
+      videoDecoder: typeof VideoDecoder !== 'undefined',
+    },
+    canvas: {
+      offscreenCanvas: typeof OffscreenCanvas !== 'undefined',
+      convertToBlob: typeof OffscreenCanvas !== 'undefined' && typeof OffscreenCanvas.prototype.convertToBlob === 'function',
+      colorSpace2d: context !== null,
+    },
+  };
+}
+
+export async function getBrowserImageResizerSupportWithAvif(): Promise<BrowserImageResizerSupportResult> {
+  const support = getBrowserImageResizerSupport();
+  return {
+    ...support,
+    imageEncoder: {
+      ...support.imageEncoder,
+      avif: await checkAvifEncodeSupport(),
+    },
+  };
+}
+
+export async function checkImageDecodeSupport(
+  input: Blob | ArrayBuffer | Uint8Array,
+  inputMime?: string,
+  options: Pick<BrowserImageResizerOptions, 'colorSpaceConversion' | 'animation'> = {},
+): Promise<BrowserImageDecodeSupportResult> {
+  const inputBytes = await toUint8Array(input);
+  const mime = inputMime ?? detectInputMime(inputBytes, input);
+  try {
+    const inspection = await inspectImageTrack(inputBytes, mime, {
+      colorSpaceConversion: options.colorSpaceConversion ?? 'none',
+      preferAnimation: (options.animation ?? 'preserve') !== 'first-frame',
+    });
+    return {
+      supported: true,
+      mime,
+      animated: inspection.animated,
+      frameCount: inspection.frameCount,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      mime,
+      animated: null,
+      frameCount: null,
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: 'Error', message: String(error) },
+    };
+  }
+}
+
 export async function inspectImageInput(
   input: Blob | ArrayBuffer | Uint8Array,
   inputMime?: string,
@@ -110,6 +212,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
   const inputMime = options.inputMime ?? detectInputMime(inputBytes, options.input);
   const inputInfo = await inspectImageTrack(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
+    preferAnimation: (options.animation ?? 'preserve') !== 'first-frame',
   });
   const outputMime = options.outputMime ?? defaultOutputMime(inputMime, inputInfo);
   if (inputInfo.animated && (options.animation ?? 'preserve') !== 'first-frame') {
@@ -231,4 +334,10 @@ function applyExifPolicy(data: Uint8Array, mime: ImageMime, sourceExif: ExifPayl
   if (policy === 'drop' || !sourceExif) return data;
   const exifBytes = policy === 'drop-gps' ? stripGpsFromExif(sourceExif.bytes) : sourceExif.bytes;
   return writeExif(data, exifBytes, mime);
+}
+
+function canCanvasEncode(type: string) {
+  return typeof OffscreenCanvas !== 'undefined'
+    && typeof OffscreenCanvas.prototype.convertToBlob === 'function'
+    && type.startsWith('image/');
 }

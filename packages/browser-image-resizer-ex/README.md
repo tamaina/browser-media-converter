@@ -60,6 +60,25 @@ if (result.kind === 'animated') {
 
 `resizeAndConvertImage` detects animated input with `ImageDecoder`. Animated input is preserved as animated WebP by default because animated WebP is currently the only animated output muxer. Use `animation: 'first-frame'` to force still-image conversion.
 
+## Feature checks
+
+```ts
+import { checkImageDecodeSupport, getBrowserImageResizerSupportWithAvif } from '@browser-mc/browser-image-resizer-ex';
+
+const support = await getBrowserImageResizerSupportWithAvif();
+console.log(support.imageDecoder, support.imageEncoder.avif.variants.yuv444.bit8);
+
+const decode = await checkImageDecodeSupport(file, file.type, {
+  animation: 'first-frame',
+});
+
+if (!decode.supported) {
+  console.log(decode.error);
+}
+```
+
+`checkImageDecodeSupport` runs the same input track check used by conversion and returns errors instead of throwing. Passing `animation: 'first-frame'` checks still-frame decoding with `preferAnimation: false`.
+
 ## Animated WebP
 
 ```ts

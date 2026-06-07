@@ -1,5 +1,16 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.4.0
+
+### Minor Changes
+
+- Add browser capability helpers for AVIF encoding and image decode checks, including `VideoEncoder.isConfigSupported()` based AVIF variant detection.
+
+### Patch Changes
+
+- Updated dependencies
+  - @browser-mc/webcodecs-avif@0.3.0
+
 ## 0.3.0
 
 ### Minor Changes

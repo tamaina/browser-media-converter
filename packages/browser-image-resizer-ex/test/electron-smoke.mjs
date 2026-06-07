@@ -28,6 +28,11 @@ const server = createServer(async (request, response) => {
     response.end(await readFile(smokeBundle));
     return;
   }
+  if (url.pathname === '/hdrrec2020.avif') {
+    response.setHeader('content-type', 'image/avif');
+    response.end(await readFile(resolve(root, 'hdrrec2020.avif')));
+    return;
+  }
   response.setHeader('content-type', 'text/html');
   response.end('<!doctype html><meta charset="utf-8">');
 });
@@ -43,6 +48,9 @@ await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
   const {
+    checkImageDecodeSupport,
+    getBrowserImageResizerSupport,
+    getBrowserImageResizerSupportWithAvif,
     inspectImageInput,
     muxAnimatedWebp,
     resizeAndConvertImage,
@@ -125,6 +133,11 @@ const result = await page.evaluate(async ({ port }) => {
     quality: 0.75,
     colorMetadata: 'canvas-sdr',
   });
+  const support = getBrowserImageResizerSupport();
+  const checkedSupport = await getBrowserImageResizerSupportWithAvif();
+  const hdrAvif = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
+  const hdrAnimatedCheck = await checkImageDecodeSupport(hdrAvif, 'image/avif');
+  const hdrFirstFrameCheck = await checkImageDecodeSupport(hdrAvif, 'image/avif', { animation: 'first-frame' });
 
   return {
     animated: [...animated],
@@ -165,6 +178,12 @@ const result = await page.evaluate(async ({ port }) => {
       height: canvasSdrAnimated.height,
       frameCount: canvasSdrAnimated.frameCount,
       frames: canvasSdrAnimated.frames,
+    },
+    support,
+    checkedSupport,
+    hdrChecks: {
+      animated: hdrAnimatedCheck,
+      firstFrame: hdrFirstFrameCheck,
     },
   };
 }, { port });
@@ -209,6 +228,37 @@ assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 
 assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.inspection.colorSpace.primaries === 'bt709'));
 assert.equal(result.resized.frames.length, 2);
 assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'canvas'));
+assert.deepEqual(
+  result.support,
+  {
+    imageDecoder: true,
+    imageEncoder: {
+      jpeg: true,
+      webp: true,
+    },
+    webCodecs: {
+      videoFrame: true,
+      videoEncoder: true,
+      videoDecoder: true,
+    },
+    canvas: {
+      offscreenCanvas: true,
+      convertToBlob: true,
+      colorSpace2d: true,
+    },
+  },
+);
+assert.equal(result.checkedSupport.imageDecoder, result.support.imageDecoder);
+assert.deepEqual(result.checkedSupport.webCodecs, result.support.webCodecs);
+assert.deepEqual(result.checkedSupport.canvas, result.support.canvas);
+assert.equal(result.checkedSupport.imageEncoder.jpeg, result.support.imageEncoder.jpeg);
+assert.equal(result.checkedSupport.imageEncoder.webp, result.support.imageEncoder.webp);
+assert.equal(result.checkedSupport.imageEncoder.avif.supported, true);
+assert.equal(result.checkedSupport.imageEncoder.avif.variants.yuv444.bit8, true);
+assert.equal(result.hdrChecks.animated.supported, false);
+assert.equal(result.hdrChecks.animated.error?.message, 'Failed to retrieve track metadata.');
+assert.equal(result.hdrChecks.firstFrame.supported, true);
+assert.equal(result.hdrChecks.firstFrame.animated, false);
 
 await mkdir(outputDir, { recursive: true });
 await writeFile(resolve(outputDir, 'animated.webp'), Buffer.from(result.animated));
