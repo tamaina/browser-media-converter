@@ -53,8 +53,10 @@ jobs:
           packages=(
             packages/media-container
             packages/exif-transplant
+            packages/webcodecs-color
             packages/webcodecs-avif
             packages/browser-image-resizer-ex
+            packages/browser-movie-converter
           )
           mkdir -p .npm-pack
           for package_dir in "${packages[@]}"; do
