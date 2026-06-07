@@ -64,4 +64,5 @@ node packages/webcodecs-avif/test/encode-jpeg-to-avif.mjs
 - Requires WebCodecs for encoding/decoding.
 - Alpha is rejected until auxiliary alpha item muxing is implemented.
 - The muxer writes a minimal still-image AVIF and does not preserve arbitrary source AVIF boxes.
+- `av1C`, `pixi`, and `colr` are derived from the AV1 Sequence Header OBU. Profile compatibility brands are emitted only when the encoded image meets the matching AVIF profile constraints.
 - Container-specific mux helpers live in `@browser-avif-lab/media-container`; this package re-exports the AVIF helpers for convenience.
