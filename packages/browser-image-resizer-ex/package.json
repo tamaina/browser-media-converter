@@ -4,6 +4,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tamaina/browser-media-converter",
+    "directory": "packages/browser-image-resizer-ex"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
