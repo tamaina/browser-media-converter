@@ -1,0 +1,13 @@
+# @browser-mc/browser-image-resizer-ex
+
+## 0.0.1
+
+### Patch Changes
+
+- first release
+- Updated dependencies
+  - @browser-mc/binary@0.0.1
+  - @browser-mc/exif-transplant@0.0.1
+  - @browser-mc/media-container@0.0.1
+  - @browser-mc/webcodecs-avif@0.0.1
+  - @browser-mc/webcodecs-color@0.0.1
