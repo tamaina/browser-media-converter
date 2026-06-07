@@ -25,7 +25,8 @@
   },
   "dependencies": {
     "@browser-mc/binary": "workspace:^",
-    "@browser-mc/media-container": "workspace:^"
+    "@browser-mc/media-container": "workspace:^",
+    "@browser-mc/webcodecs-color": "workspace:^"
   },
   "files": [
     "dist",

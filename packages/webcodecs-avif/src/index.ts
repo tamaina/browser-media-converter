@@ -5,6 +5,10 @@ import {
   muxStillAvif,
   type EncodedStillAv1,
 } from '@browser-mc/media-container';
+import {
+  describePlanarFormat,
+  frameFormatCanHaveAlpha,
+} from '@browser-mc/webcodecs-color';
 
 export type {
   AvifMetadataItem,
@@ -110,15 +114,15 @@ export async function encodeImageToAv1(source: CanvasImageSource | VideoFrame, o
 
 async function encodeImageToAv1WithAlpha(source: CanvasImageSource | VideoFrame, options: EncodeAvifOptions): Promise<EncodedStillAv1> {
   const alphaSource = extractAlphaCanvas(source, options);
-  const [color, alpha] = await Promise.all([
-    encodeImageToAv1Color(source, { ...options, alpha: 'discard' }),
-    encodeImageToAv1Color(alphaSource, {
-      ...options,
-      alpha: 'discard',
-      codec: options.codec ?? codecForSubsampling(options.chromaSubsampling ?? '444', 8),
-      bitrate: options.bitrate ?? alphaBitrate(source, options),
-    }),
-  ]);
+  const color = await encodeImageToAv1Color(source, { ...options, alpha: 'discard' });
+  if (!alphaSource) return color;
+
+  const alpha = await encodeImageToAv1Color(alphaSource, {
+    ...options,
+    alpha: 'discard',
+    codec: options.codec ?? codecForSubsampling(options.chromaSubsampling ?? '444', 8),
+    bitrate: options.bitrate ?? alphaBitrate(source, options),
+  });
   return { ...color, alpha };
 }
 
@@ -138,7 +142,7 @@ async function encodeImageToAv1Color(source: CanvasImageSource | VideoFrame, opt
     alpha: options.alpha ?? 'discard',
     latencyMode: 'quality',
   };
-  const support = await supportedEncoderConfig(encoderConfig, options.codec === undefined && codec.endsWith('.10'));
+  const support = await VideoEncoder.isConfigSupported(encoderConfig);
   if (!support.supported) throw new Error(`VideoEncoder does not support ${codec}`);
   const config = support.config;
   if (!config) throw new Error(`VideoEncoder did not return a normalized config for ${codec}`);
@@ -148,17 +152,7 @@ async function encodeImageToAv1Color(source: CanvasImageSource | VideoFrame, opt
   let metadataConfig: VideoDecoderConfig | undefined;
   let chunks: Uint8Array[] = [];
   try {
-    try {
-      ({ chunks, metadataConfig } = await encodeFrame(frame, config));
-    } catch (error) {
-      if (!(source instanceof VideoFrame) || !config.codec.endsWith('.08') || !isHighBitdepthOrHdrFrame(source)) throw error;
-      const fallbackFrame = makeCanvasSdrFrame(source, width, height);
-      try {
-        ({ chunks, metadataConfig } = await encodeFrame(fallbackFrame, config));
-      } finally {
-        fallbackFrame.close();
-      }
-    }
+    ({ chunks, metadataConfig } = await encodeFrame(frame, config));
   } finally {
     if (shouldCloseFrame) frame.close();
   }
@@ -187,14 +181,6 @@ function makeFrameFromCanvasSource(canvasSource: CanvasImageSource) {
   return new VideoFrame(canvasSource, { timestamp: 0, duration: 1_000_000 });
 }
 
-function makeCanvasSdrFrame(source: CanvasImageSource, width: number, height: number) {
-  const canvas = new OffscreenCanvas(width, height);
-  const context = canvas.getContext('2d', { colorSpace: 'srgb' });
-  if (!context) throw new Error('Could not create 2D canvas context');
-  context.drawImage(source, 0, 0, width, height);
-  return makeFrameFromCanvasSource(canvas);
-}
-
 async function encodeFrame(frame: VideoFrame, config: VideoEncoderConfig) {
   let metadataConfig: VideoDecoderConfig | undefined;
   const chunks: Uint8Array[] = [];
@@ -220,6 +206,8 @@ async function encodeFrame(frame: VideoFrame, config: VideoEncoderConfig) {
 }
 
 function extractAlphaCanvas(source: CanvasImageSource | VideoFrame, options: EncodeAvifOptions) {
+  if (source instanceof VideoFrame && !frameFormatCanHaveAlpha(source)) return null;
+
   const width = options.width ?? sourceWidth(source);
   const height = options.height ?? sourceHeight(source);
   const canvas = new OffscreenCanvas(width, height);
@@ -227,13 +215,16 @@ function extractAlphaCanvas(source: CanvasImageSource | VideoFrame, options: Enc
   if (!context) throw new Error('Could not create 2D canvas context');
   context.drawImage(source, 0, 0, width, height);
   const image = context.getImageData(0, 0, width, height);
+  let hasTransparency = false;
   for (let offset = 0; offset < image.data.length; offset += 4) {
     const alpha = image.data[offset + 3];
+    if (alpha !== 255) hasTransparency = true;
     image.data[offset] = alpha;
     image.data[offset + 1] = alpha;
     image.data[offset + 2] = alpha;
     image.data[offset + 3] = 255;
   }
+  if (!hasTransparency) return null;
   context.putImageData(image, 0, 0);
   return canvas;
 }
@@ -242,15 +233,6 @@ function alphaBitrate(source: CanvasImageSource | VideoFrame, options: EncodeAvi
   const width = options.width ?? sourceWidth(source);
   const height = options.height ?? sourceHeight(source);
   return Math.max(40_000, Math.round(width * height * (options.quality ?? 0.8) * 0.35));
-}
-
-async function supportedEncoderConfig(config: VideoEncoderConfig, allowEightBitFallback: boolean) {
-  const support = await VideoEncoder.isConfigSupported(config);
-  if (support.supported || !allowEightBitFallback) return support;
-  return VideoEncoder.isConfigSupported({
-    ...config,
-    codec: config.codec.replace(/\.10(?=$|[.])/u, '.08'),
-  });
 }
 
 async function isAvifCodecSupported(codec: string, options: AvifEncodeSupportOptions) {
@@ -269,7 +251,7 @@ async function isAvifCodecSupported(codec: string, options: AvifEncodeSupportOpt
 function preferredCodecForSource(source: CanvasImageSource | VideoFrame, chromaSubsampling: EncodeAvifOptions['chromaSubsampling']) {
   const subsampling = chromaSubsampling ?? '444';
   if (!(source instanceof VideoFrame)) return codecForSubsampling(subsampling, 8);
-  return codecForSubsampling(subsampling, isHighBitdepthOrHdrFrame(source) ? 10 : 8);
+  return codecForSubsampling(subsampling, isHighBitdepthFrame(source) ? 10 : 8);
 }
 
 function codecForSubsampling(chromaSubsampling: NonNullable<EncodeAvifOptions['chromaSubsampling']>, bitDepth: 8 | 10) {
@@ -277,15 +259,12 @@ function codecForSubsampling(chromaSubsampling: NonNullable<EncodeAvifOptions['c
   return `av01.${profile}.08M.${String(bitDepth).padStart(2, '0')}`;
 }
 
-function isHighBitdepthOrHdrFrame(source: VideoFrame) {
-  const colorSpace = source.colorSpace;
+function isHighBitdepthFrame(source: VideoFrame) {
   const format = source.format ?? '';
-  const transfer = String(colorSpace.transfer ?? '');
-  const primaries = String(colorSpace.primaries ?? '');
-  const usesHdrTransfer = transfer === 'pq' || transfer === 'hlg' || transfer === 'smpte2084' || transfer === 'arib-std-b67';
-  const usesHdrPrimaries = primaries === 'bt2020';
+  const planar = describePlanarFormat(format);
+  if (planar) return planar.bitDepth > 8;
   const usesHighBitdepthFormat = /(?:P010|P012|P016|I\d+P1[026]|10|12|16)/.test(format);
-  return usesHdrTransfer || usesHdrPrimaries || usesHighBitdepthFormat;
+  return usesHighBitdepthFormat;
 }
 
 export async function encodeImageToAvif(source: CanvasImageSource | VideoFrame, options: EncodeAvifOptions = {}): Promise<Uint8Array> {

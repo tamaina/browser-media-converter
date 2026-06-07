@@ -53,6 +53,8 @@ const plan = await buildMovieConversionOptions({
   },
   resize: {
     width: 1280,
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
   },
   sceneDetection: {
     sampleRate: 'all',
@@ -158,7 +160,7 @@ When split `quantizer` values are used with `keyFrameInterval`, the interval is 
 ## Notes
 
 - This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle.
-- When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFrameRaw()` inside Mediabunny's `process` hook.
+- When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFramePlanar()` inside Mediabunny's `process` hook. `resize.rawBitDepth` and `resize.rawChromaSubsampling` can additionally convert supported planar frames before encoding; both default to `preserve`.
 - `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, quantizer, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
 - For AVC/H.264 transcodes, Mediabunny currently builds `avc1.64....` codec strings by default, which corresponds to High Profile. If the video track is copied without transcoding, the source profile is preserved instead.
 - Resize dimensions are rounded down to a multiple of `dimensionAlignment`, defaulting to `2`, which avoids odd-size 4:2:0/NV12 artifacts and encoder constraints.

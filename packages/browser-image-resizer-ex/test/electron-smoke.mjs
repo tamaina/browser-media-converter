@@ -138,6 +138,52 @@ const result = await page.evaluate(async ({ port }) => {
   const hdrAvif = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
   const hdrAnimatedCheck = await checkImageDecodeSupport(hdrAvif, 'image/avif');
   const hdrFirstFrameCheck = await checkImageDecodeSupport(hdrAvif, 'image/avif', { animation: 'first-frame' });
+  const hdrRawPlanar = await resizeAndConvertImage({
+    input: hdrAvif,
+    inputMime: 'image/avif',
+    outputMime: 'image/avif',
+    animation: 'first-frame',
+    width: 64,
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
+    avif: {
+      alpha: 'discard',
+    },
+  });
+  const hdrImplicitAvif = await resizeAndConvertImage({
+    input: hdrAvif,
+    inputMime: 'image/avif',
+    outputMime: 'image/avif',
+    animation: 'first-frame',
+    width: 64,
+    avif: {
+      alpha: 'discard',
+    },
+  });
+  const hdrRawPlanarDecoder = new ImageDecoder({
+    data: hdrRawPlanar.data.buffer.slice(hdrRawPlanar.data.byteOffset, hdrRawPlanar.data.byteOffset + hdrRawPlanar.data.byteLength),
+    type: hdrRawPlanar.mime,
+    colorSpaceConversion: 'none',
+  });
+  const hdrRawPlanarDecodedFrame = (await hdrRawPlanarDecoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+  const hdrRawPlanarDecoded = {
+    format: hdrRawPlanarDecodedFrame.format,
+    colorSpace: hdrRawPlanarDecodedFrame.colorSpace.toJSON(),
+  };
+  hdrRawPlanarDecodedFrame.close();
+  hdrRawPlanarDecoder.close();
+  const hdrImplicitDecoder = new ImageDecoder({
+    data: hdrImplicitAvif.data.buffer.slice(hdrImplicitAvif.data.byteOffset, hdrImplicitAvif.data.byteOffset + hdrImplicitAvif.data.byteLength),
+    type: hdrImplicitAvif.mime,
+    colorSpaceConversion: 'none',
+  });
+  const hdrImplicitDecodedFrame = (await hdrImplicitDecoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+  const hdrImplicitDecoded = {
+    format: hdrImplicitDecodedFrame.format,
+    colorSpace: hdrImplicitDecodedFrame.colorSpace.toJSON(),
+  };
+  hdrImplicitDecodedFrame.close();
+  hdrImplicitDecoder.close();
 
   return {
     animated: [...animated],
@@ -184,6 +230,26 @@ const result = await page.evaluate(async ({ port }) => {
     hdrChecks: {
       animated: hdrAnimatedCheck,
       firstFrame: hdrFirstFrameCheck,
+    },
+    hdrRawPlanar: {
+      kind: hdrRawPlanar.kind,
+      mime: hdrRawPlanar.mime,
+      width: hdrRawPlanar.width,
+      height: hdrRawPlanar.height,
+      resizePath: hdrRawPlanar.kind === 'still' ? hdrRawPlanar.resizePath : null,
+      output: hdrRawPlanar.kind === 'still' ? hdrRawPlanar.output : null,
+      decoded: hdrRawPlanarDecoded,
+      warnings: hdrRawPlanar.warnings,
+    },
+    hdrImplicitAvif: {
+      kind: hdrImplicitAvif.kind,
+      mime: hdrImplicitAvif.mime,
+      width: hdrImplicitAvif.width,
+      height: hdrImplicitAvif.height,
+      resizePath: hdrImplicitAvif.kind === 'still' ? hdrImplicitAvif.resizePath : null,
+      output: hdrImplicitAvif.kind === 'still' ? hdrImplicitAvif.output : null,
+      decoded: hdrImplicitDecoded,
+      warnings: hdrImplicitAvif.warnings,
     },
   };
 }, { port });
@@ -259,6 +325,23 @@ assert.equal(result.hdrChecks.animated.supported, false);
 assert.equal(result.hdrChecks.animated.error?.message, 'Failed to retrieve track metadata.');
 assert.equal(result.hdrChecks.firstFrame.supported, true);
 assert.equal(result.hdrChecks.firstFrame.animated, false);
+assert.equal(result.hdrRawPlanar.kind, 'still');
+assert.equal(result.hdrRawPlanar.mime, 'image/avif');
+assert.equal(result.hdrRawPlanar.width, 64);
+assert.equal(result.hdrRawPlanar.resizePath, 'raw');
+assert.equal(result.hdrRawPlanar.output?.format, 'I420');
+assert.equal(result.hdrRawPlanar.output?.colorSpace.primaries, 'bt2020');
+assert.equal(result.hdrRawPlanar.decoded.format, 'I420');
+assert.equal(result.hdrRawPlanar.decoded.colorSpace.primaries, 'bt2020');
+assert.deepEqual(result.hdrRawPlanar.warnings, []);
+assert.equal(result.hdrImplicitAvif.kind, 'still');
+assert.equal(result.hdrImplicitAvif.mime, 'image/avif');
+assert.equal(result.hdrImplicitAvif.width, 64);
+assert.equal(result.hdrImplicitAvif.resizePath, 'raw');
+if (!result.checkedSupport.imageEncoder.avif.variants.yuv444.bit10 && result.checkedSupport.imageEncoder.avif.variants.yuv444.bit8) {
+  assert.equal(result.hdrImplicitAvif.decoded.format, 'I444');
+  assert.ok(result.hdrImplicitAvif.warnings.includes('AVIF 10-bit encode was not supported, so the frame was converted to 8-bit before encoding.'));
+}
 
 await mkdir(outputDir, { recursive: true });
 await writeFile(resolve(outputDir, 'animated.webp'), Buffer.from(result.animated));

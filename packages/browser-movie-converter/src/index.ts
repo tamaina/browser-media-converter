@@ -11,6 +11,8 @@ import {
   inspectVideoTrackColor,
   type BrowserMovieColorMetadataPolicy,
   type BrowserMovieQuantizerOptions,
+  type BrowserMovieRawBitDepth,
+  type BrowserMovieRawChromaSubsampling,
   type BrowserMovieResizeFit,
   type BrowserMovieResizeOptions,
   type BrowserMovieResizePath,
@@ -22,6 +24,8 @@ import {
 export type {
   BrowserMovieColorMetadataPolicy,
   BrowserMovieQuantizerOptions,
+  BrowserMovieRawBitDepth,
+  BrowserMovieRawChromaSubsampling,
   BrowserMovieResizeFit,
   BrowserMovieResizeOptions,
   BrowserMovieResizePath,

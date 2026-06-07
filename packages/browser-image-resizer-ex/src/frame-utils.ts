@@ -1,9 +1,11 @@
 import {
   classifyFrameColor,
   convertFrameToCanvasSdr,
-  resizeFrameRaw,
+  resizeFramePlanar,
   resizeFrameWithCanvas,
-  type ResizeRawOptions,
+  type PlanarResizeAlgorithm,
+  type PlanarBitDepth,
+  type PlanarChromaSubsampling,
 } from '@browser-mc/webcodecs-color';
 import { copyArrayBuffer } from '@browser-mc/binary';
 
@@ -15,11 +17,17 @@ export type BrowserImageResizePath = 'none' | 'raw' | 'canvas';
 
 export type BrowserImageColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
+export type BrowserImageRawBitDepth = 'preserve' | PlanarBitDepth;
+
+export type BrowserImageRawChromaSubsampling = 'preserve' | PlanarChromaSubsampling;
+
 export type FrameResizeOptions = {
   width?: number;
   height?: number;
   fit?: BrowserImageResizeFit;
-  rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  rawResizeAlgorithm?: PlanarResizeAlgorithm;
+  rawBitDepth?: BrowserImageRawBitDepth;
+  rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
   colorMetadata?: BrowserImageColorMetadataPolicy;
 };
 
@@ -134,12 +142,18 @@ export function resolveTargetSize(sourceWidth: number, sourceHeight: number, opt
 export async function resizeFrameForColor(
   frame: VideoFrame,
   size: { width: number; height: number },
-  options: Pick<FrameResizeOptions, 'rawResizeAlgorithm' | 'colorMetadata'>,
+  options: Pick<FrameResizeOptions, 'rawResizeAlgorithm' | 'rawBitDepth' | 'rawChromaSubsampling' | 'colorMetadata'>,
 ): Promise<{ frame: VideoFrame; path: BrowserImageResizePath; warnings: string[] }> {
   const colorMetadata = options.colorMetadata ?? 'preserve';
+  const rawBitDepth = options.rawBitDepth ?? 'preserve';
+  const rawChromaSubsampling = options.rawChromaSubsampling ?? 'preserve';
+  const wantsRawPlanarConversion = rawBitDepth !== 'preserve' || rawChromaSubsampling !== 'preserve';
   if (size.width === frame.displayWidth && size.height === frame.displayHeight) {
     if (colorMetadata === 'canvas-sdr') {
       return { frame: convertFrameToCanvasSdr(frame).frame, path: 'canvas', warnings: [] };
+    }
+    if (wantsRawPlanarConversion) {
+      return processRawPlanarFrame(frame, { ...size, ...options }, [], 'none');
     }
     return { frame, path: 'none', warnings: [] };
   }
@@ -161,8 +175,10 @@ export async function resizeFrameForColor(
 
   if (color.recommendedPath === 'raw-hdr') {
     try {
-      const resized = await resizeFrameRaw(frame, {
+      const resized = await resizeFramePlanar(frame, {
         ...size,
+        bitDepth: rawBitDepth === 'preserve' ? undefined : rawBitDepth,
+        chromaSubsampling: rawChromaSubsampling === 'preserve' ? undefined : rawChromaSubsampling,
         algorithm: options.rawResizeAlgorithm ?? 'bilinear',
       });
       return { frame: resized.frame, path: 'raw', warnings };
@@ -175,7 +191,31 @@ export async function resizeFrameForColor(
   if (color.recommendedPath === 'raw-hdr') {
     warnings.push('Canvas fallback may collapse HDR/BT.2020 content to sRGB or Display P3.');
   }
+  if (wantsRawPlanarConversion) {
+    warnings.push('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.');
+  }
   return { frame: resized.frame, path: 'canvas', warnings };
+}
+
+async function processRawPlanarFrame(
+  frame: VideoFrame,
+  options: Pick<FrameResizeOptions, 'rawResizeAlgorithm' | 'rawBitDepth' | 'rawChromaSubsampling'> & { width: number; height: number },
+  warnings: string[],
+  fallbackPath: BrowserImageResizePath,
+): Promise<{ frame: VideoFrame; path: BrowserImageResizePath; warnings: string[] }> {
+  try {
+    const converted = await resizeFramePlanar(frame, {
+      width: options.width,
+      height: options.height,
+      bitDepth: options.rawBitDepth === 'preserve' ? undefined : options.rawBitDepth,
+      chromaSubsampling: options.rawChromaSubsampling === 'preserve' ? undefined : options.rawChromaSubsampling,
+      algorithm: options.rawResizeAlgorithm ?? 'bilinear',
+    });
+    return { frame: converted.frame, path: 'raw', warnings };
+  } catch (error) {
+    warnings.push(`raw planar conversion was not available: ${error instanceof Error ? error.message : String(error)}`);
+    return { frame, path: fallbackPath, warnings };
+  }
 }
 
 export async function encodeFrameWithCanvas(frame: VideoFrame, mime: 'image/jpeg' | 'image/webp', quality = 0.85) {

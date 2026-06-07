@@ -22,22 +22,26 @@ console.log(classifyFrameColor(frame));
 frame.close();
 ```
 
-## Canvas-Free Raw Resize
+## Resize Planar VideoFrame
 
 ```ts
-import { resizeFrameRaw } from '@browser-mc/webcodecs-color';
+import { resizeFramePlanar } from '@browser-mc/webcodecs-color';
 
-const resized = await resizeFrameRaw(frame, {
+const resized4208 = await resizeFramePlanar(frame, {
   width: 1024,
   height: 682,
+  chromaSubsampling: '420',
+  bitDepth: 8,
   algorithm: 'bilinear',
 });
 
-console.log(resized.inspection);
-resized.frame.close();
+console.log(resized4208.inspection);
+resized4208.frame.close();
 ```
 
-`resizeFrameRaw` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from resized planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into the resize. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
+`resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
+
+Packed formats such as `RGBA` and `BGRA` are intentionally out of scope for this helper; use the Canvas helpers for those paths.
 
 ### Why Not WebGPU?
 
@@ -48,7 +52,11 @@ WebGPU may become useful if the pipeline can keep frames on the GPU for several 
 ## Comparison Helpers
 
 ```ts
-import { convertFrameToCanvasSdr, copyFrameToRgba, resizeFrameWithCanvas } from '@browser-mc/webcodecs-color';
+import {
+  convertFrameToCanvasSdr,
+  copyFrameToRgba,
+  resizeFrameWithCanvas,
+} from '@browser-mc/webcodecs-color';
 
 const rgba = await copyFrameToRgba(frame, { colorSpace: 'display-p3' });
 const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 });
@@ -57,10 +65,25 @@ const canvasSdr = convertFrameToCanvasSdr(frame);
 
 `convertFrameToCanvasSdr` draws through an sRGB `OffscreenCanvas` path and returns an RGBA `VideoFrame` marked as BT.709 SDR. It is a practical browser conversion helper, not a dedicated HDR tone-mapping engine.
 
-## Supported Raw Resize Formats
+## Supported Planar Formats
 
-- `NV12`, `I420`, `I422`, `I444`
-- Chromium 10-bit formats observed via WebCodecs: `I420P10`, `I422P10`, `I444P10`
+- 8-bit: `I420`, `I422`, `I444`
+- 10-bit: `I420P10`, `I422P10`, `I444P10`
+- 12-bit: `I420P12`, `I422P12`, `I444P12`
+- Alpha variants: `I420A`, `I420AP10`, `I420AP12`, `I422A`, `I422AP10`, `I422AP12`, `I444A`, `I444AP10`, `I444AP12`
+
+Alpha-plane processing preserves alpha inside the returned `VideoFrame`. AVIF still stores alpha as an auxiliary image item, so callers that encode to AVIF should keep using the AVIF encoder's alpha handling.
+
+## Format Helpers
+
+```ts
+import {
+  describePlanarFormat,
+  frameFormatCanHaveAlpha,
+} from '@browser-mc/webcodecs-color';
+```
+
+`describePlanarFormat(format)` returns planar bit depth, chroma layout, alpha presence, bytes per sample, and plane layout metadata for the supported planar YUV/YUVA formats. `frameFormatCanHaveAlpha(frame)` returns `true` for alpha-capable `VideoFrame` formats such as `RGBA`, `BGRA`, and planar `*A` variants. Unknown `VideoFrame.format` values are treated conservatively as alpha-capable.
 
 ## Commands
 
@@ -70,4 +93,4 @@ pnpm --filter @browser-mc/webcodecs-color typecheck
 pnpm --filter @browser-mc/webcodecs-color test:electron
 ```
 
-`test:electron` uses `hdrrec2020.avif`. Current result keeps `I444P10` and `bt2020` metadata through raw resize.
+`test:electron` uses `hdrrec2020.avif`. Current result keeps BT.2020 metadata through raw resize and planar conversion.

@@ -6,7 +6,7 @@ import {
 import {
   inspectFrame,
   type FrameColorInspection,
-  type ResizeRawOptions,
+  type PlanarResizeAlgorithm,
 } from '@browser-mc/webcodecs-color';
 import {
   copyArrayBuffer,
@@ -14,6 +14,8 @@ import {
   encodeFrameWithCanvas,
   resizeFrameForColor,
   resolveTargetSize,
+  type BrowserImageRawBitDepth,
+  type BrowserImageRawChromaSubsampling,
   type BrowserImageColorMetadataPolicy,
 } from './frame-utils.js';
 
@@ -30,7 +32,9 @@ export type BrowserAnimatedImageResizerOptions = {
   width?: number;
   height?: number;
   fit?: 'contain' | 'cover' | 'fill';
-  rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  rawResizeAlgorithm?: PlanarResizeAlgorithm;
+  rawBitDepth?: BrowserImageRawBitDepth;
+  rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
   colorMetadata?: BrowserImageColorMetadataPolicy;
   quality?: number;
   loopCount?: number;

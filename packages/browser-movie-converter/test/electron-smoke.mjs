@@ -69,6 +69,7 @@ const result = await page.evaluate(async ({ port }) => {
     Mp4OutputFormat,
     Output,
     QuickTimeInputFormat,
+    VideoSample,
   } = await import(`http://127.0.0.1:${port}/mediabunny.js`);
   const sourceInput = new Input({
     source: new BufferSource(input),
@@ -104,6 +105,83 @@ const result = await page.evaluate(async ({ port }) => {
     },
     colorMetadata: 'preserve',
   });
+  const rawPlanarPlan = await buildMovieConversionOptions({
+    input: new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    }),
+    output: new Output({
+      target: new BufferTarget(),
+      format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+    }),
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
+    resize: {
+      width: 320,
+      height: 180,
+      fit: 'fill',
+      rawBitDepth: 8,
+      rawChromaSubsampling: '420',
+    },
+    sceneDetection: false,
+    colorMetadata: 'preserve',
+    forceTranscode: true,
+  });
+  const rawPlanarVideoTrack = await rawPlanarPlan.options.input.getPrimaryVideoTrack({
+    filter: (track) => track.number === 1,
+  });
+  if (!rawPlanarVideoTrack) throw new Error('raw planar plan did not expose a primary video track');
+  const rawPlanarVideoOptions = typeof rawPlanarPlan.options.video === 'function'
+    ? rawPlanarPlan.options.video(rawPlanarVideoTrack)
+    : rawPlanarPlan.options.video;
+  if (!rawPlanarVideoOptions?.process) throw new Error('raw planar plan did not expose a process hook');
+  const makeSyntheticPlanarSample = () => {
+    const width = 320;
+    const height = 180;
+    const planeBytes = width * height * 2;
+    const data = new Uint8Array(planeBytes * 3);
+    const writePlane = (offset, value) => {
+      for (let index = 0; index < width * height; index++) {
+        data[offset + index * 2] = value & 0xff;
+        data[offset + index * 2 + 1] = value >> 8;
+      }
+    };
+    writePlane(0, 384);
+    writePlane(planeBytes, 320);
+    writePlane(planeBytes * 2, 720);
+    const frame = new VideoFrame(data, {
+      format: 'I444P10',
+      codedWidth: width,
+      codedHeight: height,
+      displayWidth: width,
+      displayHeight: height,
+      timestamp: 0,
+      duration: 100_000,
+      layout: [
+        { offset: 0, stride: width * 2 },
+        { offset: planeBytes, stride: width * 2 },
+        { offset: planeBytes * 2, stride: width * 2 },
+      ],
+      colorSpace: { primaries: 'bt2020', transfer: 'pq', matrix: 'bt2020-ncl', fullRange: false },
+    });
+    return new VideoSample(frame, {
+      timestamp: 0,
+      duration: 100_000,
+      colorSpace: { primaries: 'bt2020', transfer: 'pq', matrix: 'bt2020-ncl', fullRange: false },
+      displayWidth: width,
+      displayHeight: height,
+    });
+  };
+  const processedRawPlanarSample = await rawPlanarVideoOptions.process(makeSyntheticPlanarSample());
+  const processedRawPlanarFrame = processedRawPlanarSample.toVideoFrame();
+  const processedRawPlanar = {
+    format: processedRawPlanarFrame.format,
+    displayWidth: processedRawPlanarFrame.displayWidth,
+    displayHeight: processedRawPlanarFrame.displayHeight,
+    colorSpace: processedRawPlanarFrame.colorSpace.toJSON(),
+  };
+  processedRawPlanarFrame.close();
   const conversion = await Conversion.init(plan.options);
   if (!conversion.isValid) {
     throw new Error(`Mediabunny could not create a valid conversion: ${conversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
@@ -250,6 +328,8 @@ const result = await page.evaluate(async ({ port }) => {
   return {
     length: outputBytes.byteLength,
     resize: plan.resize,
+    rawPlanarResize: rawPlanarPlan.resize,
+    processedRawPlanar,
     videoColor: plan.videoColor,
     scenePlan: plan.sceneKeyFrames?.state ?? null,
     keyPacketTimestamps,
@@ -272,6 +352,11 @@ const result = await page.evaluate(async ({ port }) => {
 
 assert.ok(result.length > 0, 'expected a non-empty converted MP4');
 assert.deepEqual(result.resize, { width: 320, height: 180, path: 'raw' });
+assert.deepEqual(result.rawPlanarResize, { width: 320, height: 180, path: 'raw' });
+assert.equal(result.processedRawPlanar.format, 'I420');
+assert.equal(result.processedRawPlanar.displayWidth, 320);
+assert.equal(result.processedRawPlanar.displayHeight, 180);
+assert.equal(result.processedRawPlanar.colorSpace.primaries, 'bt2020');
 assert.ok(result.videoColor, 'expected input video color metadata');
 assert.ok(result.scenePlan?.changes.length > 0, 'expected scene detection to find changes');
 assert.ok(result.scenePlan?.keyFrameTimestamps.length > 1, 'expected scene key frame timestamps');

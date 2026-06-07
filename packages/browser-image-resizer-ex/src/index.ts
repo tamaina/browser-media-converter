@@ -21,6 +21,8 @@ import {
   resolveTargetSize,
   toUint8Array,
   type BrowserImageColorMetadataPolicy,
+  type BrowserImageRawBitDepth,
+  type BrowserImageRawChromaSubsampling,
   type BrowserImageResizeFit,
   type BrowserImageResizePath,
   type ImageInputInspection,
@@ -35,10 +37,12 @@ import {
 } from './animated-webp.js';
 import {
   classifyFrameColor,
+  describePlanarFormat,
   inspectFrame,
+  resizeFramePlanar,
   type FrameColorClassification,
   type FrameColorInspection,
-  type ResizeRawOptions,
+  type PlanarResizeAlgorithm,
 } from '@browser-mc/webcodecs-color';
 
 export type BrowserImageOutputMime = 'image/avif' | 'image/jpeg' | 'image/webp';
@@ -53,6 +57,8 @@ export type {
   BrowserAnimatedImageResizerOptions,
   BrowserAnimatedImageResizerResult,
   BrowserImageColorMetadataPolicy,
+  BrowserImageRawBitDepth,
+  BrowserImageRawChromaSubsampling,
   BrowserImageResizeFit,
   BrowserImageResizePath,
   ImageInputInspection,
@@ -68,7 +74,9 @@ export type BrowserImageResizerOptions = {
   exif?: BrowserImageExifPolicy;
   animation?: BrowserImageAnimationPolicy;
   colorSpaceConversion?: ColorSpaceConversion;
-  rawResizeAlgorithm?: ResizeRawOptions['algorithm'];
+  rawResizeAlgorithm?: PlanarResizeAlgorithm;
+  rawBitDepth?: BrowserImageRawBitDepth;
+  rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
   colorMetadata?: BrowserImageColorMetadataPolicy;
   quality?: number;
   avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
@@ -227,6 +235,8 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
       height: options.height,
       fit: options.fit,
       rawResizeAlgorithm: options.rawResizeAlgorithm,
+      rawBitDepth: options.rawBitDepth,
+      rawChromaSubsampling: options.rawChromaSubsampling,
       quality: options.quality,
       colorSpaceConversion: options.colorSpaceConversion,
       colorMetadata: options.colorMetadata,
@@ -250,6 +260,8 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
         quality: options.quality,
         avif: options.avif,
         preserveAlpha: inputMime !== 'image/jpeg',
+        rawChromaSubsampling: options.rawChromaSubsampling,
+        warnings: resized.warnings,
       });
       const withExif = applyExifPolicy(encoded, outputMime, sourceExif, exifPolicy);
       const blob = new Blob([copyArrayBuffer(withExif)], { type: outputMime });
@@ -315,19 +327,107 @@ function defaultOutputMime(inputMime: string, inputInfo?: Pick<ImageInputInspect
 async function encodeFrame(
   frame: VideoFrame,
   mime: BrowserImageOutputMime,
-  options: { quality?: number; avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>; preserveAlpha?: boolean },
+  options: {
+    quality?: number;
+    avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
+    preserveAlpha?: boolean;
+    rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
+    warnings?: string[];
+  },
 ) {
   if (mime === 'image/avif') {
     const alpha = options.avif?.alpha ?? (options.preserveAlpha ? 'keep' : 'discard');
-    return encodeImageToAvif(frame, {
-      ...options.avif,
-      alpha,
-      width: frame.displayWidth,
-      height: frame.displayHeight,
-      quality: options.quality,
+    const chromaSubsampling = options.avif?.chromaSubsampling
+      ?? avifChromaSubsamplingForRaw(options.rawChromaSubsampling);
+    const prepared = await prepareFrameForAvifEncode(frame, {
+      codec: options.avif?.codec,
+      chromaSubsampling,
+      warnings: options.warnings,
     });
+    try {
+      return await encodeImageToAvif(prepared.frame, {
+        ...options.avif,
+        alpha,
+        chromaSubsampling,
+        codec: prepared.codec,
+        width: frame.displayWidth,
+        height: frame.displayHeight,
+        quality: options.quality,
+      });
+    } finally {
+      if (prepared.frame !== frame) prepared.frame.close();
+    }
   }
   return encodeFrameWithCanvas(frame, mime, options.quality);
+}
+
+async function prepareFrameForAvifEncode(
+  frame: VideoFrame,
+  options: {
+    codec?: string;
+    chromaSubsampling?: EncodeAvifOptions['chromaSubsampling'];
+    warnings?: string[];
+  },
+) {
+  if (options.codec !== undefined || !isHighBitdepthPlanarFrame(frame)) return { frame, codec: options.codec };
+  const chromaSubsampling = options.chromaSubsampling ?? '444';
+  const tenBitCodec = avifCodecForSubsampling(chromaSubsampling, 10);
+  const eightBitCodec = avifCodecForSubsampling(chromaSubsampling, 8);
+  const [tenBitSupport, eightBitSupport] = await Promise.all([
+    isVideoEncoderConfigSupported(tenBitCodec, frame),
+    isVideoEncoderConfigSupported(eightBitCodec, frame),
+  ]);
+  if (tenBitSupport || !eightBitSupport) return { frame, codec: options.codec };
+
+  try {
+    const converted = await resizeFramePlanar(frame, {
+      width: frame.displayWidth,
+      height: frame.displayHeight,
+      chromaSubsampling,
+      bitDepth: 8,
+    });
+    options.warnings?.push('AVIF 10-bit encode was not supported, so the frame was converted to 8-bit before encoding.');
+    return { frame: converted.frame, codec: eightBitCodec };
+  } catch (error) {
+    options.warnings?.push(`AVIF 10-bit encode was not supported, but 8-bit raw conversion was not available: ${error instanceof Error ? error.message : String(error)}`);
+    return { frame, codec: options.codec };
+  }
+}
+
+async function isVideoEncoderConfigSupported(codec: string, frame: VideoFrame) {
+  if (typeof VideoEncoder === 'undefined') return false;
+  try {
+    const support = await VideoEncoder.isConfigSupported({
+      codec,
+      width: frame.displayWidth,
+      height: frame.displayHeight,
+      bitrate: Math.max(80_000, Math.round(frame.displayWidth * frame.displayHeight * 0.8 * 0.7)),
+      framerate: 1,
+      alpha: 'discard',
+      latencyMode: 'quality',
+    });
+    return support.supported === true;
+  } catch {
+    return false;
+  }
+}
+
+function isHighBitdepthPlanarFrame(frame: VideoFrame) {
+  if (!frame.format) return false;
+  const descriptor = describePlanarFormat(frame.format);
+  return descriptor !== null && descriptor.bitDepth > 8;
+}
+
+function avifCodecForSubsampling(chromaSubsampling: NonNullable<EncodeAvifOptions['chromaSubsampling']>, bitDepth: 8 | 10) {
+  const profile = chromaSubsampling === '444' ? 1 : 0;
+  return `av01.${profile}.08M.${String(bitDepth).padStart(2, '0')}`;
+}
+
+function avifChromaSubsamplingForRaw(
+  rawChromaSubsampling: BrowserImageRawChromaSubsampling | undefined,
+): EncodeAvifOptions['chromaSubsampling'] | undefined {
+  if (rawChromaSubsampling === '420' || rawChromaSubsampling === '444') return rawChromaSubsampling;
+  return undefined;
 }
 
 function applyExifPolicy(data: Uint8Array, mime: ImageMime, sourceExif: ExifPayload | null, policy: BrowserImageExifPolicy) {

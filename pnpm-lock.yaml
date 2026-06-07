@@ -106,6 +106,9 @@ importers:
       '@browser-mc/media-container':
         specifier: workspace:^
         version: link:../media-container
+      '@browser-mc/webcodecs-color':
+        specifier: workspace:^
+        version: link:../webcodecs-color
 
   packages/webcodecs-color:
     dependencies:

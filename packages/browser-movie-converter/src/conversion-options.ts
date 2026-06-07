@@ -17,9 +17,11 @@ import {
 } from '@browser-mc/mediabunny-scene-keyframes';
 import {
   convertFrameToCanvasSdr,
-  resizeFrameRaw,
+  resizeFramePlanar,
   sdrVideoColorSpaceInit,
-  type ResizeRawOptions,
+  type PlanarBitDepth,
+  type PlanarChromaSubsampling,
+  type PlanarResizeAlgorithm,
 } from '@browser-mc/webcodecs-color';
 
 export type BrowserMovieColorMetadataPolicy = 'preserve' | 'canvas-sdr';
@@ -28,11 +30,17 @@ export type BrowserMovieResizeFit = 'contain' | 'cover' | 'fill';
 
 export type BrowserMovieResizePath = 'raw';
 
+export type BrowserMovieRawBitDepth = 'preserve' | PlanarBitDepth;
+
+export type BrowserMovieRawChromaSubsampling = 'preserve' | PlanarChromaSubsampling;
+
 export type BrowserMovieResizeOptions = {
   width?: number;
   height?: number;
   fit?: BrowserMovieResizeFit;
-  rawAlgorithm?: ResizeRawOptions['algorithm'];
+  rawAlgorithm?: PlanarResizeAlgorithm;
+  rawBitDepth?: BrowserMovieRawBitDepth;
+  rawChromaSubsampling?: BrowserMovieRawChromaSubsampling;
   dimensionAlignment?: 1 | 2 | 4 | 8;
 };
 
@@ -332,7 +340,9 @@ type ResolvedMovieResize = {
   width: number;
   height: number;
   path: BrowserMovieResizePath;
-  rawAlgorithm: ResizeRawOptions['algorithm'];
+  rawAlgorithm: PlanarResizeAlgorithm;
+  rawBitDepth: BrowserMovieRawBitDepth;
+  rawChromaSubsampling: BrowserMovieRawChromaSubsampling;
 };
 
 async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieResizeOptions): Promise<ResolvedMovieResize> {
@@ -344,20 +354,26 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
     height: size.height,
     path: 'raw',
     rawAlgorithm: options.rawAlgorithm ?? 'bilinear',
+    rawBitDepth: options.rawBitDepth ?? 'preserve',
+    rawChromaSubsampling: options.rawChromaSubsampling ?? 'preserve',
   };
 }
 
 function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: BrowserMovieColorMetadataPolicy) {
   return async (sample: VideoSample): Promise<VideoSample> => {
     if (sample.displayWidth === resize.width && sample.displayHeight === resize.height) {
-      return colorMetadata === 'canvas-sdr' ? convertSampleToCanvasSdr(sample) : sample;
+      if (colorMetadata === 'canvas-sdr') return convertSampleToCanvasSdr(sample);
+      if (wantsRawPlanarConversion(resize)) return convertSamplePlanar(sample, resize);
+      return sample;
     }
 
     const frame = sample.toVideoFrame();
     try {
-      const resized = await resizeFrameRaw(frame, {
+      const resized = await resizeFramePlanar(frame, {
         width: resize.width,
         height: resize.height,
+        bitDepth: resize.rawBitDepth === 'preserve' ? undefined : resize.rawBitDepth,
+        chromaSubsampling: resize.rawChromaSubsampling === 'preserve' ? undefined : resize.rawChromaSubsampling,
         algorithm: resize.rawAlgorithm,
       });
       if (colorMetadata === 'canvas-sdr') {
@@ -370,6 +386,26 @@ function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: Browser
       frame.close();
     }
   };
+}
+
+function wantsRawPlanarConversion(resize: ResolvedMovieResize) {
+  return resize.rawBitDepth !== 'preserve' || resize.rawChromaSubsampling !== 'preserve';
+}
+
+async function convertSamplePlanar(sample: VideoSample, resize: ResolvedMovieResize): Promise<VideoSample> {
+  const frame = sample.toVideoFrame();
+  try {
+    const converted = await resizeFramePlanar(frame, {
+      width: resize.width,
+      height: resize.height,
+      bitDepth: resize.rawBitDepth === 'preserve' ? undefined : resize.rawBitDepth,
+      chromaSubsampling: resize.rawChromaSubsampling === 'preserve' ? undefined : resize.rawChromaSubsampling,
+      algorithm: resize.rawAlgorithm,
+    });
+    return makeVideoSampleFromFrame(converted.frame, sample, sample.colorSpace.toJSON(), resize);
+  } finally {
+    frame.close();
+  }
 }
 
 function makeCanvasSdrProcessor() {

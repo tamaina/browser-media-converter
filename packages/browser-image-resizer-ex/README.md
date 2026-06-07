@@ -47,6 +47,11 @@ const result = await resizeAndConvertImage({
   fit: 'contain',
   exif: 'keep',
   colorMetadata: 'preserve',
+  rawBitDepth: 8,
+  rawChromaSubsampling: '420',
+  avif: {
+    chromaSubsampling: '420',
+  },
 });
 
 if (result.kind === 'animated') {
@@ -98,6 +103,8 @@ console.log(result.blob);
 
 - Resizing automatically uses raw planar resize for HDR-like formats when `VideoFrame.copyTo()` exposes a supported planar format, and otherwise uses Canvas.
 - `colorMetadata: 'preserve'` is the default. Use `colorMetadata: 'canvas-sdr'` to draw through an sRGB Canvas path and mark the output frame as BT.709 SDR.
+- `rawBitDepth` and `rawChromaSubsampling` are optional raw planar conversion controls. Use `8`, `10`, or `12` for bit depth, and `444`, `422`, or `420` for chroma. `preserve` is the default for both. These options affect supported raw planar `VideoFrame`s before encoding. For AVIF output, `rawChromaSubsampling: '420'` or `'444'` is also used as the encoder chroma default unless `avif.chromaSubsampling` is set explicitly.
+- Chromium may support 8-bit AVIF encoding while rejecting the matching 10-bit AV1 codec for high-bit-depth frames. When AVIF output is requested and `avif.codec` is not set, `resizeAndConvertImage` checks the 10-bit and 8-bit encoder configs for high-bit-depth planar frames. If 10-bit is unavailable but 8-bit is available, supported planar frames are converted to 8-bit before encoding and an 8-bit AV1 codec is passed explicitly. A warning is added when this implicit 8-bit fallback changes the frame bit depth.
 - JPEG/WebP encoding currently goes through `OffscreenCanvas.convertToBlob()`, so strict HDR preservation is not expected there.
 - Animated WebP currently writes full-canvas frames and does not yet optimize changed rectangles.
 - AVIF EXIF writing remuxes to a minimal AVIF structure through `@browser-mc/media-container`. Nonessential original AVIF boxes are not preserved.
