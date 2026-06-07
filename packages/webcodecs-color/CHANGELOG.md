@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-color
 
+## 0.2.0
+
+### Minor Changes
+
+- Add `lanczos3` planar resizing and make it the default raw planar resize algorithm.
+
 ## 0.1.1
 
 ### Patch Changes

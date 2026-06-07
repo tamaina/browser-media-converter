@@ -70,7 +70,7 @@ export type CanvasSdrResult = {
   colorSpace: PredefinedColorSpace;
 };
 
-export type PlanarResizeAlgorithm = 'nearest' | 'bilinear';
+export type PlanarResizeAlgorithm = 'nearest' | 'bilinear' | 'lanczos3';
 
 export type ResizeFramePlanarOptions = {
   width: number;
@@ -264,7 +264,7 @@ export async function resizeFramePlanar(
     options.width,
     options.height,
   ));
-  const algorithm = options.algorithm ?? 'bilinear';
+  const algorithm = options.algorithm ?? 'lanczos3';
 
   for (let planeIndex = 0; planeIndex < destinationDescriptor.planes.length; planeIndex++) {
     const sourcePlaneIndex = sourcePlaneIndexForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex);
@@ -361,6 +361,13 @@ type PlaneSamplingOptions = {
   algorithm: PlanarResizeAlgorithm;
 };
 
+type KernelTable = {
+  offsets: Int32Array;
+  counts: Int32Array;
+  indices: Int32Array;
+  weights: Float32Array;
+};
+
 function mapPixelCenter(position: number, destinationSize: number, sourceSize: number) {
   return (position + 0.5) * sourceSize / destinationSize - 0.5;
 }
@@ -396,6 +403,18 @@ function sampleBilinear(options: PlaneSamplingOptions, x: number, y: number, com
   );
 }
 
+function lanczosWeight(distance: number, radius: number) {
+  const absoluteDistance = Math.abs(distance);
+  if (absoluteDistance === 0) return 1;
+  if (absoluteDistance >= radius) return 0;
+  return sinc(absoluteDistance) * sinc(absoluteDistance / radius);
+}
+
+function sinc(value: number) {
+  const angle = Math.PI * value;
+  return Math.sin(angle) / angle;
+}
+
 function readSample(data: Uint8Array, layout: PlaneLayout, x: number, y: number, bytesPerSample: 1 | 2, samplesPerPixel: 1 | 2, component: number) {
   const offset = layout.offset + y * layout.stride + (x * samplesPerPixel + component) * bytesPerSample;
   return bytesPerSample === 1 ? data[offset] : data[offset] | (data[offset + 1] << 8);
@@ -428,40 +447,32 @@ function convertPlane(options: {
   if (options.sourceSamplesPerPixel !== options.destinationSamplesPerPixel && options.destinationSamplesPerPixel !== 1) {
     throw new Error('Planar conversion does not support planar-to-packed conversion');
   }
+  if (options.algorithm === 'lanczos3') {
+    convertPlaneLanczos3(options);
+    return;
+  }
 
   for (let y = 0; y < options.destinationHeight; y++) {
     const sourceY = mapPixelCenter(y, options.destinationHeight, options.sourceHeight);
     for (let x = 0; x < options.destinationWidth; x++) {
       const sourceX = mapPixelCenter(x, options.destinationWidth, options.sourceWidth);
+      const samplingOptions: PlaneSamplingOptions = {
+        source: options.source,
+        sourceLayout: options.sourceLayout,
+        sourceWidth: options.sourceWidth,
+        sourceHeight: options.sourceHeight,
+        destinationLayout: options.destinationLayout,
+        destinationWidth: options.destinationWidth,
+        destinationHeight: options.destinationHeight,
+        bytesPerSample: options.sourceBytesPerSample,
+        samplesPerPixel: options.sourceSamplesPerPixel,
+        algorithm: options.algorithm,
+      };
       for (let component = 0; component < options.destinationSamplesPerPixel; component++) {
         const sourceComponent = options.sourceSamplesPerPixel === options.destinationSamplesPerPixel
           ? component
           : options.sourceComponent;
-        const value = options.algorithm === 'nearest'
-          ? sampleNearest({
-            source: options.source,
-            sourceLayout: options.sourceLayout,
-            sourceWidth: options.sourceWidth,
-            sourceHeight: options.sourceHeight,
-            destinationLayout: options.destinationLayout,
-            destinationWidth: options.destinationWidth,
-            destinationHeight: options.destinationHeight,
-            bytesPerSample: options.sourceBytesPerSample,
-            samplesPerPixel: options.sourceSamplesPerPixel,
-            algorithm: options.algorithm,
-          }, sourceX, sourceY, sourceComponent)
-          : sampleBilinear({
-            source: options.source,
-            sourceLayout: options.sourceLayout,
-            sourceWidth: options.sourceWidth,
-            sourceHeight: options.sourceHeight,
-            destinationLayout: options.destinationLayout,
-            destinationWidth: options.destinationWidth,
-            destinationHeight: options.destinationHeight,
-            bytesPerSample: options.sourceBytesPerSample,
-            samplesPerPixel: options.sourceSamplesPerPixel,
-            algorithm: options.algorithm,
-          }, sourceX, sourceY, sourceComponent);
+        const value = samplePlane(samplingOptions, sourceX, sourceY, sourceComponent);
         writeSample(
           options.destination,
           options.destinationLayout,
@@ -475,6 +486,127 @@ function convertPlane(options: {
       }
     }
   }
+}
+
+function samplePlane(options: PlaneSamplingOptions, x: number, y: number, component: number) {
+  if (options.algorithm === 'nearest') return sampleNearest(options, x, y, component);
+  return sampleBilinear(options, x, y, component);
+}
+
+function convertPlaneLanczos3(options: {
+  source: Uint8Array;
+  destination: Uint8Array;
+  sourceLayout: PlaneLayout;
+  destinationLayout: PlaneLayout;
+  sourceWidth: number;
+  sourceHeight: number;
+  destinationWidth: number;
+  destinationHeight: number;
+  sourceBytesPerSample: 1 | 2;
+  destinationBytesPerSample: 1 | 2;
+  sourceBitDepth: PlanarBitDepth;
+  destinationBitDepth: PlanarBitDepth;
+  sourceSamplesPerPixel: 1 | 2;
+  destinationSamplesPerPixel: 1 | 2;
+  sourceComponent: 0 | 1;
+}) {
+  const horizontal = buildLanczosKernelTable(options.sourceWidth, options.destinationWidth, 3);
+  const vertical = buildLanczosKernelTable(options.sourceHeight, options.destinationHeight, 3);
+  const intermediate = new Float32Array(options.destinationWidth * options.sourceHeight);
+
+  for (let component = 0; component < options.destinationSamplesPerPixel; component++) {
+    const sourceComponent = options.sourceSamplesPerPixel === options.destinationSamplesPerPixel
+      ? component
+      : options.sourceComponent;
+
+    for (let y = 0; y < options.sourceHeight; y++) {
+      const rowOffset = y * options.destinationWidth;
+      for (let x = 0; x < options.destinationWidth; x++) {
+        const start = horizontal.offsets[x];
+        const count = horizontal.counts[x];
+        let value = 0;
+        for (let kernelIndex = 0; kernelIndex < count; kernelIndex++) {
+          value += readSample(
+            options.source,
+            options.sourceLayout,
+            horizontal.indices[start + kernelIndex],
+            y,
+            options.sourceBytesPerSample,
+            options.sourceSamplesPerPixel,
+            sourceComponent,
+          ) * horizontal.weights[start + kernelIndex];
+        }
+        intermediate[rowOffset + x] = value;
+      }
+    }
+
+    for (let y = 0; y < options.destinationHeight; y++) {
+      const start = vertical.offsets[y];
+      const count = vertical.counts[y];
+      for (let x = 0; x < options.destinationWidth; x++) {
+        let value = 0;
+        for (let kernelIndex = 0; kernelIndex < count; kernelIndex++) {
+          value += intermediate[vertical.indices[start + kernelIndex] * options.destinationWidth + x]
+            * vertical.weights[start + kernelIndex];
+        }
+        writeSample(
+          options.destination,
+          options.destinationLayout,
+          x,
+          y,
+          options.destinationBytesPerSample,
+          options.destinationSamplesPerPixel,
+          component,
+          convertSampleBitDepth(Math.round(value), options.sourceBitDepth, options.destinationBitDepth),
+        );
+      }
+    }
+  }
+}
+
+function buildLanczosKernelTable(sourceSize: number, destinationSize: number, radius: number): KernelTable {
+  const scale = destinationSize / sourceSize;
+  const filterScale = Math.min(1, scale);
+  const sourceRadius = Math.ceil(radius / filterScale);
+  const offsets = new Int32Array(destinationSize);
+  const counts = new Int32Array(destinationSize);
+  const indices: number[] = [];
+  const weights: number[] = [];
+
+  for (let destination = 0; destination < destinationSize; destination++) {
+    const sourceCenter = mapPixelCenter(destination, destinationSize, sourceSize);
+    const left = Math.ceil(sourceCenter - sourceRadius);
+    const right = Math.floor(sourceCenter + sourceRadius);
+    offsets[destination] = indices.length;
+    let weightTotal = 0;
+
+    for (let source = left; source <= right; source++) {
+      const weight = lanczosWeight((sourceCenter - source) * filterScale, radius);
+      if (weight === 0) continue;
+      indices.push(clamp(source, 0, sourceSize - 1));
+      weights.push(weight);
+      weightTotal += weight;
+    }
+
+    const start = offsets[destination];
+    counts[destination] = indices.length - start;
+    if (weightTotal === 0) {
+      indices.push(clamp(Math.round(sourceCenter), 0, sourceSize - 1));
+      weights.push(1);
+      counts[destination] = 1;
+      continue;
+    }
+    for (let index = start; index < indices.length; index++) {
+      weights[index] /= weightTotal;
+    }
+  }
+
+  return {
+    offsets,
+    counts,
+    indices: Int32Array.from(indices),
+    weights: Float32Array.from(weights),
+  };
 }
 
 function convertSampleBitDepth(value: number, sourceBitDepth: PlanarBitDepth, destinationBitDepth: PlanarBitDepth) {

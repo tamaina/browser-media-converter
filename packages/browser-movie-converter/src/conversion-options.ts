@@ -353,7 +353,7 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
     width: size.width,
     height: size.height,
     path: 'raw',
-    rawAlgorithm: options.rawAlgorithm ?? 'bilinear',
+    rawAlgorithm: options.rawAlgorithm ?? 'lanczos3',
     rawBitDepth: options.rawBitDepth ?? 'preserve',
     rawChromaSubsampling: options.rawChromaSubsampling ?? 'preserve',
   };

@@ -32,14 +32,14 @@ const resized4208 = await resizeFramePlanar(frame, {
   height: 682,
   chromaSubsampling: '420',
   bitDepth: 8,
-  algorithm: 'bilinear',
+  algorithm: 'lanczos3',
 });
 
 console.log(resized4208.inspection);
 resized4208.frame.close();
 ```
 
-`resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, plus 8-bit `NV12`, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. `NV12` resize preserves `NV12` when bit depth and chroma are preserved; explicit planar conversion can unpack `NV12` to `I420`. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
+`resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, plus 8-bit `NV12`, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. `NV12` resize preserves `NV12` when bit depth and chroma are preserved; explicit planar conversion can unpack `NV12` to `I420`. The default resize algorithm is `lanczos3`; `bilinear` and `nearest` are also available when speed or exact pixel replication matters. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
 
 Packed formats such as `RGBA` and `BGRA` are intentionally out of scope for this helper; use the Canvas helpers for those paths.
 

@@ -212,7 +212,7 @@ async function processRawPlanarFrame(
       height: options.height,
       bitDepth: options.rawBitDepth === 'preserve' ? undefined : options.rawBitDepth,
       chromaSubsampling: options.rawChromaSubsampling === 'preserve' ? undefined : options.rawChromaSubsampling,
-      algorithm: options.rawResizeAlgorithm ?? 'bilinear',
+      algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
     });
     return { frame: converted.frame, path: 'raw', warnings };
   } catch (error) {
