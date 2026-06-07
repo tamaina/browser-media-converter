@@ -4,6 +4,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tamaina/browser-media-converter",
+    "directory": "packages/media-container"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
