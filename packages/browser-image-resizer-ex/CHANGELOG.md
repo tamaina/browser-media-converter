@@ -1,5 +1,11 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.1.0
+
+### Minor Changes
+
+- b2ff52b: Remove the `resizeImageToAvif` convenience export. Use `resizeAndConvertImage` with `outputMime: 'image/avif'` instead.
+
 ## 0.0.1
 
 ### Patch Changes
