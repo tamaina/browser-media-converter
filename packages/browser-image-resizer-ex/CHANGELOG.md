@@ -1,5 +1,11 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.6.1
+
+### Patch Changes
+
+- Fix AVIF color metadata for canvas-resized output so Canvas SDR and Display P3 paths do not mark YUV-encoded AV1 bitstreams as RGB/full-range.
+
 ## 0.6.0
 
 ### Minor Changes

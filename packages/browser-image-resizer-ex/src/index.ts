@@ -13,7 +13,6 @@ import {
   readAvifColorMetadata,
   readAvifColorSpace,
   type AvifEncodeSupport,
-  type CicpColorSpace,
   type EncodeAvifOptions,
 } from '@browser-mc/webcodecs-avif';
 import { readImageColorMetadata, type ImageColorMetadata } from '@browser-mc/media-container';
@@ -260,7 +259,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
     const resized = await resizeFrameForColor(frame, size, options);
-    const preservedColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
+    const outputColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
       canvasColorSpace: resized.canvasColorSpace,
       preserveInput: options.colorMetadata !== 'canvas-sdr',
     });
@@ -269,7 +268,8 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
       const encoded = await encodeFrame(resized.frame, outputMime, {
         quality: options.quality,
         avif: options.avif,
-        inputColorMetadata: preservedColorMetadata,
+        inputColorMetadata: outputColorMetadata.metadata,
+        inputColorSpace: outputColorMetadata.colorSpace,
         preserveAlpha: inputMime !== 'image/jpeg',
         rawChromaSubsampling: options.rawChromaSubsampling,
         warnings: resized.warnings,
@@ -324,29 +324,25 @@ function compatibleOutputColorMetadata(
   metadata: ImageColorMetadata | null,
   outputMime: BrowserImageOutputMime,
   options: { canvasColorSpace?: PredefinedColorSpace; preserveInput: boolean } = { preserveInput: true },
-): ImageColorMetadata | null {
-  if (outputMime !== 'image/avif') return options.canvasColorSpace ? null : metadata;
-  const canvasCicp = options.canvasColorSpace ? canvasColorSpaceToCicp(options.canvasColorSpace) : null;
-  if (canvasCicp) return { type: 'cicp', cicp: canvasCicp };
-  if (!options.preserveInput) return null;
-  return metadata;
+): { metadata: ImageColorMetadata | null; colorSpace?: VideoColorSpaceInit } {
+  if (outputMime !== 'image/avif') return { metadata: options.canvasColorSpace ? null : metadata };
+  const canvasColorSpace = options.canvasColorSpace ? canvasColorSpaceToVideoColorSpace(options.canvasColorSpace) : null;
+  if (canvasColorSpace) return { metadata: null, colorSpace: canvasColorSpace };
+  if (!options.preserveInput) return { metadata: null };
+  return { metadata };
 }
 
-function canvasColorSpaceToCicp(colorSpace: PredefinedColorSpace): CicpColorSpace | null {
+function canvasColorSpaceToVideoColorSpace(colorSpace: PredefinedColorSpace): VideoColorSpaceInit | null {
   if (colorSpace === 'srgb') {
     return {
       primaries: 'bt709',
       transfer: 'iec61966-2-1',
-      matrix: 'rgb',
-      fullRange: true,
     };
   }
   if (colorSpace === 'display-p3') {
     return {
-      primaries: 'smpte432',
+      primaries: 'smpte432' as VideoColorPrimaries,
       transfer: 'iec61966-2-1',
-      matrix: 'rgb',
-      fullRange: true,
     };
   }
   return null;
@@ -383,6 +379,7 @@ async function encodeFrame(
     quality?: number;
     avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
     inputColorMetadata?: ImageColorMetadata | null;
+    inputColorSpace?: VideoColorSpaceInit;
     preserveAlpha?: boolean;
     rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
     warnings?: string[];
@@ -403,12 +400,18 @@ async function encodeFrame(
         && options.avif?.colorSpace === undefined
         ? options.inputColorMetadata ?? undefined
         : undefined;
+      const inputColorSpace = options.avif?.colorMetadata === undefined
+        && options.avif?.color === undefined
+        && options.avif?.colorSpace === undefined
+        ? options.inputColorSpace
+        : undefined;
       return await encodeImageToAvif(prepared.frame, {
         ...options.avif,
         alpha,
         chromaSubsampling,
         codec: prepared.codec,
         colorMetadata: options.avif?.colorMetadata ?? inputColorMetadata,
+        colorSpace: options.avif?.colorSpace ?? inputColorSpace,
         width: frame.displayWidth,
         height: frame.displayHeight,
         quality: options.quality,

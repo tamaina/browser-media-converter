@@ -165,6 +165,8 @@ const result = await page.evaluate(async ({ port }) => {
     quality: 0.75,
     colorMetadata: 'canvas-sdr',
   });
+  const canvasSdrStillDecoded = await decodeStillAvifChannels(canvasSdrStill.data);
+  const canvasSdrStillContainerColorSpace = readAvifColorSpace(canvasSdrStill.data);
   const canvasSdrAnimated = await resizeAnimatedImageToWebp(animated, {
     inputMime: 'image/webp',
     width: 40,
@@ -285,6 +287,8 @@ const result = await page.evaluate(async ({ port }) => {
       height: canvasSdrStill.height,
       resizePath: canvasSdrStill.kind === 'still' ? canvasSdrStill.resizePath : null,
       outputColorSpace: canvasSdrStill.kind === 'still' ? canvasSdrStill.output?.colorSpace : null,
+      containerColorSpace: canvasSdrStillContainerColorSpace,
+      decoded: canvasSdrStillDecoded,
     },
     canvasSdrAnimated: {
       kind: canvasSdrAnimated.kind,
@@ -333,6 +337,37 @@ const result = await page.evaluate(async ({ port }) => {
     },
     hdrInputColorSpace,
   };
+
+  async function decodeStillAvifChannels(data) {
+    const decoder = new ImageDecoder({
+      data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+      type: 'image/avif',
+    });
+    const frame = (await decoder.decode({ frameIndex: 0, completeFramesOnly: true })).image;
+    try {
+      const bytes = new Uint8Array(frame.allocationSize({ format: 'RGBA', colorSpace: 'srgb' }));
+      await frame.copyTo(bytes, { format: 'RGBA', colorSpace: 'srgb' });
+      const channels = [
+        { min: 255, max: 0 },
+        { min: 255, max: 0 },
+        { min: 255, max: 0 },
+      ];
+      for (let offset = 0; offset < bytes.length; offset += 4) {
+        for (let channel = 0; channel < 3; channel++) {
+          channels[channel].min = Math.min(channels[channel].min, bytes[offset + channel]);
+          channels[channel].max = Math.max(channels[channel].max, bytes[offset + channel]);
+        }
+      }
+      return {
+        format: frame.format,
+        colorSpace: frame.colorSpace.toJSON(),
+        channels,
+      };
+    } finally {
+      frame.close();
+      decoder.close();
+    }
+  }
 }, { port });
 
 assert.equal(result.decoded.animated, true);
@@ -361,12 +396,21 @@ assert.deepEqual(
     resizePath: 'canvas',
     outputColorSpace: {
       primaries: 'bt709',
-      transfer: 'bt709',
-      matrix: 'bt709',
+      transfer: 'iec61966-2-1',
+      matrix: 'rgb',
+      fullRange: true,
+    },
+    containerColorSpace: {
+      primaries: 'bt709',
+      transfer: 'iec61966-2-1',
+      matrix: 'smpte170m',
       fullRange: false,
     },
+    decoded: result.canvasSdrStill.decoded,
   },
 );
+assert.ok(result.canvasSdrStill.decoded.channels[0].max - result.canvasSdrStill.decoded.channels[0].min > 100);
+assert.ok(result.canvasSdrStill.decoded.channels[2].max - result.canvasSdrStill.decoded.channels[2].min > 100);
 assert.deepEqual(
   { kind: result.canvasSdrAnimated.kind, width: result.canvasSdrAnimated.width, height: result.canvasSdrAnimated.height, frameCount: result.canvasSdrAnimated.frameCount },
   { kind: 'animated', width: 40, height: 24, frameCount: 2 },
