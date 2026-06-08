@@ -83,6 +83,13 @@ export type BrowserImageResizerOptions = {
   rawChromaSubsampling?: BrowserImageRawChromaSubsampling;
   colorMetadata?: BrowserImageColorMetadataPolicy;
   quality?: number;
+  /**
+   * AVIF encoder options.
+   *
+   * Prefer leaving `avif.codec` unset. The resizer can then choose or validate
+   * the AV1 codec from the actual `VideoFrame` and browser support, including
+   * its high-bit-depth fallback path.
+   */
   avif?: Omit<EncodeAvifOptions, 'width' | 'height' | 'quality'>;
 };
 

@@ -32,6 +32,15 @@ export type EncodeAvifOptions = {
   quality?: number;
   width?: number;
   height?: number;
+  /**
+   * Explicit AV1 codec string passed to `VideoEncoder`.
+   *
+   * Leave this unset unless the caller has already verified that the codec
+   * matches the actual source `VideoFrame` pixel format and the current
+   * browser's encoder support. Do not derive this from only bit depth or
+   * chroma settings; changing the codec string does not convert the frame and
+   * can make `VideoEncoder.encode()` reject it.
+   */
   codec?: string;
   chromaSubsampling?: '444' | '420';
   bitrate?: number;
