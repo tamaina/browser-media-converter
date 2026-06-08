@@ -183,6 +183,30 @@ const result = await page.evaluate(async ({ port }) => {
   const iccWebpProfile = readWebpIccProfile(iccWebp.data);
   const support = getBrowserImageResizerSupport();
   const checkedSupport = await getBrowserImageResizerSupportWithAvif();
+  const fallbackWebpInput = await makeFrame('#296f5d', 'F');
+  const originalConvertToBlob = OffscreenCanvas.prototype.convertToBlob;
+  let fallbackCheckedSupport;
+  let fallbackEncodeError = null;
+  try {
+    OffscreenCanvas.prototype.convertToBlob = async function convertToBlobWithWebpFallback(options) {
+      if (options?.type === 'image/webp') {
+        return await originalConvertToBlob.call(this, { ...options, type: 'image/png' });
+      }
+      return await originalConvertToBlob.call(this, options);
+    };
+    fallbackCheckedSupport = await getBrowserImageResizerSupportWithAvif();
+    await resizeAndConvertImage({
+      input: fallbackWebpInput,
+      inputMime: 'image/webp',
+      outputMime: 'image/webp',
+      width: 40,
+      quality: 0.75,
+    }).catch((error) => {
+      fallbackEncodeError = error instanceof Error ? error.message : String(error);
+    });
+  } finally {
+    OffscreenCanvas.prototype.convertToBlob = originalConvertToBlob;
+  }
   const hdrAvif = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/hdrrec2020.avif`)).arrayBuffer());
   const hdrInputColorSpace = readAvifColorSpace(hdrAvif);
   const hdrAnimatedCheck = await checkImageDecodeSupport(hdrAvif, 'image/avif');
@@ -304,6 +328,8 @@ const result = await page.evaluate(async ({ port }) => {
     },
     support,
     checkedSupport,
+    fallbackCheckedSupport,
+    fallbackEncodeError,
     hdrChecks: {
       animated: hdrAnimatedCheck,
       firstFrame: hdrFirstFrameCheck,
@@ -449,6 +475,8 @@ assert.equal(result.checkedSupport.imageEncoder.jpeg, result.support.imageEncode
 assert.equal(result.checkedSupport.imageEncoder.webp, result.support.imageEncoder.webp);
 assert.equal(result.checkedSupport.imageEncoder.avif.supported, true);
 assert.equal(result.checkedSupport.imageEncoder.avif.variants.yuv444.bit8, true);
+assert.equal(result.fallbackCheckedSupport.imageEncoder.webp, false);
+assert.equal(result.fallbackEncodeError, 'Canvas did not encode image/webp');
 assert.equal(result.hdrChecks.animated.supported, false);
 assert.equal(result.hdrChecks.animated.error?.message, 'Failed to retrieve track metadata.');
 assert.equal(result.hdrChecks.firstFrame.supported, true);

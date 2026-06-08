@@ -1,5 +1,11 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 0.6.2
+
+### Patch Changes
+
+- Verify Canvas WebP encode support with actual output bytes and reject fallback blobs that are not the requested image format.
+
 ## 0.6.1
 
 ### Patch Changes

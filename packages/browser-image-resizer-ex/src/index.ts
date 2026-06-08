@@ -163,11 +163,16 @@ export function getBrowserImageResizerSupport(): BrowserImageResizerSupport {
 
 export async function getBrowserImageResizerSupportWithAvif(): Promise<BrowserImageResizerSupportResult> {
   const support = getBrowserImageResizerSupport();
+  const [webp, avif] = await Promise.all([
+    canCanvasEncodeWebp(),
+    checkAvifEncodeSupport(),
+  ]);
   return {
     ...support,
     imageEncoder: {
       ...support.imageEncoder,
-      avif: await checkAvifEncodeSupport(),
+      webp: support.imageEncoder.webp && webp,
+      avif,
     },
   };
 }
@@ -502,4 +507,32 @@ function canCanvasEncode(type: string) {
   return typeof OffscreenCanvas !== 'undefined'
     && typeof OffscreenCanvas.prototype.convertToBlob === 'function'
     && type.startsWith('image/');
+}
+
+async function canCanvasEncodeWebp() {
+  if (!canCanvasEncode('image/webp')) return false;
+  try {
+    const canvas = new OffscreenCanvas(2, 2);
+    const context = canvas.getContext('2d');
+    if (!context) return false;
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, 2, 2);
+    const blob = await canvas.convertToBlob({ type: 'image/webp', quality: 0.8 });
+    if (blob.type !== 'image/webp') return false;
+    return isWebpBytes(new Uint8Array(await blob.arrayBuffer()));
+  } catch {
+    return false;
+  }
+}
+
+function isWebpBytes(data: Uint8Array) {
+  return data.length >= 12
+    && data[0] === 0x52
+    && data[1] === 0x49
+    && data[2] === 0x46
+    && data[3] === 0x46
+    && data[8] === 0x57
+    && data[9] === 0x45
+    && data[10] === 0x42
+    && data[11] === 0x50;
 }

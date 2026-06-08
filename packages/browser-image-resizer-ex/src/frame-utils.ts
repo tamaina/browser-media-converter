@@ -231,7 +231,11 @@ export async function encodeFrameWithCanvas(frame: VideoFrame, mime: 'image/jpeg
   if (!context) throw new Error('Could not create 2D canvas context');
   context.drawImage(frame, 0, 0);
   const blob = await canvas.convertToBlob({ type: mime, quality });
-  return toUint8Array(blob);
+  const data = await toUint8Array(blob);
+  if (blob.type !== mime || !isCanvasEncodedBytes(data, mime)) {
+    throw new Error(`Canvas did not encode ${mime}`);
+  }
+  return data;
 }
 
 export async function toUint8Array(input: Blob | ArrayBuffer | Uint8Array): Promise<Uint8Array> {
@@ -257,4 +261,17 @@ async function decodeFirstImageFrameWithBitmap(input: Blob | ArrayBuffer | Uint8
   } finally {
     bitmap.close();
   }
+}
+
+function isCanvasEncodedBytes(data: Uint8Array, mime: 'image/jpeg' | 'image/webp') {
+  if (mime === 'image/jpeg') return data.length >= 2 && data[0] === 0xff && data[1] === 0xd8;
+  return data.length >= 12
+    && data[0] === 0x52
+    && data[1] === 0x49
+    && data[2] === 0x46
+    && data[3] === 0x46
+    && data[8] === 0x57
+    && data[9] === 0x45
+    && data[10] === 0x42
+    && data[11] === 0x50;
 }
