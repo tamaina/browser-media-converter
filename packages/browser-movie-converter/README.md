@@ -80,6 +80,7 @@ console.log(target.buffer);
 ```ts
 import {
   checkMovieRawFrameSupport,
+  checkMovieVideoEncoderBitDepthSupport,
   checkMovieVideoEncoderConfigSupport,
 } from '@browser-mc/browser-movie-converter';
 
@@ -99,8 +100,17 @@ const encoder = await checkMovieVideoEncoderConfigSupport({
   framerate: 30,
 });
 
+const encoderBitDepths = await checkMovieVideoEncoderBitDepthSupport();
+
 console.log(rawFrame.supported, rawFrame.format);
 console.log(encoder.supported, encoder.config?.codec);
+console.table(encoderBitDepths.map(({ codec, bitDepth, chromaSubsampling, fullCodecString, supported }) => ({
+  codec,
+  bitDepth,
+  chromaSubsampling,
+  fullCodecString,
+  supported,
+})));
 ```
 
 ## HLS
@@ -189,7 +199,7 @@ When split `quantizer` values are used with `keyFrameInterval`, the interval is 
 
 - This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle.
 - When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeFramePlanar()` inside Mediabunny's `process` hook. `resize.rawBitDepth` and `resize.rawChromaSubsampling` can additionally convert supported planar frames before encoding; both default to `preserve`. `NV12` frames are preserved as `NV12` during resize when both controls are preserved, or unpacked to `I420` when raw planar conversion is requested.
-- `rawBitDepth` controls the raw planar `VideoFrame` produced before encoding; it does not by itself prove that the chosen movie codec accepts that frame bit depth. Use `checkMovieRawFrameSupport` for the planned raw frame format and `checkMovieVideoEncoderConfigSupport` for the exact `VideoEncoderConfig` you intend to use.
+- `rawBitDepth` controls the raw planar `VideoFrame` produced before encoding; it does not by itself prove that the chosen movie codec accepts that frame bit depth. Use `checkMovieRawFrameSupport` for the planned raw frame format, `checkMovieVideoEncoderConfigSupport` for the exact `VideoEncoderConfig` you intend to use, and `checkMovieVideoEncoderBitDepthSupport()` to compare default 1080p 8-bit/10-bit and 4:2:0/4:2:2/4:4:4 encoder configs across codecs.
 - `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, quantizer, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.
 - HLS segment formats are controlled by `segmentFormat: { mpegts?: boolean; cmaf?: boolean }`, both `true` by default. Per playlist, Mediabunny picks the first enabled format that supports all of its codecs: MPEG-TS handles avc/hevc video, so codecs it cannot contain (such as `av1` or `vp9` variants) automatically fall through to CMAF (fragmented MP4) segments with an `init-{n}.mp4` init segment. TS and CMAF variants can coexist in one master playlist.
 - For AVC/H.264 transcodes, Mediabunny currently builds `avc1.64....` codec strings by default, which corresponds to High Profile. If the video track is copied without transcoding, the source profile is preserved instead.

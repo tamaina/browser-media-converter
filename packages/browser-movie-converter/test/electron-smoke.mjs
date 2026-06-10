@@ -61,6 +61,7 @@ const result = await page.evaluate(async ({ port }) => {
     buildMovieConversionOptions,
     buildMovieVideoConversionOptions,
     checkMovieRawFrameSupport,
+    checkMovieVideoEncoderBitDepthSupport,
     checkMovieVideoEncoderConfigSupport,
   } = await import(`http://127.0.0.1:${port}/converter.js`);
   const {
@@ -238,6 +239,7 @@ const result = await page.evaluate(async ({ port }) => {
     bitrate: 500_000,
     framerate: 30,
   });
+  const encoderBitDepthSupport = await checkMovieVideoEncoderBitDepthSupport();
   const conversion = await Conversion.init(plan.options);
   if (!conversion.isValid) {
     throw new Error(`Mediabunny could not create a valid conversion: ${conversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
@@ -395,6 +397,15 @@ const result = await page.evaluate(async ({ port }) => {
       codec: encoderConfigSupport.config?.codec ?? null,
       error: encoderConfigSupport.error,
     },
+    encoderBitDepthSupport: encoderBitDepthSupport.map((item) => ({
+      codec: item.codec,
+      bitDepth: item.bitDepth,
+      chromaSubsampling: item.chromaSubsampling,
+      fullCodecString: item.fullCodecString,
+      supported: item.supported,
+      configCodec: item.config?.codec ?? null,
+      error: item.error,
+    })),
     videoColor: plan.videoColor,
     scenePlan: plan.sceneKeyFrames?.state ?? null,
     keyPacketTimestamps,
@@ -435,6 +446,69 @@ assert.equal(result.unsupportedRawFrameSupport.supported, false);
 assert.match(result.unsupportedRawFrameSupport.error.message, /does not support VideoFrame format RGBA/u);
 assert.equal(typeof result.encoderConfigSupport.supported, 'boolean');
 assert.equal(result.encoderConfigSupport.error, null);
+assert.deepEqual(result.encoderBitDepthSupport.map((item) => [item.codec, item.bitDepth, item.chromaSubsampling]), [
+  ['avc', 8, '420'],
+  ['avc', 8, '422'],
+  ['avc', 8, '444'],
+  ['avc', 10, '420'],
+  ['avc', 10, '422'],
+  ['avc', 10, '444'],
+  ['hevc', 8, '420'],
+  ['hevc', 8, '422'],
+  ['hevc', 8, '444'],
+  ['hevc', 10, '420'],
+  ['hevc', 10, '422'],
+  ['hevc', 10, '444'],
+  ['vp8', 8, '420'],
+  ['vp9', 8, '420'],
+  ['vp9', 8, '422'],
+  ['vp9', 8, '444'],
+  ['vp9', 10, '420'],
+  ['vp9', 10, '422'],
+  ['vp9', 10, '444'],
+  ['av1', 8, '420'],
+  ['av1', 8, '422'],
+  ['av1', 8, '444'],
+  ['av1', 10, '420'],
+  ['av1', 10, '422'],
+  ['av1', 10, '444'],
+]);
+assert.deepEqual(result.encoderBitDepthSupport.map((item) => item.fullCodecString), [
+  'avc1.640028',
+  null,
+  'avc1.f40028',
+  'avc1.6e0028',
+  'avc1.7a0028',
+  'avc1.f40028',
+  'hev1.1.6.L120.B0',
+  null,
+  null,
+  'hev1.2.6.L120.B0',
+  null,
+  null,
+  'vp8',
+  'vp09.00.40.08',
+  'vp09.01.40.08',
+  'vp09.01.40.08',
+  'vp09.02.40.10',
+  'vp09.03.40.10',
+  'vp09.03.40.10',
+  'av01.0.08M.08',
+  'av01.2.08M.08',
+  'av01.1.08M.08',
+  'av01.0.08M.10',
+  'av01.2.08M.10',
+  'av01.1.08M.10',
+]);
+for (const item of result.encoderBitDepthSupport) {
+  assert.equal(typeof item.supported, 'boolean');
+  if (item.fullCodecString === null) {
+    assert.ok(item.error, 'expected a planner error for unsupported default codec settings');
+  } else {
+    assert.equal(item.error, null);
+    if (item.supported) assert.equal(item.configCodec, item.fullCodecString);
+  }
+}
 assert.ok(result.videoColor, 'expected input video color metadata');
 assert.ok(result.scenePlan?.changes.length > 0, 'expected scene detection to find changes');
 assert.ok(result.scenePlan?.keyFrameTimestamps.length > 1, 'expected scene key frame timestamps');

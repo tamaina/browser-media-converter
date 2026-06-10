@@ -131,6 +131,25 @@ export type BrowserMovieVideoEncoderConfigSupportResult = {
   error: { name: string; message: string } | null;
 };
 
+export type BrowserMovieVideoEncoderBitDepthSupportOptions = {
+  width?: number;
+  height?: number;
+  bitrate?: number;
+  framerate?: number;
+  chromaSubsampling?: VideoCodecChromaSubsampling;
+  chromaSubsamplings?: VideoCodecChromaSubsampling[];
+  bitDepths?: VideoCodecBitDepth[];
+  codecs?: VideoCodecName[];
+  config?: Omit<VideoEncoderConfig, 'codec' | 'width' | 'height' | 'bitrate' | 'framerate'>;
+};
+
+export type BrowserMovieVideoEncoderBitDepthSupportResult = BrowserMovieVideoEncoderConfigSupportResult & {
+  codec: VideoCodecName;
+  bitDepth: VideoCodecBitDepth;
+  chromaSubsampling: VideoCodecChromaSubsampling;
+  fullCodecString: string | null;
+};
+
 export type BrowserMovieConversionPlan = {
   options: ConversionOptions;
   sceneKeyFrames: SceneKeyFrameDetector | null;
@@ -146,6 +165,23 @@ const defaultMovieSceneDetectionOptions = {
   sensitivity: 'high',
   sampleRate: 'all',
 } satisfies SceneDetectionOptions;
+
+const defaultVideoEncoderBitDepthSupportCodecs: VideoCodecName[] = ['avc', 'hevc', 'vp8', 'vp9', 'av1'];
+
+const defaultVideoEncoderBitDepths: VideoCodecBitDepth[] = [8, 10];
+
+const defaultVideoEncoderChromaSubsamplings: VideoCodecChromaSubsampling[] = ['420', '422', '444'];
+
+const defaultVideoEncoderBitDepthSupportConfig = {
+  width: 1920,
+  height: 1080,
+  bitrate: 8_000_000,
+  framerate: 30,
+  chromaSubsampling: '420',
+} satisfies Required<Pick<
+  BrowserMovieVideoEncoderBitDepthSupportOptions,
+  'width' | 'height' | 'bitrate' | 'framerate' | 'chromaSubsampling'
+>>;
 
 export async function buildMovieConversionOptions(options: BrowserMovieConversionOptionsInput): Promise<BrowserMovieConversionPlan> {
   const tracks = options.tracks ?? 'primary';
@@ -293,6 +329,69 @@ export async function checkMovieVideoEncoderConfigSupport(
   }
 }
 
+export async function checkMovieVideoEncoderBitDepthSupport(
+  options: BrowserMovieVideoEncoderBitDepthSupportOptions = {},
+): Promise<BrowserMovieVideoEncoderBitDepthSupportResult[]> {
+  const codecs = options.codecs ?? defaultVideoEncoderBitDepthSupportCodecs;
+  const bitDepths = options.bitDepths ?? defaultVideoEncoderBitDepths;
+  const chromaSubsamplings = options.chromaSubsamplings
+    ?? (options.chromaSubsampling ? [options.chromaSubsampling] : defaultVideoEncoderChromaSubsamplings);
+  const width = options.width ?? defaultVideoEncoderBitDepthSupportConfig.width;
+  const height = options.height ?? defaultVideoEncoderBitDepthSupportConfig.height;
+  const framerate = options.framerate ?? defaultVideoEncoderBitDepthSupportConfig.framerate;
+  const bitrate = options.bitrate ?? defaultVideoEncoderBitDepthSupportConfig.bitrate;
+
+  return Promise.all(codecs.flatMap((codec) => (
+    bitDepths.flatMap((bitDepth) => (
+      chromaSubsamplings
+        .filter((chromaSubsampling) => isMeaningfulCodecBitDepthChromaProbe(codec, bitDepth, chromaSubsampling))
+        .map(async (chromaSubsampling) => {
+          let fullCodecString: string;
+          try {
+            fullCodecString = buildVideoCodecString({
+              codec,
+              width,
+              height,
+              frameRate: framerate,
+              preferredAllowingMaxBitrate: bitrate,
+              bitDepth,
+              chromaSubsampling,
+            });
+          } catch (error) {
+            return {
+              codec,
+              bitDepth,
+              chromaSubsampling,
+              fullCodecString: null,
+              supported: false,
+              config: null,
+              error: normalizeSupportError(error),
+            };
+          }
+
+          const support = await checkMovieVideoEncoderConfigSupport({
+            ...options.config,
+            codec: fullCodecString,
+            width,
+            height,
+            bitrate,
+            framerate,
+          });
+
+          return {
+            codec,
+            bitDepth,
+            chromaSubsampling,
+            fullCodecString,
+            supported: support.supported,
+            config: support.config,
+            error: support.error,
+          };
+        })
+    ))
+  )));
+}
+
 export async function getSelectedVideoTracks(
   input: Input,
   tracks: NonNullable<ConversionOptions['tracks']>,
@@ -387,6 +486,20 @@ function isPlannerVideoCodec(codec: unknown): codec is VideoCodecName {
     || codec === 'vp8'
     || codec === 'vp9'
     || codec === 'av1';
+}
+
+function supportsCodecBitDepth(codec: VideoCodecName, bitDepth: VideoCodecBitDepth) {
+  if (codec === 'vp8') return bitDepth === 8;
+  return bitDepth === 8 || bitDepth === 10 || bitDepth === 12;
+}
+
+function isMeaningfulCodecBitDepthChromaProbe(
+  codec: VideoCodecName,
+  bitDepth: VideoCodecBitDepth,
+  chromaSubsampling: VideoCodecChromaSubsampling,
+) {
+  if (!supportsCodecBitDepth(codec, bitDepth)) return false;
+  return codec !== 'vp8' || chromaSubsampling === '420';
 }
 
 type SourceVideoCodecSettings = {

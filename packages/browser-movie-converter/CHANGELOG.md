@@ -1,5 +1,16 @@
 # @browser-mc/browser-movie-converter
 
+## 0.4.0
+
+### Minor Changes
+
+- Add codec-string planning and capability-check helpers for movie conversion.
+
+  - Video options can now infer `fullCodecString` for planned `avc`, `hevc`, `vp8`, `vp9`, and `av1` transcodes from the output size, bitrate, frame rate, and planned raw bit depth or chroma subsampling.
+  - `checkMovieRawFrameSupport` reports whether the planned raw planar `VideoFrame` format can be constructed before encoding.
+  - `checkMovieVideoEncoderConfigSupport` wraps `VideoEncoder.isConfigSupported()` so callers can check the exact encoder config they plan to use.
+  - `checkMovieVideoEncoderBitDepthSupport()` compares default 1080p 8-bit/10-bit and 4:2:0/4:2:2/4:4:4 encoder configs across codecs.
+
 ## 0.3.0
 
 ### Minor Changes
