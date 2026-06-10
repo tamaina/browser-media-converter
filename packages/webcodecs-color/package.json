@@ -23,9 +23,6 @@
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
-  "dependencies": {
-    "@browser-mc/binary": "workspace:^"
-  },
   "files": [
     "dist",
     "README.md"

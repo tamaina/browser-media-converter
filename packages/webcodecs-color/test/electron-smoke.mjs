@@ -51,7 +51,6 @@ const result = await page.evaluate(async ({ port }) => {
     classifyFrameColor,
     convertFrameToCanvasSdr,
     copyFrameToRgba,
-    decodeImageToVideoFrame,
     frameFormatCanHaveAlpha,
     inspectFrame,
     resizeVideoFrame,
@@ -59,7 +58,7 @@ const result = await page.evaluate(async ({ port }) => {
     resizeFramePlanar,
   } = await import(`http://127.0.0.1:${port}/color.js`);
 
-  const frame = await decodeImageToVideoFrame(input, 'image/avif', { colorSpaceConversion: 'none' });
+  const frame = await decodeFirstFrame(input, 'image/avif');
   const inspection = inspectFrame(frame);
   const classification = classifyFrameColor(inspection);
   const canvasSdr = convertFrameToCanvasSdr(frame);
@@ -264,6 +263,20 @@ const result = await page.evaluate(async ({ port }) => {
     canvasSdrInspection,
     canvasP3ResizeInspection,
   };
+
+  async function decodeFirstFrame(data, type) {
+    const decoder = new ImageDecoder({
+      data,
+      type,
+      colorSpaceConversion: 'none',
+    });
+    try {
+      const result = await decoder.decode({ frameIndex: 0, completeFramesOnly: true });
+      return result.image;
+    } finally {
+      decoder.close();
+    }
+  }
 
   async function probeSyntheticPlanar(format, options) {
     let synthetic;

@@ -1,4 +1,3 @@
-import { copyArrayBuffer } from '@browser-mc/binary';
 import { describePlanarFormat, type PlanarBitDepth, type PlanarChromaSubsampling } from './formats.js';
 import {
   classifyFrameColor,
@@ -36,27 +35,6 @@ export type ResizeVideoFrameResult = {
   warnings: string[];
   canvasColorSpace?: PredefinedColorSpace;
 };
-
-export async function decodeImageToVideoFrame(data: Uint8Array, type: string, options: {
-  colorSpaceConversion?: ColorSpaceConversion;
-  desiredWidth?: number;
-  desiredHeight?: number;
-} = {}): Promise<VideoFrame> {
-  if (typeof ImageDecoder === 'undefined') throw new Error('ImageDecoder API is not available in this environment');
-  const decoder = new ImageDecoder({
-    data: copyArrayBuffer(data),
-    type,
-    colorSpaceConversion: options.colorSpaceConversion ?? 'none',
-    desiredWidth: options.desiredWidth,
-    desiredHeight: options.desiredHeight,
-  });
-  try {
-    const result = await decoder.decode({ frameIndex: 0, completeFramesOnly: true });
-    return result.image;
-  } finally {
-    decoder.close();
-  }
-}
 
 export async function resizeVideoFrame(
   frame: VideoFrame,

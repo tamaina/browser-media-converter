@@ -115,11 +115,7 @@ importers:
         specifier: workspace:^
         version: link:../webcodecs-color
 
-  packages/webcodecs-color:
-    dependencies:
-      '@browser-mc/binary':
-        specifier: workspace:^
-        version: link:../binary
+  packages/webcodecs-color: {}
 
 packages:
 

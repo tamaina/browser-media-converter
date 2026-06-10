@@ -61,14 +61,14 @@ Verified outputs:
 
 ## HDR and wide-gamut resize
 
-`@browser-mc/webcodecs-color` is the current experiment for handling non-sRGB `VideoFrame`s without forcing them through Canvas.
+`@browser-mc/webcodecs-color` provides helpers for inspecting and resizing non-sRGB `VideoFrame`s without forcing supported planar frames through Canvas.
 
-- `decodeImageToVideoFrame` decodes `hdrrec2020.avif` with `ImageDecoder`.
 - `inspectFrame` reads `VideoFrame.format` and `VideoFrame.colorSpace`.
-- `resizeFrameRaw` uses `VideoFrame.copyTo()` plus a self-managed planar resizer, then creates a new `VideoFrame` from the resized buffer.
-- `resizeFrameRaw` reads `visibleRect` rather than coded padding, avoiding padded bottom/right rows in raw output.
-- Supported raw resize formats are `NV12`, `I420`, `I422`, `I444`, and Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`.
-- `resizeFrameWithCanvas` remains only as a comparison path.
+- `resizeFramePlanar` uses `VideoFrame.copyTo()` plus a self-managed planar resizer, then creates a new `VideoFrame` from the resized buffer.
+- `resizeFramePlanar` reads `visibleRect` rather than coded padding, avoiding padded bottom/right rows in raw output.
+- `resizeVideoFrame` picks the planar path for supported YUV/YUVA and `NV12`, and falls back to Canvas for packed RGB or unsupported formats.
+- Supported planar resize formats are `NV12`, `I420`, `I422`, `I444`, Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`, and related 12-bit or alpha variants when the browser can construct those `VideoFrame` formats.
+- `resizeFrameWithCanvas` remains available for explicit Canvas processing.
 
 Current Electron result for `hdrrec2020.avif`:
 
