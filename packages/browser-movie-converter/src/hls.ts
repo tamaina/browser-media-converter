@@ -1,10 +1,12 @@
 import {
   AppendOnlyStreamTarget,
+  CmafOutputFormat,
   Conversion,
   HlsOutputFormat,
   Input,
   MpegTsOutputFormat,
   Output,
+  OutputFormat,
   OutputTrackGroup,
   PathedTarget,
   Target,
@@ -24,6 +26,13 @@ import {
   type BrowserMovieResizeOptions,
   type SceneDetectionOptions,
 } from './conversion-options.js';
+
+export type MovieHlsSegmentFormatOptions = {
+  /** Allow MPEG-TS segments (avc/hevc video only). Defaults to true. */
+  mpegts?: boolean;
+  /** Allow CMAF (fragmented MP4) segments, required for codecs like av1/vp9. Defaults to true. */
+  cmaf?: boolean;
+};
 
 export type MovieHlsAsset = {
   path: string;
@@ -49,6 +58,7 @@ export type MovieHlsOptions = {
   targetDuration?: number;
   rootPath?: string;
   singleFilePerPlaylist?: boolean;
+  segmentFormat?: MovieHlsSegmentFormatOptions;
   audio?: ConversionAudioOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
@@ -92,13 +102,35 @@ export async function* convertMovieToHls(options: MovieHlsOptions): AsyncGenerat
   if (conversionError) throw conversionError;
 }
 
+/**
+ * @deprecated Use {@link createMovieHlsFormat}. This helper keeps the previous
+ * MPEG-TS-only segment behavior.
+ */
 export function createMpegTsHlsFormat(options: Pick<HlsOutputFormatOptions, 'targetDuration' | 'singleFilePerPlaylist'> = {}) {
+  return createMovieHlsFormat({
+    ...options,
+    segmentFormat: { mpegts: true, cmaf: false },
+  });
+}
+
+export function createMovieHlsFormat(options: Pick<HlsOutputFormatOptions, 'targetDuration' | 'singleFilePerPlaylist'> & { segmentFormat?: MovieHlsSegmentFormatOptions } = {}) {
+  // MPEG-TS first: per playlist, mediabunny picks the first format that can
+  // contain all of its tracks, so avc/hevc variants stay on TS and codecs TS
+  // cannot hold (av1, vp9, ...) fall through to CMAF.
+  const segmentFormats: OutputFormat[] = [];
+  if (options.segmentFormat?.mpegts ?? true) segmentFormats.push(new MpegTsOutputFormat());
+  if (options.segmentFormat?.cmaf ?? true) segmentFormats.push(new CmafOutputFormat());
+  if (segmentFormats.length === 0) {
+    throw new Error('HLS output requires at least one enabled segment format (mpegts or cmaf).');
+  }
+
   return new HlsOutputFormat({
-    segmentFormat: new MpegTsOutputFormat(),
+    segmentFormat: segmentFormats,
     targetDuration: options.targetDuration ?? 2,
     singleFilePerPlaylist: options.singleFilePerPlaylist ?? false,
     getPlaylistPath: (info) => `playlist-${info.n}.m3u8`,
-    getSegmentPath: (info) => `segment-${info.playlist.n}-${info.n}.ts`,
+    getSegmentPath: (info) => `segment-${info.playlist.n}-${info.n}${info.format.fileExtension}`,
+    getInitPath: (info) => `init-${info.n}.mp4`,
   });
 }
 
@@ -109,9 +141,10 @@ export function decodeMovieHlsText(data: Uint8Array) {
 async function runHlsConversion<T extends Target>(target: PathedTarget<T>, options: MovieHlsOptions) {
   const output = new Output({
     target,
-    format: createMpegTsHlsFormat({
+    format: createMovieHlsFormat({
       targetDuration: options.targetDuration,
       singleFilePerPlaylist: options.singleFilePerPlaylist,
+      segmentFormat: options.segmentFormat,
     }),
   });
   const plan = await buildMovieHlsConversionOptions(options.input, output, options);

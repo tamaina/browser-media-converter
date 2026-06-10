@@ -99,6 +99,11 @@ const result = await page.evaluate(async ({ port }) => {
         colorMetadata: 'canvas-sdr',
       },
       {},
+      {
+        video: {
+          codec: 'av1',
+        },
+      },
     ],
     sceneDetection: {
       sensitivity: 'high',
@@ -156,6 +161,11 @@ const result = await page.evaluate(async ({ port }) => {
 
 assert.ok(result.assets.some((asset) => asset.path.endsWith('.m3u8')), 'expected HLS playlists');
 assert.ok(result.assets.some((asset) => asset.path.endsWith('.ts')), 'expected HLS TS segments');
+assert.ok(result.assets.some((asset) => asset.path.endsWith('.m4s')), 'expected CMAF segments for the AV1 variant');
+assert.ok(
+  result.assets.some((asset) => /^init-\d+\.mp4$/.test(asset.path)),
+  'expected a CMAF init segment for the AV1 variant',
+);
 assert.equal(result.masterPath, 'master.m3u8');
 assert.ok(
   result.assets.some((asset) => asset.preview.includes('#EXT-X-STREAM-INF')),
@@ -164,8 +174,12 @@ assert.ok(
 const masterPlaylist = result.assets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';
 assert.equal(
   (masterPlaylist.match(/#EXT-X-STREAM-INF/g) ?? []).length,
-  2,
+  3,
   'expected one HLS stream declaration per variant',
+);
+assert.ok(
+  masterPlaylist.includes('av01.'),
+  'expected the AV1 variant to be declared in the master playlist',
 );
 assert.ok(
   masterPlaylist.includes('RESOLUTION=320x180'),

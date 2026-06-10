@@ -1,5 +1,14 @@
 # @browser-mc/browser-movie-converter
 
+## 0.3.0
+
+### Minor Changes
+
+- Add CMAF (fragmented MP4) segment support to HLS output.
+
+  - `convertMovieToHls` accepts `segmentFormat: { mpegts?: boolean; cmaf?: boolean }`, both enabled by default. Per playlist, the first enabled format that supports all of its codecs is used, so avc/hevc variants keep MPEG-TS segments while codecs MPEG-TS cannot contain (such as `av1`) automatically use CMAF segments with an `init-{n}.mp4` init segment.
+  - Export `createMovieHlsFormat` and keep `createMpegTsHlsFormat` as a deprecated MPEG-TS-only alias.
+
 ## 0.2.0
 
 ### Minor Changes

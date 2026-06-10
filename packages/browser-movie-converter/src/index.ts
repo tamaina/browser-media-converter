@@ -1,8 +1,11 @@
 import {
   convertMovieToHls,
+  createMovieHlsFormat,
+  createMpegTsHlsFormat,
   decodeMovieHlsText,
   type MovieHlsAsset,
   type MovieHlsOptions,
+  type MovieHlsSegmentFormatOptions,
   type MovieHlsVariantOptions,
 } from './hls.js';
 import {
@@ -32,6 +35,7 @@ export type {
   BrowserMovieTrackColor,
   MovieHlsAsset,
   MovieHlsOptions,
+  MovieHlsSegmentFormatOptions,
   MovieHlsVariantOptions,
   SceneDetectionOptions,
   SceneKeyFrameState,
@@ -40,6 +44,8 @@ export type {
 export {
   buildMovieConversionOptions,
   convertMovieToHls,
+  createMovieHlsFormat,
+  createMpegTsHlsFormat,
   decodeMovieHlsText,
   inspectMovie,
   inspectVideoTrackColor,
