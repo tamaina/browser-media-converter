@@ -16,7 +16,18 @@ import {
   type SceneKeyFrameState,
 } from '@browser-mc/mediabunny-scene-keyframes';
 import {
+  buildVideoCodecString,
+  parseVideoCodecString,
+  type VideoCodecChromaSubsampling,
+  type VideoCodecBitDepth,
+  type VideoCodecName,
+} from '@browser-mc/video-codec';
+import {
   convertFrameToCanvasSdr,
+  bitDepthFor,
+  chromaSubsamplingFor,
+  describePlanarFormat,
+  planarFormatFor,
   resizeFramePlanar,
   sdrVideoColorSpaceInit,
   type PlanarBitDepth,
@@ -33,6 +44,14 @@ export type BrowserMovieResizePath = 'raw';
 export type BrowserMovieRawBitDepth = 'preserve' | PlanarBitDepth;
 
 export type BrowserMovieRawChromaSubsampling = 'preserve' | PlanarChromaSubsampling;
+
+export type BrowserMovieVideoOptions = Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'> & {
+  /**
+   * Mediabunny accepts this in its encoder options, but its conversion option
+   * type does not currently expose it.
+   */
+  fullCodecString?: string;
+};
 
 export type BrowserMovieResizeOptions = {
   width?: number;
@@ -52,7 +71,7 @@ export type BrowserMovieQuantizerOptions = number | {
 export type BrowserMovieConversionOptionsInput = {
   input: Input;
   output: Output;
-  video?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'>;
+  video?: BrowserMovieVideoOptions;
   audio?: ConversionAudioOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
@@ -65,7 +84,7 @@ export type BrowserMovieConversionOptionsInput = {
 
 export type BrowserMovieVideoConversionOptionsInput = {
   track: InputVideoTrack;
-  video?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'>;
+  video?: BrowserMovieVideoOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   quantizer?: BrowserMovieQuantizerOptions;
@@ -87,6 +106,29 @@ export type BrowserMovieVideoConversionPlan = {
 export type BrowserMovieTrackColor = {
   colorSpace: VideoColorSpaceInit | null;
   hasHighDynamicRange: boolean;
+};
+
+export type BrowserMovieRawFrameSupportOptions = {
+  width: number;
+  height: number;
+  sourceFormat?: string | null;
+  rawBitDepth?: BrowserMovieRawBitDepth;
+  rawChromaSubsampling?: BrowserMovieRawChromaSubsampling;
+  hasAlpha?: boolean;
+};
+
+export type BrowserMovieRawFrameSupportResult = {
+  supported: boolean;
+  format: string | null;
+  bitDepth: PlanarBitDepth | null;
+  chromaSubsampling: PlanarChromaSubsampling | null;
+  error: { name: string; message: string } | null;
+};
+
+export type BrowserMovieVideoEncoderConfigSupportResult = {
+  supported: boolean;
+  config: VideoEncoderConfig | null;
+  error: { name: string; message: string } | null;
 };
 
 export type BrowserMovieConversionPlan = {
@@ -149,11 +191,20 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
   const resize = options.resize
     ? await resolveTrackResize(options.track, options.resize)
     : null;
+  const sourceCodecSettings = await inspectVideoTrackCodecSettings(options.track);
+  const outputSize = resize
+    ? { width: resize.width, height: resize.height }
+    : {
+        width: await options.track.getDisplayWidth(),
+        height: await options.track.getDisplayHeight(),
+      };
 
   return {
     options: makeVideoOptions({
       base: options.video,
+      outputSize,
       resize,
+      sourceCodecSettings,
       sceneKeyFrames,
       quantizer: options.quantizer,
       forceTranscode: options.forceTranscode,
@@ -186,6 +237,62 @@ export async function inspectVideoTrackColor(track: InputVideoTrack): Promise<Br
   };
 }
 
+export function checkMovieRawFrameSupport(options: BrowserMovieRawFrameSupportOptions): BrowserMovieRawFrameSupportResult {
+  try {
+    const resolved = resolveRawFrameFormat(options);
+    const descriptor = describePlanarFormat(resolved.format);
+    if (!descriptor) {
+      throw new Error(`Planar processing does not support VideoFrame format ${resolved.format}`);
+    }
+
+    const frame = makeProbeVideoFrame(resolved.format, options.width, options.height);
+    frame.close();
+
+    return {
+      supported: true,
+      format: resolved.format,
+      bitDepth: descriptor.bitDepth,
+      chromaSubsampling: chromaSubsamplingFor(descriptor),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      format: null,
+      bitDepth: null,
+      chromaSubsampling: null,
+      error: normalizeSupportError(error),
+    };
+  }
+}
+
+export async function checkMovieVideoEncoderConfigSupport(
+  config: VideoEncoderConfig,
+): Promise<BrowserMovieVideoEncoderConfigSupportResult> {
+  if (typeof VideoEncoder === 'undefined') {
+    return {
+      supported: false,
+      config: null,
+      error: { name: 'Error', message: 'VideoEncoder API is not available in this environment' },
+    };
+  }
+
+  try {
+    const support = await VideoEncoder.isConfigSupported(config);
+    return {
+      supported: support.supported === true,
+      config: support.config ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      config: null,
+      error: normalizeSupportError(error),
+    };
+  }
+}
+
 export async function getSelectedVideoTracks(
   input: Input,
   tracks: NonNullable<ConversionOptions['tracks']>,
@@ -203,8 +310,10 @@ export async function getSelectedAudioTracks(input: Input, tracks: NonNullable<C
 }
 
 function makeVideoOptions(options: {
-  base?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'>;
+  base?: BrowserMovieVideoOptions;
+  outputSize: { width: number; height: number };
   resize: ResolvedMovieResize | null;
+  sourceCodecSettings: SourceVideoCodecSettings;
   sceneKeyFrames: SceneKeyFrameDetector | null;
   quantizer?: BrowserMovieQuantizerOptions;
   forceTranscode?: boolean;
@@ -234,14 +343,98 @@ function makeVideoOptions(options: {
         process: baseProcess,
       })
     : baseProcess;
+  const fullCodecString = resolveFullCodecString({
+    base,
+    resize: options.resize,
+    sourceCodecSettings: options.sourceCodecSettings,
+    outputSize: options.outputSize,
+  });
 
   return {
     ...base,
+    ...(fullCodecString ? { fullCodecString } : {}),
     forceTranscode,
     process,
     processedWidth: options.resize ? options.resize.width : undefined,
     processedHeight: options.resize ? options.resize.height : undefined,
   };
+}
+
+function resolveFullCodecString(options: {
+  base: BrowserMovieVideoOptions | undefined;
+  resize: ResolvedMovieResize | null;
+  sourceCodecSettings: SourceVideoCodecSettings;
+  outputSize: { width: number; height: number };
+}) {
+  if (!options.base || options.base.fullCodecString) return undefined;
+  const codec = options.base.codec;
+  if (!isPlannerVideoCodec(codec)) return undefined;
+
+  return buildVideoCodecString({
+    codec,
+    width: options.outputSize.width,
+    height: options.outputSize.height,
+    frameRate: options.base.frameRate,
+    preferredAllowingMaxBitrate: typeof options.base.bitrate === 'number' ? options.base.bitrate : undefined,
+    bitDepth: resolvePlannedBitDepth(options.resize, options.sourceCodecSettings),
+    chromaSubsampling: resolvePlannedChromaSubsampling(options.resize, options.sourceCodecSettings),
+  });
+}
+
+function isPlannerVideoCodec(codec: unknown): codec is VideoCodecName {
+  return codec === 'avc'
+    || codec === 'hevc'
+    || codec === 'vp8'
+    || codec === 'vp9'
+    || codec === 'av1';
+}
+
+type SourceVideoCodecSettings = {
+  bitDepth?: VideoCodecBitDepth;
+  chromaSubsampling?: VideoCodecChromaSubsampling;
+};
+
+async function inspectVideoTrackCodecSettings(track: InputVideoTrack): Promise<SourceVideoCodecSettings> {
+  const codecStrings = [
+    await readTrackCodecParameterString(track),
+    (await track.getDecoderConfig())?.codec ?? null,
+  ];
+
+  for (const codecString of codecStrings) {
+    if (!codecString) continue;
+    const parsed = parseVideoCodecString(codecString);
+    if (parsed) {
+      return {
+        bitDepth: parsed.settings.bitDepth,
+        chromaSubsampling: parsed.settings.chromaSubsampling,
+      };
+    }
+  }
+
+  return {};
+}
+
+async function readTrackCodecParameterString(track: InputVideoTrack) {
+  try {
+    return await track.getCodecParameterString();
+  } catch {
+    return null;
+  }
+}
+
+function resolvePlannedBitDepth(resize: ResolvedMovieResize | null, sourceCodecSettings: SourceVideoCodecSettings) {
+  if (!resize) return sourceCodecSettings.bitDepth;
+  if (resize.rawBitDepth === 'preserve') return sourceCodecSettings.bitDepth;
+  return resize.rawBitDepth;
+}
+
+function resolvePlannedChromaSubsampling(
+  resize: ResolvedMovieResize | null,
+  sourceCodecSettings: SourceVideoCodecSettings,
+): VideoCodecChromaSubsampling | undefined {
+  if (!resize) return sourceCodecSettings.chromaSubsampling;
+  if (resize.rawChromaSubsampling === 'preserve') return sourceCodecSettings.chromaSubsampling;
+  return resize.rawChromaSubsampling;
 }
 
 function makeEncodeOptionsProcessor(options: {
@@ -322,7 +515,7 @@ function validatePositiveNumber(value: number, name: string) {
 }
 
 function omitKeyFrameInterval(
-  base: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'> | undefined,
+  base: BrowserMovieVideoOptions | undefined,
 ) {
   if (!base) return undefined;
   const rest = { ...base };
@@ -390,6 +583,77 @@ function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: Browser
 
 function wantsRawPlanarConversion(resize: ResolvedMovieResize) {
   return resize.rawBitDepth !== 'preserve' || resize.rawChromaSubsampling !== 'preserve';
+}
+
+function resolveRawFrameFormat(options: BrowserMovieRawFrameSupportOptions) {
+  const sourceDescriptor = options.sourceFormat ? describePlanarFormat(options.sourceFormat) : null;
+  if (options.sourceFormat && !sourceDescriptor) {
+    throw new Error(`Planar processing does not support VideoFrame format ${options.sourceFormat}`);
+  }
+
+  const rawBitDepth = options.rawBitDepth ?? 'preserve';
+  const rawChromaSubsampling = options.rawChromaSubsampling ?? 'preserve';
+
+  if (rawBitDepth === 'preserve' && rawChromaSubsampling === 'preserve') {
+    if (!options.sourceFormat) {
+      throw new Error('sourceFormat is required when raw bit depth and chroma subsampling are both preserved.');
+    }
+    return { format: options.sourceFormat };
+  }
+
+  const bitDepth = rawBitDepth === 'preserve'
+    ? sourceDescriptor ? bitDepthFor(sourceDescriptor) : null
+    : rawBitDepth;
+  const chromaSubsampling = rawChromaSubsampling === 'preserve'
+    ? sourceDescriptor ? chromaSubsamplingFor(sourceDescriptor) : null
+    : rawChromaSubsampling;
+
+  if (bitDepth === null) {
+    throw new Error('sourceFormat is required when rawBitDepth is preserve and raw conversion is requested.');
+  }
+  if (chromaSubsampling === null) {
+    throw new Error('sourceFormat is required when rawChromaSubsampling is preserve and raw conversion is requested.');
+  }
+
+  return {
+    format: planarFormatFor(chromaSubsampling, bitDepth, options.hasAlpha ?? sourceDescriptor?.hasAlpha ?? false),
+  };
+}
+
+function makeProbeVideoFrame(format: string, width: number, height: number) {
+  const descriptor = describePlanarFormat(format);
+  if (!descriptor) throw new Error(`Planar processing does not support VideoFrame format ${format}`);
+
+  const codedWidth = Math.max(2, Math.ceil(width));
+  const codedHeight = Math.max(2, Math.ceil(height));
+  const layout: PlaneLayout[] = [];
+  let offset = 0;
+
+  for (const plane of descriptor.planes) {
+    const planeWidth = planeDimension(codedWidth, plane.subsampleX);
+    const planeHeight = planeDimension(codedHeight, plane.subsampleY);
+    const stride = planeWidth * descriptor.bytesPerSample * (plane.samplesPerPixel ?? 1);
+    layout.push({ offset, stride });
+    offset += stride * planeHeight;
+  }
+
+  return new VideoFrame(new Uint8Array(offset), {
+    format: format as VideoPixelFormat,
+    codedWidth,
+    codedHeight,
+    timestamp: 0,
+    layout,
+  });
+}
+
+function planeDimension(size: number, subsample: number) {
+  return Math.ceil(size / subsample);
+}
+
+function normalizeSupportError(error: unknown) {
+  return error instanceof Error
+    ? { name: error.name, message: error.message }
+    : { name: 'Error', message: String(error) };
 }
 
 async function convertSamplePlanar(sample: VideoSample, resize: ResolvedMovieResize): Promise<VideoSample> {

@@ -57,6 +57,13 @@ export type CicpColorSpace = {
   fullRange: boolean;
 };
 
+export type NumericCicpColorSpace = [
+  primaries: number,
+  transfer: number,
+  matrix: number,
+  fullRange: boolean,
+];
+
 export function cicpToVideoColorSpace(cicp: CicpColorSpace): VideoColorSpaceInit {
   return {
     primaries: cicpColorPrimariesToVideoColorPrimaries(cicp.primaries),
@@ -73,6 +80,24 @@ export function videoColorSpaceToCicp(colorSpace: VideoColorSpaceInit): Partial<
   const fullRange = colorSpace.fullRange ?? undefined;
   if (primaries === undefined && transfer === undefined && matrix === undefined && fullRange === undefined) return null;
   return { primaries, transfer, matrix, fullRange };
+}
+
+export function cicpColorSpaceFromNumbers(value: NumericCicpColorSpace): CicpColorSpace {
+  return {
+    primaries: cicpColorPrimariesFromNumber(value[0]),
+    transfer: cicpTransferCharacteristicsFromNumber(value[1]),
+    matrix: cicpMatrixCoefficientsFromNumber(value[2]),
+    fullRange: value[3],
+  };
+}
+
+export function cicpColorSpaceToNumbers(value: CicpColorSpace): NumericCicpColorSpace {
+  return [
+    cicpColorPrimariesToNumber(value.primaries),
+    cicpTransferCharacteristicsToNumber(value.transfer),
+    cicpMatrixCoefficientsToNumber(value.matrix),
+    value.fullRange,
+  ];
 }
 
 export function cicpColorPrimariesFromNumber(value: number): CicpColorPrimaries {

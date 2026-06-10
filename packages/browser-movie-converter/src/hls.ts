@@ -12,7 +12,6 @@ import {
   Target,
   type ConversionAudioOptions,
   type ConversionOptions,
-  type ConversionVideoOptions,
   type HlsOutputFormatOptions,
   type InputTrackQuery,
   type InputVideoTrack,
@@ -24,6 +23,7 @@ import {
   type BrowserMovieColorMetadataPolicy,
   type BrowserMovieQuantizerOptions,
   type BrowserMovieResizeOptions,
+  type BrowserMovieVideoOptions,
   type SceneDetectionOptions,
 } from './conversion-options.js';
 
@@ -41,7 +41,7 @@ export type MovieHlsAsset = {
 };
 
 export type MovieHlsVariantOptions = {
-  video?: Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight' | 'group'>;
+  video?: Omit<BrowserMovieVideoOptions, 'group'>;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   quantizer?: BrowserMovieQuantizerOptions;

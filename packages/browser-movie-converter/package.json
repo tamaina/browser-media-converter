@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@browser-mc/mediabunny-scene-keyframes": "workspace:^",
+    "@browser-mc/video-codec": "workspace:^",
     "@browser-mc/webcodecs-color": "workspace:^",
     "mediabunny": "^1.46.0"
   },

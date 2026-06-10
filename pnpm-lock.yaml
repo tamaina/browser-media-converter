@@ -70,6 +70,9 @@ importers:
       '@browser-mc/mediabunny-scene-keyframes':
         specifier: workspace:^
         version: link:../mediabunny-scene-keyframes
+      '@browser-mc/video-codec':
+        specifier: workspace:^
+        version: link:../video-codec
       '@browser-mc/webcodecs-color':
         specifier: workspace:^
         version: link:../webcodecs-color
@@ -97,6 +100,8 @@ importers:
       mediabunny:
         specifier: ^1.46.0
         version: 1.46.0
+
+  packages/video-codec: {}
 
   packages/webcodecs-avif:
     dependencies:

@@ -9,6 +9,11 @@
   - `convertMovieToHls` accepts `segmentFormat: { mpegts?: boolean; cmaf?: boolean }`, both enabled by default. Per playlist, the first enabled format that supports all of its codecs is used, so avc/hevc variants keep MPEG-TS segments while codecs MPEG-TS cannot contain (such as `av1`) automatically use CMAF segments with an `init-{n}.mp4` init segment.
   - Export `createMovieHlsFormat` and keep `createMpegTsHlsFormat` as a deprecated MPEG-TS-only alias.
 
+- Add raw movie frame and encoder config capability helpers.
+
+  - `checkMovieRawFrameSupport` verifies the planned raw planar `VideoFrame` format for `rawBitDepth` and `rawChromaSubsampling`.
+  - `checkMovieVideoEncoderConfigSupport` wraps `VideoEncoder.isConfigSupported()` so callers can check the exact encoder config they intend to use.
+
 ## 0.2.0
 
 ### Minor Changes

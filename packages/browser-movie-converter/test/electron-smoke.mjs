@@ -57,7 +57,12 @@ await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/bbb.mov`)).arrayBuffer());
-  const { buildMovieConversionOptions } = await import(`http://127.0.0.1:${port}/converter.js`);
+  const {
+    buildMovieConversionOptions,
+    buildMovieVideoConversionOptions,
+    checkMovieRawFrameSupport,
+    checkMovieVideoEncoderConfigSupport,
+  } = await import(`http://127.0.0.1:${port}/converter.js`);
   const {
     BlobSource,
     BufferSource,
@@ -124,6 +129,11 @@ const result = await page.evaluate(async ({ port }) => {
       rawBitDepth: 8,
       rawChromaSubsampling: '420',
     },
+    video: {
+      codec: 'av1',
+      bitrate: 1_000_000,
+      frameRate: 30,
+    },
     sceneDetection: false,
     colorMetadata: 'preserve',
     forceTranscode: true,
@@ -136,6 +146,31 @@ const result = await page.evaluate(async ({ port }) => {
     ? rawPlanarPlan.options.video(rawPlanarVideoTrack)
     : rawPlanarPlan.options.video;
   if (!rawPlanarVideoOptions?.process) throw new Error('raw planar plan did not expose a process hook');
+  const preservedBitDepthPlan = await buildMovieVideoConversionOptions({
+    track: {
+      getColorSpace: async () => ({ primaries: 'bt2020', transfer: 'pq', matrix: 'bt2020-ncl', fullRange: false }),
+      hasHighDynamicRange: async () => true,
+      getDisplayWidth: async () => 1920,
+      getDisplayHeight: async () => 1080,
+      getCodecParameterString: async () => 'av01.0.08M.10',
+      getDecoderConfig: async () => null,
+    },
+    resize: {
+      width: 320,
+      height: 180,
+      fit: 'fill',
+      rawBitDepth: 'preserve',
+      rawChromaSubsampling: 'preserve',
+    },
+    video: {
+      codec: 'av1',
+      bitrate: 1_000_000,
+      frameRate: 30,
+    },
+    sceneDetection: false,
+    colorMetadata: 'preserve',
+    forceTranscode: true,
+  });
   const makeSyntheticPlanarSample = () => {
     const width = 320;
     const height = 180;
@@ -182,6 +217,27 @@ const result = await page.evaluate(async ({ port }) => {
     colorSpace: processedRawPlanarFrame.colorSpace.toJSON(),
   };
   processedRawPlanarFrame.close();
+  const rawFrameSupport = checkMovieRawFrameSupport({
+    width: 320,
+    height: 180,
+    sourceFormat: 'I444P10',
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
+  });
+  const unsupportedRawFrameSupport = checkMovieRawFrameSupport({
+    width: 320,
+    height: 180,
+    sourceFormat: 'RGBA',
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
+  });
+  const encoderConfigSupport = await checkMovieVideoEncoderConfigSupport({
+    codec: 'avc1.64001f',
+    width: 320,
+    height: 180,
+    bitrate: 500_000,
+    framerate: 30,
+  });
   const conversion = await Conversion.init(plan.options);
   if (!conversion.isValid) {
     throw new Error(`Mediabunny could not create a valid conversion: ${conversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
@@ -329,7 +385,16 @@ const result = await page.evaluate(async ({ port }) => {
     length: outputBytes.byteLength,
     resize: plan.resize,
     rawPlanarResize: rawPlanarPlan.resize,
+    rawPlanarFullCodecString: rawPlanarVideoOptions.fullCodecString ?? null,
+    preservedBitDepthFullCodecString: preservedBitDepthPlan.options.fullCodecString ?? null,
     processedRawPlanar,
+    rawFrameSupport,
+    unsupportedRawFrameSupport,
+    encoderConfigSupport: {
+      supported: encoderConfigSupport.supported,
+      codec: encoderConfigSupport.config?.codec ?? null,
+      error: encoderConfigSupport.error,
+    },
     videoColor: plan.videoColor,
     scenePlan: plan.sceneKeyFrames?.state ?? null,
     keyPacketTimestamps,
@@ -353,10 +418,23 @@ const result = await page.evaluate(async ({ port }) => {
 assert.ok(result.length > 0, 'expected a non-empty converted MP4');
 assert.deepEqual(result.resize, { width: 320, height: 180, path: 'raw' });
 assert.deepEqual(result.rawPlanarResize, { width: 320, height: 180, path: 'raw' });
+assert.equal(result.rawPlanarFullCodecString, 'av01.0.00M.08');
+assert.equal(result.preservedBitDepthFullCodecString, 'av01.0.00M.10');
 assert.equal(result.processedRawPlanar.format, 'I420');
 assert.equal(result.processedRawPlanar.displayWidth, 320);
 assert.equal(result.processedRawPlanar.displayHeight, 180);
 assert.equal(result.processedRawPlanar.colorSpace.primaries, 'bt2020');
+assert.deepEqual(result.rawFrameSupport, {
+  supported: true,
+  format: 'I420',
+  bitDepth: 8,
+  chromaSubsampling: '420',
+  error: null,
+});
+assert.equal(result.unsupportedRawFrameSupport.supported, false);
+assert.match(result.unsupportedRawFrameSupport.error.message, /does not support VideoFrame format RGBA/u);
+assert.equal(typeof result.encoderConfigSupport.supported, 'boolean');
+assert.equal(result.encoderConfigSupport.error, null);
 assert.ok(result.videoColor, 'expected input video color metadata');
 assert.ok(result.scenePlan?.changes.length > 0, 'expected scene detection to find changes');
 assert.ok(result.scenePlan?.keyFrameTimestamps.length > 1, 'expected scene key frame timestamps');

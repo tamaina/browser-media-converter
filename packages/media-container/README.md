@@ -53,6 +53,20 @@ const avif = muxStillAvif({
 
 Unknown CICP code points round-trip as strings like `unknown-123`, so the muxer can write the original numeric value back even when no friendly name exists yet.
 
+Use `cicpColorSpaceToNumbers` and `cicpColorSpaceFromNumbers` when another API needs numeric CICP code points:
+
+```ts
+import { cicpColorSpaceToNumbers } from '@browser-mc/media-container';
+
+const numeric = cicpColorSpaceToNumbers({
+  primaries: 'bt2020',
+  transfer: 'pq',
+  matrix: 'bt2020-ncl',
+  fullRange: true,
+});
+// [9, 16, 9, true]
+```
+
 ## MOV/MP4 GPS Sanitization
 
 The ISOBMFF GPS sanitizer detects iPhone-style `moov/meta/keys` + `moov/meta/ilst` metadata, common coordinate items such as `com.apple.quicktime.location.ISO6709`, `location.ISO6709`, ItemList `GPSCoordinates`, and `©xyz`, plus likely GPS timed metadata tracks.

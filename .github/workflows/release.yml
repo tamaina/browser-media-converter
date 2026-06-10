@@ -55,6 +55,7 @@ jobs:
             packages/exif-transplant
             packages/webcodecs-color
             packages/webcodecs-avif
+            packages/video-codec
             packages/browser-image-resizer-ex
             packages/browser-movie-converter
           )

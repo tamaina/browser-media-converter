@@ -5,6 +5,8 @@ import { resolve } from 'node:path';
 import { readAscii, readSized, readU16, readU32, u32le } from '@browser-mc/binary';
 import {
   boxes,
+  cicpColorSpaceFromNumbers,
+  cicpColorSpaceToNumbers,
   findSequenceHeaderObu,
   makeAv1Config,
   makeRiffChunk,
@@ -19,6 +21,32 @@ import {
 } from '../dist/index.js';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
+
+describe('CICP helpers', () => {
+  it('converts CICP color spaces between named and numeric forms', () => {
+    const named = {
+      primaries: 'bt2020',
+      transfer: 'pq',
+      matrix: 'bt2020-ncl',
+      fullRange: true,
+    };
+
+    assert.deepEqual(cicpColorSpaceToNumbers(named), [9, 16, 9, true]);
+    assert.deepEqual(cicpColorSpaceFromNumbers([9, 16, 9, true]), named);
+  });
+
+  it('preserves unknown CICP code points in numeric color spaces', () => {
+    const numeric = [123, 124, 125, false];
+
+    assert.deepEqual(cicpColorSpaceFromNumbers(numeric), {
+      primaries: 'unknown-123',
+      transfer: 'unknown-124',
+      matrix: 'unknown-125',
+      fullRange: false,
+    });
+    assert.deepEqual(cicpColorSpaceToNumbers(cicpColorSpaceFromNumbers(numeric)), numeric);
+  });
+});
 
 // Build a minimal AV1 OBU byte sequence.
 // type: OBU type (1 = Sequence Header, 6 = TD, etc.)

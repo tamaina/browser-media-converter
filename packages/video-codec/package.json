@@ -1,0 +1,34 @@
+{
+  "name": "@browser-mc/video-codec",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tamaina/browser-media-converter.git",
+    "directory": "packages/video-codec"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm --filter @browser-mc/video-codec... build:package",
+    "build:package": "tsc -p tsconfig.json",
+    "typecheck": "pnpm --filter @browser-mc/video-codec... typecheck:package",
+    "typecheck:package": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build && pnpm test:package",
+    "test:package": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
