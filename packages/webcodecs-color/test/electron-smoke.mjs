@@ -52,7 +52,9 @@ const result = await page.evaluate(async ({ port }) => {
     convertFrameToCanvasSdr,
     copyFrameToRgba,
     decodeImageToVideoFrame,
+    frameFormatCanHaveAlpha,
     inspectFrame,
+    resizeVideoFrame,
     resizeFrameWithCanvas,
     resizeFramePlanar,
   } = await import(`http://127.0.0.1:${port}/color.js`);
@@ -126,6 +128,87 @@ const result = await page.evaluate(async ({ port }) => {
     chromaSubsampling: '420',
     expectedFormat: 'I420A',
   });
+  const wrappedPlanarResize = await resizeVideoFrame(frame, {
+    width: Math.max(1, Math.floor(frame.displayWidth / 2)),
+    height: Math.max(1, Math.floor(frame.displayHeight / 2)),
+    rawResizeAlgorithm: 'bilinear',
+  });
+  const wrappedPlanar = {
+    path: wrappedPlanarResize.path,
+    format: wrappedPlanarResize.inspection.format,
+    displayWidth: wrappedPlanarResize.inspection.displayWidth,
+    displayHeight: wrappedPlanarResize.inspection.displayHeight,
+    warnings: wrappedPlanarResize.warnings,
+  };
+  wrappedPlanarResize.frame.close();
+  const rgbaFrame = makeSyntheticPackedFrame('RGBA', 16, 12);
+  const wrappedRgbaResize = await resizeVideoFrame(rgbaFrame, {
+    width: 8,
+    height: 6,
+  });
+  const wrappedRgba = {
+    path: wrappedRgbaResize.path,
+    format: wrappedRgbaResize.inspection.format,
+    displayWidth: wrappedRgbaResize.inspection.displayWidth,
+    displayHeight: wrappedRgbaResize.inspection.displayHeight,
+    colorSpace: wrappedRgbaResize.inspection.colorSpace,
+    warnings: wrappedRgbaResize.warnings,
+  };
+  wrappedRgbaResize.frame.close();
+  const wrappedRgbaRawRequest = await resizeVideoFrame(rgbaFrame, {
+    width: rgbaFrame.displayWidth,
+    height: rgbaFrame.displayHeight,
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
+  });
+  const wrappedRgbaRaw = {
+    path: wrappedRgbaRawRequest.path,
+    format: wrappedRgbaRawRequest.inspection.format,
+    displayWidth: wrappedRgbaRawRequest.inspection.displayWidth,
+    displayHeight: wrappedRgbaRawRequest.inspection.displayHeight,
+    warnings: wrappedRgbaRawRequest.warnings,
+  };
+  wrappedRgbaRawRequest.frame.close();
+  const bgrxFrame = makeSyntheticPackedFrame('BGRX', 16, 12);
+  const bgrxDefaultCopy = await copyFrameToRgba(bgrxFrame, { colorSpace: 'srgb' }).then((copy) => ({
+    byteLength: copy.data.byteLength,
+    layout: copy.layout,
+    colorSpace: copy.colorSpace,
+    format: copy.format,
+  }));
+  const bgrxCopy = await copyFrameToRgba(bgrxFrame, { format: 'BGRX', colorSpace: 'srgb' }).then((copy) => ({
+    byteLength: copy.data.byteLength,
+    layout: copy.layout,
+    colorSpace: copy.colorSpace,
+    format: copy.format,
+  }));
+  const wrappedBgrxRawRequest = await resizeVideoFrame(bgrxFrame, {
+    width: bgrxFrame.displayWidth,
+    height: bgrxFrame.displayHeight,
+    rawBitDepth: 8,
+    rawChromaSubsampling: '420',
+  });
+  const wrappedBgrxRaw = {
+    path: wrappedBgrxRawRequest.path,
+    format: wrappedBgrxRawRequest.inspection.format,
+    displayWidth: wrappedBgrxRawRequest.inspection.displayWidth,
+    displayHeight: wrappedBgrxRawRequest.inspection.displayHeight,
+    warnings: wrappedBgrxRawRequest.warnings,
+  };
+  wrappedBgrxRawRequest.frame.close();
+  const alphaSupport = {
+    rgba: frameFormatCanHaveAlpha(rgbaFrame),
+    bgrx: frameFormatCanHaveAlpha(bgrxFrame),
+  };
+  const wrappedCanvasSdr = await resizeVideoFrame(frame, {
+    width: Math.max(1, Math.floor(frame.displayWidth / 2)),
+    height: Math.max(1, Math.floor(frame.displayHeight / 2)),
+    colorMetadata: 'canvas-sdr',
+  });
+  const wrappedCanvasSdrInspection = wrappedCanvasSdr.inspection;
+  wrappedCanvasSdr.frame.close();
+  bgrxFrame.close();
+  rgbaFrame.close();
   frame.close();
 
   return {
@@ -170,6 +253,14 @@ const result = await page.evaluate(async ({ port }) => {
     syntheticNv12Resize,
     syntheticNv12ToI420,
     syntheticAlpha,
+    wrappedPlanar,
+    wrappedRgba,
+    wrappedRgbaRaw,
+    bgrxDefaultCopy,
+    bgrxCopy,
+    wrappedBgrxRaw,
+    alphaSupport,
+    wrappedCanvasSdrInspection,
     canvasSdrInspection,
     canvasP3ResizeInspection,
   };
@@ -249,6 +340,7 @@ const result = await page.evaluate(async ({ port }) => {
       });
       offset += byteLength;
     }
+
     const data = new Uint8Array(offset);
     for (const plane of planeBytes) {
       for (let index = 0; index < plane.byteLength; index += descriptor.bytesPerSample) {
@@ -268,6 +360,26 @@ const result = await page.evaluate(async ({ port }) => {
       timestamp: 0,
       layout,
       colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false },
+    });
+  }
+
+  function makeSyntheticPackedFrame(format, width, height) {
+    const data = new Uint8Array(width * height * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = 32;
+      data[index + 1] = 128;
+      data[index + 2] = 224;
+      data[index + 3] = 255;
+    }
+    return new VideoFrame(data, {
+      format,
+      codedWidth: width,
+      codedHeight: height,
+      displayWidth: width,
+      displayHeight: height,
+      timestamp: 0,
+      layout: [{ offset: 0, stride: width * 4 }],
+      colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true },
     });
   }
 
@@ -304,6 +416,7 @@ assert.equal(result.inspection.displayWidth > 0, true);
 assert.equal(result.inspection.displayHeight > 0, true);
 assert.equal(result.classification.isHdrLike, true);
 assert.equal(result.classification.recommendedPath, 'raw-hdr');
+assert.equal(result.p3Copy.format, 'RGBX');
 assert.equal(result.rawResize.format, result.inspection.format);
 assert.equal(result.resizedInspection.displayWidth, Math.max(1, Math.floor(result.inspection.displayWidth / 2)));
 assert.equal(result.resizedInspection.displayHeight, Math.max(1, Math.floor(result.inspection.displayHeight / 2)));
@@ -356,6 +469,43 @@ if (result.syntheticAlpha.supported) {
   assert.equal(result.syntheticAlpha.converted.displayWidth, 8);
   assert.equal(result.syntheticAlpha.converted.displayHeight, 8);
 }
+assert.deepEqual(result.wrappedPlanar, {
+  path: 'raw',
+  format: result.inspection.format,
+  displayWidth: Math.max(1, Math.floor(result.inspection.displayWidth / 2)),
+  displayHeight: Math.max(1, Math.floor(result.inspection.displayHeight / 2)),
+  warnings: [],
+});
+assert.equal(result.wrappedRgba.path, 'canvas');
+assert.equal(result.wrappedRgba.format, 'RGBA');
+assert.equal(result.wrappedRgba.displayWidth, 8);
+assert.equal(result.wrappedRgba.displayHeight, 6);
+assert.equal(result.wrappedRgba.colorSpace.primaries, 'bt709');
+assert.equal(result.wrappedRgbaRaw.path, 'canvas');
+assert.equal(result.wrappedRgbaRaw.format, 'RGBA');
+assert.equal(result.wrappedRgbaRaw.displayWidth, 16);
+assert.equal(result.wrappedRgbaRaw.displayHeight, 12);
+assert.ok(result.wrappedRgbaRaw.warnings.includes('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.'));
+assert.equal(result.bgrxDefaultCopy.format, 'RGBX');
+assert.equal(result.bgrxDefaultCopy.colorSpace, 'srgb');
+assert.equal(result.bgrxDefaultCopy.byteLength, 16 * 12 * 4);
+assert.equal(result.bgrxCopy.format, 'BGRX');
+assert.equal(result.bgrxCopy.colorSpace, 'srgb');
+assert.equal(result.bgrxCopy.byteLength, 16 * 12 * 4);
+assert.equal(result.wrappedBgrxRaw.path, 'canvas');
+assert.equal(result.wrappedBgrxRaw.format, 'RGBA');
+assert.equal(result.wrappedBgrxRaw.displayWidth, 16);
+assert.equal(result.wrappedBgrxRaw.displayHeight, 12);
+assert.ok(result.wrappedBgrxRaw.warnings.includes('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.'));
+assert.deepEqual(result.alphaSupport, {
+  rgba: true,
+  bgrx: false,
+});
+assert.equal(result.wrappedCanvasSdrInspection.format, 'RGBA');
+assert.equal(result.wrappedCanvasSdrInspection.colorSpace.primaries, 'bt709');
+assert.equal(result.wrappedCanvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');
+assert.equal(result.wrappedCanvasSdrInspection.colorSpace.matrix, 'rgb');
+assert.equal(result.wrappedCanvasSdrInspection.colorSpace.fullRange, true);
 assert.equal(result.canvasSdrInspection.format, 'RGBA');
 assert.equal(result.canvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');

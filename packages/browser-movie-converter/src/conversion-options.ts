@@ -23,13 +23,11 @@ import {
   type VideoCodecName,
 } from '@browser-mc/video-codec';
 import {
-  convertFrameToCanvasSdr,
   bitDepthFor,
   chromaSubsamplingFor,
   describePlanarFormat,
   planarFormatFor,
-  resizeFramePlanar,
-  sdrVideoColorSpaceInit,
+  resizeVideoFrame,
   type PlanarBitDepth,
   type PlanarChromaSubsampling,
   type PlanarResizeAlgorithm,
@@ -667,35 +665,25 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
 
 function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: BrowserMovieColorMetadataPolicy) {
   return async (sample: VideoSample): Promise<VideoSample> => {
-    if (sample.displayWidth === resize.width && sample.displayHeight === resize.height) {
-      if (colorMetadata === 'canvas-sdr') return convertSampleToCanvasSdr(sample);
-      if (wantsRawPlanarConversion(resize)) return convertSamplePlanar(sample, resize);
-      return sample;
-    }
-
     const frame = sample.toVideoFrame();
     try {
-      const resized = await resizeFramePlanar(frame, {
+      const resized = await resizeVideoFrame(frame, {
         width: resize.width,
         height: resize.height,
-        bitDepth: resize.rawBitDepth === 'preserve' ? undefined : resize.rawBitDepth,
-        chromaSubsampling: resize.rawChromaSubsampling === 'preserve' ? undefined : resize.rawChromaSubsampling,
-        algorithm: resize.rawAlgorithm,
+        rawBitDepth: resize.rawBitDepth,
+        rawChromaSubsampling: resize.rawChromaSubsampling,
+        rawResizeAlgorithm: resize.rawAlgorithm,
+        colorMetadata,
       });
-      if (colorMetadata === 'canvas-sdr') {
-        const converted = convertFrameToCanvasSdr(resized.frame);
-        resized.frame.close();
-        return makeVideoSampleFromFrame(converted.frame, sample, sdrVideoColorSpaceInit(), resize);
-      }
-      return makeVideoSampleFromFrame(resized.frame, sample, sample.colorSpace.toJSON(), resize);
+      if (resized.path === 'none') return sample;
+      const colorSpace = resized.path === 'raw'
+        ? sample.colorSpace.toJSON()
+        : resized.frame.colorSpace.toJSON();
+      return makeVideoSampleFromFrame(resized.frame, sample, colorSpace, resize);
     } finally {
       frame.close();
     }
   };
-}
-
-function wantsRawPlanarConversion(resize: ResolvedMovieResize) {
-  return resize.rawBitDepth !== 'preserve' || resize.rawChromaSubsampling !== 'preserve';
 }
 
 function resolveRawFrameFormat(options: BrowserMovieRawFrameSupportOptions) {
@@ -769,37 +757,15 @@ function normalizeSupportError(error: unknown) {
     : { name: 'Error', message: String(error) };
 }
 
-async function convertSamplePlanar(sample: VideoSample, resize: ResolvedMovieResize): Promise<VideoSample> {
-  const frame = sample.toVideoFrame();
-  try {
-    const converted = await resizeFramePlanar(frame, {
-      width: resize.width,
-      height: resize.height,
-      bitDepth: resize.rawBitDepth === 'preserve' ? undefined : resize.rawBitDepth,
-      chromaSubsampling: resize.rawChromaSubsampling === 'preserve' ? undefined : resize.rawChromaSubsampling,
-      algorithm: resize.rawAlgorithm,
-    });
-    return makeVideoSampleFromFrame(converted.frame, sample, sample.colorSpace.toJSON(), resize);
-  } finally {
-    frame.close();
-  }
-}
-
 function makeCanvasSdrProcessor() {
-  return (sample: VideoSample): VideoSample => convertSampleToCanvasSdr(sample);
-}
-
-function convertSampleToCanvasSdr(sample: VideoSample): VideoSample {
-  const frame = sample.toVideoFrame();
-  try {
-    const converted = convertFrameToCanvasSdr(frame);
-    return makeVideoSampleFromFrame(converted.frame, sample, sdrVideoColorSpaceInit(), {
-      width: sample.displayWidth,
-      height: sample.displayHeight,
-    });
-  } finally {
-    frame.close();
-  }
+  return (sample: VideoSample): Promise<VideoSample> => makeResizeProcessor({
+    width: sample.displayWidth,
+    height: sample.displayHeight,
+    path: 'raw',
+    rawAlgorithm: 'lanczos3',
+    rawBitDepth: 'preserve',
+    rawChromaSubsampling: 'preserve',
+  }, 'canvas-sdr')(sample);
 }
 
 function makeVideoSampleFromFrame(

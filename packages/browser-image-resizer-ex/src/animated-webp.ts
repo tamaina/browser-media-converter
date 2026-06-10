@@ -12,7 +12,7 @@ import {
   copyArrayBuffer,
   createImageDecoder,
   encodeFrameWithCanvas,
-  resizeFrameForColor,
+  resizeVideoFrame,
   resolveTargetSize,
   type BrowserImageRawBitDepth,
   type BrowserImageRawChromaSubsampling,
@@ -151,7 +151,7 @@ async function encodeAnimationFrame(
 ): Promise<EncodedAnimatedFrame> {
   const frame = (await decoder.decode({ frameIndex, completeFramesOnly: true })).image;
   try {
-    const resized = await resizeFrameForColor(frame, size, options);
+    const resized = await resizeVideoFrame(frame, size, options);
     try {
       const duration = durationMilliseconds(frame);
       return {

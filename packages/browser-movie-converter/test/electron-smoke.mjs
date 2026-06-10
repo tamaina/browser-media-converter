@@ -209,6 +209,35 @@ const result = await page.evaluate(async ({ port }) => {
       displayHeight: height,
     });
   };
+  const makeSyntheticRgbaSample = () => {
+    const width = 320;
+    const height = 180;
+    const data = new Uint8Array(width * height * 4);
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = 24;
+      data[index + 1] = 128;
+      data[index + 2] = 224;
+      data[index + 3] = 255;
+    }
+    const frame = new VideoFrame(data, {
+      format: 'RGBA',
+      codedWidth: width,
+      codedHeight: height,
+      displayWidth: width,
+      displayHeight: height,
+      timestamp: 0,
+      duration: 100_000,
+      layout: [{ offset: 0, stride: width * 4 }],
+      colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true },
+    });
+    return new VideoSample(frame, {
+      timestamp: 0,
+      duration: 100_000,
+      colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true },
+      displayWidth: width,
+      displayHeight: height,
+    });
+  };
   const processedRawPlanarSample = await rawPlanarVideoOptions.process(makeSyntheticPlanarSample());
   const processedRawPlanarFrame = processedRawPlanarSample.toVideoFrame();
   const processedRawPlanar = {
@@ -218,6 +247,15 @@ const result = await page.evaluate(async ({ port }) => {
     colorSpace: processedRawPlanarFrame.colorSpace.toJSON(),
   };
   processedRawPlanarFrame.close();
+  const processedRgbaSample = await rawPlanarVideoOptions.process(makeSyntheticRgbaSample());
+  const processedRgbaFrame = processedRgbaSample.toVideoFrame();
+  const processedRgba = {
+    format: processedRgbaFrame.format,
+    displayWidth: processedRgbaFrame.displayWidth,
+    displayHeight: processedRgbaFrame.displayHeight,
+    colorSpace: processedRgbaFrame.colorSpace.toJSON(),
+  };
+  processedRgbaFrame.close();
   const rawFrameSupport = checkMovieRawFrameSupport({
     width: 320,
     height: 180,
@@ -390,6 +428,7 @@ const result = await page.evaluate(async ({ port }) => {
     rawPlanarFullCodecString: rawPlanarVideoOptions.fullCodecString ?? null,
     preservedBitDepthFullCodecString: preservedBitDepthPlan.options.fullCodecString ?? null,
     processedRawPlanar,
+    processedRgba,
     rawFrameSupport,
     unsupportedRawFrameSupport,
     encoderConfigSupport: {
@@ -435,6 +474,11 @@ assert.equal(result.processedRawPlanar.format, 'I420');
 assert.equal(result.processedRawPlanar.displayWidth, 320);
 assert.equal(result.processedRawPlanar.displayHeight, 180);
 assert.equal(result.processedRawPlanar.colorSpace.primaries, 'bt2020');
+assert.equal(result.processedRgba.format, 'RGBA');
+assert.equal(result.processedRgba.displayWidth, 320);
+assert.equal(result.processedRgba.displayHeight, 180);
+assert.equal(result.processedRgba.colorSpace.primaries, 'bt709');
+assert.equal(result.processedRgba.colorSpace.matrix, 'rgb');
 assert.deepEqual(result.rawFrameSupport, {
   supported: true,
   format: 'I420',

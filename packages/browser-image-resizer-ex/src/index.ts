@@ -21,7 +21,7 @@ import {
   decodeFirstImageFrame,
   encodeFrameWithCanvas,
   inspectImageTrack,
-  resizeFrameForColor,
+  resizeVideoFrame,
   resolveTargetSize,
   toUint8Array,
   type BrowserImageColorMetadataPolicy,
@@ -270,7 +270,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const inputInspection = inspectFrame(frame);
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
-    const resized = await resizeFrameForColor(frame, size, options);
+    const resized = await resizeVideoFrame(frame, size, options);
     const outputColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
       canvasColorSpace: resized.canvasColorSpace,
       preserveInput: options.colorMetadata !== 'canvas-sdr',

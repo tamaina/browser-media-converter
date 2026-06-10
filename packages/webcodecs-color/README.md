@@ -41,7 +41,25 @@ resized4208.frame.close();
 
 `resizeFramePlanar` uses `VideoFrame.copyTo()` and creates a new `VideoFrame` from processed planar data. It copies only the source `visibleRect`, so coded padding rows/columns are not fed into processing. For supported planar YUV frames, plus 8-bit `NV12`, it does resize, chroma downsampling, and bit-depth conversion in one pass over the copied data. `NV12` resize preserves `NV12` when bit depth and chroma are preserved; explicit planar conversion can unpack `NV12` to `I420`. The default resize algorithm is `lanczos3`; `bilinear` and `nearest` are also available when speed or exact pixel replication matters. It does not use `HTMLCanvasElement`, `OffscreenCanvas`, WebGL, or WebGPU.
 
-Packed formats such as `RGBA` and `BGRA` are intentionally out of scope for this helper; use the Canvas helpers for those paths.
+Packed RGB formats such as `RGBA`, `RGBX`, `BGRA`, and `BGRX` are intentionally out of scope for this helper; use the Canvas helpers for those paths.
+
+## Resize VideoFrame With Fallback
+
+```ts
+import { resizeVideoFrame } from '@browser-mc/webcodecs-color';
+
+const resized = await resizeVideoFrame(frame, {
+  width: 1024,
+  height: 682,
+  rawBitDepth: 8,
+  rawChromaSubsampling: '420',
+});
+
+console.log(resized.path, resized.warnings);
+resized.frame.close();
+```
+
+`resizeVideoFrame` is the higher-level path picker for callers that accept both raw planar and Canvas processing. Supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`. RGB, packed, unknown, or otherwise unsupported `VideoFrame` formats, including browser-specific formats such as `BGRX`, fall back to Canvas and return an `RGBA` frame. When raw planar conversion is requested but Canvas fallback is used, the result includes a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path.
 
 ### Why Not WebGPU?
 
@@ -59,11 +77,14 @@ import {
 } from '@browser-mc/webcodecs-color';
 
 const rgba = await copyFrameToRgba(frame, { colorSpace: 'display-p3' });
+const bgrx = await copyFrameToRgba(frame, { format: 'BGRX', colorSpace: 'srgb' });
 const canvasResized = resizeFrameWithCanvas(frame, { width: 1024, height: 682 });
 const canvasSdr = convertFrameToCanvasSdr(frame);
 ```
 
 `convertFrameToCanvasSdr` draws through an sRGB `OffscreenCanvas` path and returns an RGBA `VideoFrame` marked as RGB/full-range sRGB. It is a practical browser conversion helper, not a dedicated HDR tone-mapping engine.
+
+`copyFrameToRgba` defaults to `RGBA` when the source frame can carry alpha, and `RGBX` when the source frame is known to be opaque. Pass `format` explicitly to choose `RGBA`, `RGBX`, `BGRA`, or `BGRX`.
 
 ## Supported Planar Formats
 
@@ -83,7 +104,7 @@ import {
 } from '@browser-mc/webcodecs-color';
 ```
 
-`describePlanarFormat(format)` returns planar bit depth, chroma layout, alpha presence, bytes per sample, and plane layout metadata for the supported planar YUV/YUVA formats and `NV12`. `frameFormatCanHaveAlpha(frame)` returns `true` for alpha-capable `VideoFrame` formats such as `RGBA`, `BGRA`, and planar `*A` variants. Unknown `VideoFrame.format` values are treated conservatively as alpha-capable.
+`describePlanarFormat(format)` returns planar bit depth, chroma layout, alpha presence, bytes per sample, and plane layout metadata for the supported planar YUV/YUVA formats and `NV12`. `frameFormatCanHaveAlpha(frame)` returns `true` for alpha-capable `VideoFrame` formats such as `RGBA`, `BGRA`, and planar `*A` variants; `RGBX` and `BGRX` are treated as opaque packed RGB formats. Unknown `VideoFrame.format` values are treated as not alpha-capable unless they are `null`.
 
 ## Commands
 
