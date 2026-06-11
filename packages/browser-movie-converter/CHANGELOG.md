@@ -1,5 +1,11 @@
 # @browser-mc/browser-movie-converter
 
+## 1.0.2
+
+### Patch Changes
+
+- Preserve planned resize dimensions when Mediabunny rerenders rotated video tracks.
+
 ## 1.0.1
 
 ### Patch Changes

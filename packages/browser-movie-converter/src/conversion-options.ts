@@ -226,6 +226,9 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
     ? await resolveTrackResize(options.track, options.resize)
     : null;
   const sourceCodecSettings = await inspectVideoTrackCodecSettings(options.track);
+  const useNativeResizeTransform = resize
+    ? await shouldUseNativeResizeTransform(options.track, options.video)
+    : false;
   const outputSize = resize
     ? { width: resize.width, height: resize.height }
     : {
@@ -239,6 +242,7 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
       outputSize,
       resize,
       sourceCodecSettings,
+      useNativeResizeTransform,
       sceneKeyFrames,
       quantizer: options.quantizer,
       forceTranscode: options.forceTranscode,
@@ -411,6 +415,7 @@ function makeVideoOptions(options: {
   outputSize: { width: number; height: number };
   resize: ResolvedMovieResize | null;
   sourceCodecSettings: SourceVideoCodecSettings;
+  useNativeResizeTransform: boolean;
   sceneKeyFrames: SceneKeyFrameDetector | null;
   quantizer?: BrowserMovieQuantizerOptions;
   forceTranscode?: boolean;
@@ -450,6 +455,9 @@ function makeVideoOptions(options: {
   return {
     ...base,
     ...(fullCodecString ? { fullCodecString } : {}),
+    ...(options.resize && options.useNativeResizeTransform
+      ? { width: options.resize.width, height: options.resize.height, fit: 'fill' as const }
+      : {}),
     forceTranscode,
     process,
     processedWidth: options.resize ? options.resize.width : undefined,
@@ -504,6 +512,27 @@ type SourceVideoCodecSettings = {
   bitDepth?: VideoCodecBitDepth;
   chromaSubsampling?: VideoCodecChromaSubsampling;
 };
+
+async function shouldUseNativeResizeTransform(
+  track: InputVideoTrack,
+  base: BrowserMovieVideoOptions | undefined,
+) {
+  const innateRotation = await track.getRotation();
+  const totalRotation = normalizeRotation(innateRotation + (base?.rotate ?? 0));
+  if (totalRotation !== 0) return true;
+  if (base?.crop) return true;
+
+  return (await track.getSquarePixelWidth()) !== (await track.getCodedWidth())
+    || (await track.getSquarePixelHeight()) !== (await track.getCodedHeight());
+}
+
+function normalizeRotation(rotation: number) {
+  const normalized = (rotation % 360 + 360) % 360;
+  if (normalized !== 0 && normalized !== 90 && normalized !== 180 && normalized !== 270) {
+    throw new Error(`Invalid rotation ${rotation}.`);
+  }
+  return normalized;
+}
 
 async function inspectVideoTrackCodecSettings(track: InputVideoTrack): Promise<SourceVideoCodecSettings> {
   const codecStrings = [

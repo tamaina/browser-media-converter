@@ -62,10 +62,14 @@ const result = await page.evaluate(async ({ port }) => {
     decodeMovieHlsText,
   } = await import(`http://127.0.0.1:${port}/converter.js`);
   const {
+    BufferTarget,
     BufferSource,
+    CanvasSource,
     Input,
     Mp4InputFormat,
+    Mp4OutputFormat,
     MpegTsInputFormat,
+    Output,
     QuickTimeInputFormat,
   } = await import(`http://127.0.0.1:${port}/mediabunny.js`);
   const sourceInput = new Input({
@@ -136,6 +140,53 @@ const result = await page.evaluate(async ({ port }) => {
     }
   }
 
+  const rotatedSource = await createRotatedSource();
+  const rotatedInput = new Input({
+    source: new BufferSource(rotatedSource),
+    formats: [new Mp4InputFormat()],
+  });
+  const rotatedAssets = [];
+  for await (const asset of convertMovieToHls({
+    input: rotatedInput,
+    tracks: 'primary',
+    targetDuration: 1,
+    keyFrameInterval: 1,
+    forceTranscode: true,
+    sceneDetection: false,
+    variants: [
+      {
+        video: { codec: 'avc', bitrate: 350_000 },
+        resize: { width: 192, height: 108, fit: 'contain' },
+      },
+      {
+        video: { codec: 'avc', bitrate: 260_000 },
+        resize: { width: 128, height: 72, fit: 'contain' },
+      },
+      {
+        video: { codec: 'av1', bitrate: 180_000 },
+        resize: { width: 86, height: 48, fit: 'contain' },
+      },
+    ],
+  })) {
+    const bytes = await readStream(asset.data);
+    rotatedAssets.push({
+      path: asset.path,
+      mimeType: asset.mimeType,
+      length: bytes.length,
+      preview: asset.path.endsWith('.m3u8') ? decodeMovieHlsText(bytes).slice(0, 800) : '',
+      bytes: [...bytes],
+    });
+  }
+
+  const rotatedSizes = {};
+  for (const asset of rotatedAssets) {
+    if (asset.path.endsWith('.ts')) {
+      rotatedSizes[asset.path] = await readVideoSize(asset.bytes, new MpegTsInputFormat());
+    } else if (/^init-\d+\.mp4$/.test(asset.path)) {
+      rotatedSizes[asset.path] = await readVideoSize(asset.bytes, new Mp4InputFormat());
+    }
+  }
+
   let emptyVariantsError = null;
   try {
     for await (const asset of convertMovieToHls({ input: sourceInput, variants: [] })) {
@@ -150,8 +201,42 @@ const result = await page.evaluate(async ({ port }) => {
     emptyVariantsError,
     segmentSizes,
     initSizes,
+    rotatedSizes,
+    rotatedAssets,
     assets,
   };
+
+  async function createRotatedSource() {
+    const width = 192;
+    const height = 108;
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d');
+    const target = new BufferTarget();
+    const output = new Output({
+      target,
+      format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+    });
+    const source = new CanvasSource(canvas, {
+      codec: 'vp9',
+      bitrate: 300_000,
+    });
+    output.addVideoTrack(source, { rotation: 180, frameRate: 10 });
+
+    await output.start();
+    for (let frame = 0; frame < 12; frame++) {
+      context.fillStyle = `rgb(${40 + frame * 8}, ${80 + frame * 4}, ${180 - frame * 5})`;
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = 'white';
+      context.fillRect(8 + frame, 8, 48, 28);
+      context.fillStyle = 'black';
+      context.fillRect(width - 58, height - 36 - frame % 4, 50, 28);
+      await source.add(frame / 10, 0.1, { keyFrame: frame === 0 });
+    }
+    source.close();
+    await output.finalize();
+    if (!target.buffer) throw new Error('Mediabunny did not produce a rotated source buffer');
+    return new Uint8Array(target.buffer);
+  }
 
   async function readStream(stream) {
     const reader = stream.getReader();
@@ -227,6 +312,31 @@ assert.ok(
 assert.ok(
   Object.values(result.initSizes).some((size) => size?.width === 160 && size.height === 90),
   'expected AV1 CMAF init segment to be resized to the top-level default',
+);
+const rotatedMasterPlaylist = result.rotatedAssets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';
+assert.ok(
+  rotatedMasterPlaylist.includes('RESOLUTION=192x108'),
+  'expected rotated HLS master playlist to include the full-size variant',
+);
+assert.ok(
+  rotatedMasterPlaylist.includes('RESOLUTION=128x72'),
+  'expected rotated HLS master playlist to include the medium variant',
+);
+assert.ok(
+  rotatedMasterPlaylist.includes('RESOLUTION=84x48'),
+  'expected rotated HLS master playlist to include the contained small variant',
+);
+assert.ok(
+  Object.values(result.rotatedSizes).some((size) => size?.width === 192 && size.height === 108),
+  'expected a rotated HLS asset to keep the full-size variant dimensions',
+);
+assert.ok(
+  Object.values(result.rotatedSizes).some((size) => size?.width === 128 && size.height === 72),
+  'expected a rotated HLS asset to use the medium variant dimensions',
+);
+assert.ok(
+  Object.values(result.rotatedSizes).some((size) => size?.width === 84 && size.height === 48),
+  'expected a rotated HLS asset to use the contained small variant dimensions',
 );
 assert.equal(
   result.emptyVariantsError,
