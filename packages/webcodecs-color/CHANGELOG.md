@@ -6,8 +6,8 @@
 
 - Add `resizeVideoFrame`, a high-level resize path picker moved up from `@browser-mc/browser-image-resizer-ex`.
 
-  - With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames resize via `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) are resized on the CPU while preserving their format via the new `resizeFrameRgb` helper and the `isPackedRgbFrame`/`isPackedRgbFrameFormat` guards.
-  - `colorMetadata: 'canvas-sdr'` forces the Canvas sRGB path. Results report `path` as `none`, `preserve`, or `canvas-sdr` (`FrameResizePath`).
+  - With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames resize via `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) resize through Canvas. The lower-level `resizeFrameRgb` helper remains available for callers that intentionally need CPU packed-RGB resize.
+  - `colorMetadata: 'canvas-sdr'` forces the Canvas sRGB path. Results report `path` as `none`, `preserve`, or `canvas` (`FrameResizePath`).
   - Formats that no resize path supports throw instead of silently falling back to Canvas.
 
 - Remove `decodeImageToVideoFrame`. Image decoding no longer belongs to this package, which also drops the `@browser-mc/binary` dependency.
@@ -16,6 +16,7 @@
 
   - Downscales of 2x or more first apply iterative 2x box reduction until the remaining scale is above 0.5, then run the selected filter. This applies to every algorithm except `nearest` and slightly changes output bytes for large downscales while reducing aliasing.
   - The separable convolution now chooses the cheaper pass order, precomputes kernel sample offsets, processes packed components in one fused pass, and uses fixed-point integer convolution for 8-bit planes. 1080p packed RGB `lanczos3` halving drops from roughly 680ms to 84ms in the bundled benchmark.
+  - Separable convolution now processes vertical output stripes, keeping fixed-point and float intermediate buffers smaller on large planar resizes.
   - `catmullrom` (4-tap cubic, no ringing, faster than `lanczos3`) is available wherever `lanczos3`, `bilinear`, and `nearest` are. The default stays `lanczos3`.
 
 - Add `VideoFrameResizer` and reusable resize scratch buffers.

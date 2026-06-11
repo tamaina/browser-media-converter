@@ -9,7 +9,7 @@ import {
   convertFrameToCanvasSdr,
   resizeFrameWithCanvas,
 } from './canvas.js';
-import { isPackedRgbFrame, resizeFrameRgb } from './rgb.js';
+import { isPackedRgbFrame } from './rgb.js';
 import { createResizeScratch, type ResizeScratch } from './scratch.js';
 
 export * from './formats.js';
@@ -21,7 +21,7 @@ export * from './scratch.js';
 
 export type FrameColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
-export type FrameResizePath = 'none' | 'preserve' | 'canvas-sdr';
+export type FrameResizePath = 'none' | 'preserve' | 'canvas';
 
 export type ResizeVideoFrameOptions = {
   width: number;
@@ -65,7 +65,7 @@ export async function resizeVideoFrame(
       return {
         frame: converted.frame,
         inspection: converted.inspection,
-        path: 'canvas-sdr',
+        path: 'canvas',
         warnings,
         canvasColorSpace: 'srgb',
       };
@@ -101,22 +101,18 @@ export async function resizeVideoFrame(
 
   if (isPackedRgbFrame(frame)) {
     if (wantsRawPlanarConversion) {
-      warnings.push('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.');
+      warnings.push('raw planar conversion was requested but packed RGB resize uses the Canvas path.');
     }
     if (sameSize) {
       return { frame, inspection: inspectFrame(frame), path: 'none', warnings };
     }
-    const resized = await resizeFrameRgb(frame, {
-      width: options.width,
-      height: options.height,
-      algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
-      scratch: options.scratch,
-    });
+    const resized = resizeFrameWithCanvas(frame, { width: options.width, height: options.height });
     return {
       frame: resized.frame,
       inspection: resized.inspection,
-      path: 'preserve',
+      path: 'canvas',
       warnings,
+      canvasColorSpace: resized.colorSpace,
     };
   }
 

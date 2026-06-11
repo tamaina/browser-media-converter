@@ -5,7 +5,7 @@ Helpers for inspecting, resizing, and color-routing WebCodecs `VideoFrame`s.
 The package exposes three layers:
 
 - `inspectFrame` / `classifyFrameColor` for frame metadata and color-route hints.
-- `resizeVideoFrame` for preserve CPU resize or explicit Canvas SDR conversion.
+- `resizeVideoFrame` for planar preserve resize, packed RGB Canvas resize, or explicit Canvas SDR conversion.
 - Lower-level planar and Canvas helpers for callers that want to choose the path themselves.
 
 ## Create A VideoFrame
@@ -83,9 +83,9 @@ console.log(resized.path, resized.warnings);
 resized.frame.close();
 ```
 
-`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) use CPU resize while preserving their input format. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
+`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) resize through Canvas and return an `RGBA` frame. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
 
-`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize keeps the RGB format and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame.
+`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize uses Canvas when resizing and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame. Canvas results report `path: 'canvas'`; use `canvasColorSpace` or `inspection.colorSpace` to distinguish ordinary Canvas routing from forced sRGB conversion.
 
 ## Resize A Frame Stream
 
@@ -129,7 +129,7 @@ resized4208.frame.close();
 
 For downscales of 2x or more, every algorithm except `nearest` first applies iterative 2x box reduction until the remaining scale is above 0.5, then runs the selected filter. This keeps kernel sizes bounded and makes large downscales much faster without visible quality loss. `nearest` stays a raw point-sampling decimation.
 
-Packed RGB formats are intentionally out of scope for this helper. Use `resizeVideoFrame` for CPU packed-RGB resize or the Canvas helpers for explicit Canvas processing.
+Packed RGB formats are intentionally out of scope for this helper. Use `resizeVideoFrame` for the default Canvas packed-RGB resize, `resizeFrameWithCanvas` for explicit Canvas processing, or `resizeFrameRgb` when you intentionally need the lower-level CPU implementation.
 
 ## Canvas Helpers
 
@@ -182,6 +182,6 @@ pnpm --filter @browser-mc/webcodecs-color test:electron
 pnpm --filter @browser-mc/webcodecs-color benchmark:rgb-resize
 ```
 
-`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, `resizeVideoFrame` CPU preserve resize, and `VideoFrameResizer` buffer-reuse equivalence.
+`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, `resizeVideoFrame` packed RGB Canvas resize, and `VideoFrameResizer` buffer-reuse equivalence.
 
 `benchmark:rgb-resize` compares packed RGB CPU resize algorithms against Canvas resize in Electron and prints both a table and JSON.

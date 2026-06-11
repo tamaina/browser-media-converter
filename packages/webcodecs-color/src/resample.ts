@@ -364,19 +364,49 @@ function resampleConvolution(view: PlaneView, options: ConvertPlaneOptions, comp
       && options.sourceBitDepth === 8
       && options.destinationBitDepth === 8;
     if (canUseFixedPoint) {
-      const intermediate = options.scratch?.getShorts('plane-intermediate-fixed', options.destinationWidth * view.height * outputComponents)
-        ?? new Int16Array(options.destinationWidth * view.height * outputComponents);
-      convolveRowsToFixed(view, horizontal, intermediate, options, components, outputComponents);
-      accumulateColumnsFixedToPlane(intermediate, vertical, options, components, outputComponents);
+      resampleFixedConvolution(view, horizontal, vertical, options, components, outputComponents);
       return;
     }
-    const intermediate = getFloats(options.scratch, 'plane-intermediate', options.destinationWidth * view.height * components);
-    convolveRowsToFloats(view, horizontal, intermediate, options, components);
-    accumulateColumnsToPlane(intermediate, vertical, options, components);
+    resampleFloatConvolutionHorizontalFirst(view, horizontal, vertical, options, components);
   } else {
-    const intermediate = getFloats(options.scratch, 'plane-intermediate', view.width * options.destinationHeight * components);
-    accumulateRowsToFloats(view, vertical, intermediate, components, options.sourceBytesPerSample);
-    convolveFloatsToPlane(intermediate, horizontal, options, components, view.width);
+    resampleFloatConvolutionVerticalFirst(view, horizontal, vertical, options, components);
+  }
+}
+
+function resampleFloatConvolutionHorizontalFirst(
+  view: PlaneView,
+  horizontal: KernelTable,
+  vertical: KernelTable,
+  options: ConvertPlaneOptions,
+  components: number,
+) {
+  const rowValues = options.destinationWidth * components;
+  const maxSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, CONVOLUTION_STRIPE_ROWS, view.height);
+  const intermediate = getFloats(options.scratch, 'plane-intermediate-striped', rowValues * maxSourceRows);
+
+  for (let stripeY = 0; stripeY < options.destinationHeight; stripeY += CONVOLUTION_STRIPE_ROWS) {
+    const stripeEnd = Math.min(stripeY + CONVOLUTION_STRIPE_ROWS, options.destinationHeight);
+    const { begin, end } = stripedSourceRange(vertical, stripeY, stripeEnd, view.height);
+    convolveRowsToFloats(view, horizontal, intermediate, options, components, begin, end);
+    accumulateColumnsToPlane(intermediate, vertical, options, components, begin, stripeY, stripeEnd);
+  }
+}
+
+function resampleFloatConvolutionVerticalFirst(
+  view: PlaneView,
+  horizontal: KernelTable,
+  vertical: KernelTable,
+  options: ConvertPlaneOptions,
+  components: number,
+) {
+  const maxSourceColumns = maxStripedSourceRows(horizontal, options.destinationWidth, CONVOLUTION_STRIPE_ROWS, view.width);
+  const intermediate = getFloats(options.scratch, 'plane-intermediate-vertical-striped', maxSourceColumns * options.destinationHeight * components);
+
+  for (let stripeX = 0; stripeX < options.destinationWidth; stripeX += CONVOLUTION_STRIPE_ROWS) {
+    const stripeEnd = Math.min(stripeX + CONVOLUTION_STRIPE_ROWS, options.destinationWidth);
+    const { begin, end } = stripedSourceRange(horizontal, stripeX, stripeEnd, view.width);
+    accumulateRowsToFloats(view, vertical, intermediate, components, options.sourceBytesPerSample, begin, end);
+    convolveFloatsToPlane(intermediate, horizontal, options, components, end - begin, begin, stripeX, stripeEnd);
   }
 }
 
@@ -386,19 +416,20 @@ function convolveRowsToFloats(
   intermediate: Float32Array,
   options: ConvertPlaneOptions,
   components: number,
+  sourceStart: number,
+  sourceEnd: number,
 ) {
   const bytesPerSample = options.sourceBytesPerSample;
   const destinationWidth = table.offsets.length;
   const { offsets, counts, starts, weights } = table;
   const data = view.data;
-  const viewHeight = view.height;
   const viewOffset = view.offset;
   const viewStride = view.stride;
 
   if (components === 1 && bytesPerSample === 1) {
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      const outputRow = y * destinationWidth;
+      const outputRow = (y - sourceStart) * destinationWidth;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -419,9 +450,9 @@ function convolveRowsToFloats(
     return;
   }
   if (components === 1) {
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      const outputRow = y * destinationWidth;
+      const outputRow = (y - sourceStart) * destinationWidth;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -444,9 +475,9 @@ function convolveRowsToFloats(
     return;
   }
   if (components === 2) {
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      let outputBase = y * destinationWidth * 2;
+      let outputBase = (y - sourceStart) * destinationWidth * 2;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -477,9 +508,9 @@ function convolveRowsToFloats(
   }
 
   const accumulators = new Float32Array(components);
-  for (let y = 0; y < viewHeight; y++) {
+  for (let y = sourceStart; y < sourceEnd; y++) {
     const sourceRow = viewOffset + y * viewStride;
-    const outputRow = y * destinationWidth * components;
+    const outputRow = (y - sourceStart) * destinationWidth * components;
     for (let x = 0; x < destinationWidth; x++) {
       const start = offsets[x];
       const end = start + counts[x];
@@ -515,6 +546,9 @@ function accumulateColumnsToPlane(
   table: KernelTable,
   options: ConvertPlaneOptions,
   components: number,
+  sourceRowOffset: number,
+  destinationStart: number,
+  destinationEnd: number,
 ) {
   const rowValues = options.destinationWidth * components;
   const accumulator = getFloats(options.scratch, 'plane-row-accumulator', Math.min(rowValues, FIXED_STRIP_VALUES));
@@ -523,7 +557,6 @@ function accumulateColumnsToPlane(
   const factor = maxSampleValue(options.destinationBitDepth) / sourceMax;
   const destination = options.destination;
   const bytesPerSample = options.destinationBytesPerSample;
-  const destinationHeight = options.destinationHeight;
   const layoutOffset = options.destinationLayout.offset;
   const layoutStride = options.destinationLayout.stride;
   const stripStep = Math.max(components, Math.floor(FIXED_STRIP_VALUES / components) * components);
@@ -531,7 +564,7 @@ function accumulateColumnsToPlane(
   for (let strip = 0; strip < rowValues; strip += stripStep) {
     const activeLength = Math.min(stripStep, rowValues - strip);
 
-    for (let y = 0; y < destinationHeight; y++) {
+    for (let y = destinationStart; y < destinationEnd; y++) {
       const start = offsets[y];
       const end = start + counts[y];
       const destinationRow = layoutOffset + y * layoutStride;
@@ -539,7 +572,7 @@ function accumulateColumnsToPlane(
       if (end - k > 2) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        let rowA = starts[y] * rowValues + strip;
+        let rowA = (starts[y] - sourceRowOffset) * rowValues + strip;
         let rowB = rowA + rowValues;
         for (let index = 0; index < activeLength; index++) {
           accumulator[index] = intermediate[rowA + index] * weightA + intermediate[rowB + index] * weightB;
@@ -561,7 +594,7 @@ function accumulateColumnsToPlane(
       // points rowB at rowA with weight zero; the second term adds exactly
       // (+/-)0, which cannot change the stored integer.
       const weightA = weights[k];
-      const rowA = (starts[y] + (k - start)) * rowValues + strip;
+      const rowA = (starts[y] - sourceRowOffset + (k - start)) * rowValues + strip;
       const hasPair = k + 1 < end;
       const weightB = hasPair ? weights[k + 1] : 0;
       const rowB = hasPair ? rowA + rowValues : rowA;
@@ -605,13 +638,17 @@ function accumulateRowsToFloats(
   intermediate: Float32Array,
   components: number,
   bytesPerSample: 1 | 2,
+  sourceColumnStart: number,
+  sourceColumnEnd: number,
 ) {
-  const rowValues = view.width * components;
+  const intermediateWidth = sourceColumnEnd - sourceColumnStart;
+  const rowValues = intermediateWidth * components;
   const { offsets, counts, starts, weights } = table;
   const data = view.data;
 
   const viewOffset = view.offset;
   const viewStride = view.stride;
+  const sourceByteOffset = sourceColumnStart * components * bytesPerSample;
   for (let y = 0; y < offsets.length; y++) {
     const outputRow = y * rowValues;
     const start = offsets[y];
@@ -622,7 +659,7 @@ function accumulateRowsToFloats(
       if (k < lastPair) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        let rowA = viewOffset + starts[y] * viewStride;
+        let rowA = viewOffset + starts[y] * viewStride + sourceByteOffset;
         let rowB = rowA + viewStride;
         for (let index = 0; index < rowValues; index++) {
           intermediate[outputRow + index] = data[rowA + index] * weightA + data[rowB + index] * weightB;
@@ -630,14 +667,14 @@ function accumulateRowsToFloats(
         k += 2;
       } else {
         const weight = weights[k];
-        const sourceRow = viewOffset + starts[y] * viewStride;
+        const sourceRow = viewOffset + starts[y] * viewStride + sourceByteOffset;
         for (let index = 0; index < rowValues; index++) intermediate[outputRow + index] = data[sourceRow + index] * weight;
         k += 1;
       }
       for (; k < lastPair; k += 2) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        const rowA = viewOffset + (starts[y] + k - start) * viewStride;
+        const rowA = viewOffset + (starts[y] + k - start) * viewStride + sourceByteOffset;
         const rowB = rowA + viewStride;
         for (let index = 0; index < rowValues; index++) {
           intermediate[outputRow + index] += data[rowA + index] * weightA + data[rowB + index] * weightB;
@@ -645,7 +682,7 @@ function accumulateRowsToFloats(
       }
       if (k < end) {
         const weight = weights[k];
-        const sourceRow = viewOffset + (starts[y] + k - start) * viewStride;
+        const sourceRow = viewOffset + (starts[y] + k - start) * viewStride + sourceByteOffset;
         for (let index = 0; index < rowValues; index++) intermediate[outputRow + index] += data[sourceRow + index] * weight;
       }
     } else {
@@ -653,7 +690,7 @@ function accumulateRowsToFloats(
       if (k < lastPair) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        const rowA = viewOffset + starts[y] * viewStride;
+        const rowA = viewOffset + starts[y] * viewStride + sourceByteOffset;
         const rowB = rowA + viewStride;
         for (let index = 0, byte = 0; index < rowValues; index++, byte += 2) {
           intermediate[outputRow + index] = (data[rowA + byte] | (data[rowA + byte + 1] << 8)) * weightA
@@ -662,7 +699,7 @@ function accumulateRowsToFloats(
         k += 2;
       } else {
         const weight = weights[k];
-        const sourceRow = viewOffset + starts[y] * viewStride;
+        const sourceRow = viewOffset + starts[y] * viewStride + sourceByteOffset;
         for (let index = 0, byte = 0; index < rowValues; index++, byte += 2) {
           intermediate[outputRow + index] = (data[sourceRow + byte] | (data[sourceRow + byte + 1] << 8)) * weight;
         }
@@ -671,7 +708,7 @@ function accumulateRowsToFloats(
       for (; k < lastPair; k += 2) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        const rowA = viewOffset + (starts[y] + k - start) * viewStride;
+        const rowA = viewOffset + (starts[y] + k - start) * viewStride + sourceByteOffset;
         const rowB = rowA + viewStride;
         for (let index = 0, byte = 0; index < rowValues; index++, byte += 2) {
           intermediate[outputRow + index] += (data[rowA + byte] | (data[rowA + byte + 1] << 8)) * weightA
@@ -680,7 +717,7 @@ function accumulateRowsToFloats(
       }
       if (k < end) {
         const weight = weights[k];
-        const sourceRow = viewOffset + (starts[y] + k - start) * viewStride;
+        const sourceRow = viewOffset + (starts[y] + k - start) * viewStride + sourceByteOffset;
         for (let index = 0, byte = 0; index < rowValues; index++, byte += 2) {
           intermediate[outputRow + index] += (data[sourceRow + byte] | (data[sourceRow + byte + 1] << 8)) * weight;
         }
@@ -695,13 +732,15 @@ function convolveFloatsToPlane(
   options: ConvertPlaneOptions,
   components: number,
   intermediateWidth: number,
+  sourceColumnOffset: number,
+  destinationStart: number,
+  destinationEnd: number,
 ) {
   const { offsets, counts, starts, weights } = table;
   const sourceMax = maxSampleValue(options.sourceBitDepth);
   const factor = maxSampleValue(options.destinationBitDepth) / sourceMax;
   const destination = options.destination;
   const bytesPerSample = options.destinationBytesPerSample;
-  const destinationWidth = options.destinationWidth;
   const destinationHeight = options.destinationHeight;
   const layoutOffset = options.destinationLayout.offset;
   const layoutStride = options.destinationLayout.stride;
@@ -712,11 +751,11 @@ function convolveFloatsToPlane(
     const intermediateRow = y * rowValues;
     const destinationRow = layoutOffset + y * layoutStride;
     if (components === 1) {
-      let target = destinationRow;
-      for (let x = 0; x < destinationWidth; x++) {
+      let target = destinationRow + destinationStart * bytesPerSample;
+      for (let x = destinationStart; x < destinationEnd; x++) {
         const start = offsets[x];
         const end = start + counts[x];
-        let position = intermediateRow + starts[x] * components;
+        let position = intermediateRow + (starts[x] - sourceColumnOffset) * components;
         const lastPair = end - 1;
         let value0 = 0;
         let value1 = 0;
@@ -735,12 +774,12 @@ function convolveFloatsToPlane(
       continue;
     }
     if (components === 4) {
-      let destinationBase = destinationRow;
       const pixelBytes = 4 * bytesPerSample;
-      for (let x = 0; x < destinationWidth; x++) {
+      let destinationBase = destinationRow + destinationStart * pixelBytes;
+      for (let x = destinationStart; x < destinationEnd; x++) {
         const start = offsets[x];
         const end = start + counts[x];
-        let position = intermediateRow + starts[x] * 4;
+        let position = intermediateRow + (starts[x] - sourceColumnOffset) * 4;
         const lastPair = end - 1;
         let value0 = 0;
         let value1 = 0;
@@ -787,13 +826,13 @@ function convolveFloatsToPlane(
       }
       continue;
     }
-    let destinationBase = destinationRow;
     const pixelBytes = components * bytesPerSample;
-    for (let x = 0; x < destinationWidth; x++) {
+    let destinationBase = destinationRow + destinationStart * pixelBytes;
+    for (let x = destinationStart; x < destinationEnd; x++) {
       const start = offsets[x];
       const end = start + counts[x];
       for (let component = 0; component < components; component++) accumulators[component] = 0;
-      let position = intermediateRow + starts[x] * components;
+      let position = intermediateRow + (starts[x] - sourceColumnOffset) * components;
       for (let k = start; k < end; k++) {
         const weight = weights[k];
         for (let component = 0; component < components; component++) accumulators[component] += intermediate[position + component] * weight;
@@ -817,6 +856,52 @@ const FIXED_WEIGHT_SHIFT = 14;
 const FIXED_INTERMEDIATE_SHIFT = 8;
 const FIXED_OUTPUT_SHIFT = FIXED_WEIGHT_SHIFT * 2 - FIXED_INTERMEDIATE_SHIFT;
 const FIXED_STRIP_VALUES = 1024;
+const CONVOLUTION_STRIPE_ROWS = 64;
+
+function resampleFixedConvolution(
+  view: PlaneView,
+  horizontal: KernelTable,
+  vertical: KernelTable,
+  options: ConvertPlaneOptions,
+  components: number,
+  outputComponents: number,
+) {
+  const rowValues = options.destinationWidth * outputComponents;
+  const maxSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, CONVOLUTION_STRIPE_ROWS, view.height);
+  const intermediate = options.scratch?.getShorts('plane-intermediate-fixed-striped', rowValues * maxSourceRows)
+    ?? new Int16Array(rowValues * maxSourceRows);
+
+  for (let stripeY = 0; stripeY < options.destinationHeight; stripeY += CONVOLUTION_STRIPE_ROWS) {
+    const stripeEnd = Math.min(stripeY + CONVOLUTION_STRIPE_ROWS, options.destinationHeight);
+    const { begin, end } = stripedSourceRange(vertical, stripeY, stripeEnd, view.height);
+    convolveRowsToFixed(view, horizontal, intermediate, options, components, outputComponents, begin, end);
+    accumulateColumnsFixedToPlane(intermediate, vertical, options, components, outputComponents, view.height, begin, stripeY, stripeEnd);
+  }
+}
+
+function stripedSourceRange(table: KernelTable, destinationStart: number, destinationEnd: number, sourceHeight: number) {
+  let begin = sourceHeight;
+  let end = 0;
+  for (let y = destinationStart; y < destinationEnd; y++) {
+    const start = table.starts[y];
+    const count = table.counts[y];
+    begin = Math.min(begin, start);
+    end = Math.max(end, start + count);
+  }
+  return {
+    begin: Math.max(0, begin),
+    end: Math.min(sourceHeight, end),
+  };
+}
+
+function maxStripedSourceRows(table: KernelTable, destinationHeight: number, stripeRows: number, sourceHeight: number) {
+  let maxRows = 0;
+  for (let y = 0; y < destinationHeight; y += stripeRows) {
+    const { begin, end } = stripedSourceRange(table, y, Math.min(y + stripeRows, destinationHeight), sourceHeight);
+    maxRows = Math.max(maxRows, end - begin);
+  }
+  return Math.max(1, maxRows);
+}
 
 function convolveRowsToFixed(
   view: PlaneView,
@@ -825,21 +910,21 @@ function convolveRowsToFixed(
   options: ConvertPlaneOptions,
   components: number,
   outputComponents: number,
+  sourceStart: number,
+  sourceEnd: number,
 ) {
   const destinationWidth = table.offsets.length;
   const fixedWeights = getFixedKernelWeights(table, options.algorithm, view.width, destinationWidth, options.scratch);
   const { offsets, counts, starts } = table;
   const data = view.data;
-  const viewWidth = view.width;
-  const viewHeight = view.height;
   const viewOffset = view.offset;
   const viewStride = view.stride;
   const half = 1 << (FIXED_INTERMEDIATE_SHIFT - 1);
 
   if (components === 1) {
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      const outputRow = y * destinationWidth;
+      const outputRow = (y - sourceStart) * destinationWidth;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -861,9 +946,9 @@ function convolveRowsToFixed(
   }
 
   if (components === 2) {
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      let outputBase = y * destinationWidth * 2;
+      let outputBase = (y - sourceStart) * destinationWidth * 2;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -892,10 +977,10 @@ function convolveRowsToFixed(
       // channels with shifts instead of four byte loads.
       const data32 = new Uint32Array(data.buffer, base, (data.byteLength - viewOffset) >> 2);
       const strideWords = viewStride >> 2;
-      for (let y = 0; y < viewHeight; y += 2) {
+      for (let y = sourceStart; y < sourceEnd; y += 2) {
         const sourceRow = y * strideWords;
-        let outputBase = y * destinationWidth * outputComponents;
-        const hasSecondRow = y + 1 < viewHeight;
+        let outputBase = (y - sourceStart) * destinationWidth * outputComponents;
+        const hasSecondRow = y + 1 < sourceEnd;
         let outputBaseB = outputBase + destinationWidth * outputComponents;
         for (let x = 0; x < destinationWidth; x++) {
           const start = offsets[x];
@@ -961,9 +1046,9 @@ function convolveRowsToFixed(
       }
       return;
     }
-    for (let y = 0; y < viewHeight; y++) {
+    for (let y = sourceStart; y < sourceEnd; y++) {
       const sourceRow = viewOffset + y * viewStride;
-      let outputBase = y * destinationWidth * outputComponents;
+      let outputBase = (y - sourceStart) * destinationWidth * outputComponents;
       for (let x = 0; x < destinationWidth; x++) {
         const start = offsets[x];
         const end = start + counts[x];
@@ -1002,9 +1087,9 @@ function convolveRowsToFixed(
   }
 
   const accumulators = new Int32Array(components);
-  for (let y = 0; y < viewHeight; y++) {
+  for (let y = sourceStart; y < sourceEnd; y++) {
     const sourceRow = viewOffset + y * viewStride;
-    const outputRow = y * destinationWidth * components;
+    const outputRow = (y - sourceStart) * destinationWidth * components;
     for (let x = 0; x < destinationWidth; x++) {
       const start = offsets[x];
       const end = start + counts[x];
@@ -1031,14 +1116,17 @@ function accumulateColumnsFixedToPlane(
   options: ConvertPlaneOptions,
   components: number,
   outputComponents: number,
+  sourceHeight: number,
+  sourceRowOffset: number,
+  destinationStart: number,
+  destinationEnd: number,
 ) {
   const rowValues = options.destinationWidth * outputComponents;
   const accumulator = options.scratch?.getInts('plane-row-accumulator-fixed', Math.min(rowValues, FIXED_STRIP_VALUES))
     ?? new Int32Array(Math.min(rowValues, FIXED_STRIP_VALUES));
-  const fixedWeights = getFixedKernelWeights(table, options.algorithm, intermediate.length / rowValues, table.offsets.length, options.scratch);
+  const fixedWeights = getFixedKernelWeights(table, options.algorithm, sourceHeight, table.offsets.length, options.scratch);
   const { offsets, counts, starts } = table;
   const destination = options.destination;
-  const destinationHeight = options.destinationHeight;
   const layoutOffset = options.destinationLayout.offset;
   const layoutStride = options.destinationLayout.stride;
   const half = 1 << (FIXED_OUTPUT_SHIFT - 1);
@@ -1048,7 +1136,7 @@ function accumulateColumnsFixedToPlane(
   for (let strip = 0; strip < rowValues; strip += stripStep) {
     const activeLength = Math.min(stripStep, rowValues - strip);
 
-    for (let y = 0; y < destinationHeight; y++) {
+    for (let y = destinationStart; y < destinationEnd; y++) {
       const start = offsets[y];
       const end = start + counts[y];
       const destinationRow = layoutOffset + y * layoutStride;
@@ -1056,7 +1144,7 @@ function accumulateColumnsFixedToPlane(
       if (end - k > 2) {
         const weightA = fixedWeights[k];
         const weightB = fixedWeights[k + 1];
-        let rowA = starts[y] * rowValues + strip;
+        let rowA = (starts[y] - sourceRowOffset) * rowValues + strip;
         let rowB = rowA + rowValues;
         for (let index = 0; index < activeLength; index++) {
           accumulator[index] = intermediate[rowA + index] * weightA + intermediate[rowB + index] * weightB;
@@ -1074,7 +1162,7 @@ function accumulateColumnsFixedToPlane(
         }
       }
       const weightA = fixedWeights[k];
-      const rowA = (starts[y] + (k - start)) * rowValues + strip;
+      const rowA = (starts[y] - sourceRowOffset + (k - start)) * rowValues + strip;
       const hasPair = k + 1 < end;
       const weightB = hasPair ? fixedWeights[k + 1] : 0;
       const rowB = hasPair ? rowA + rowValues : rowA;

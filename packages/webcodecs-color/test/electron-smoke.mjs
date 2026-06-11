@@ -589,7 +589,7 @@ assert.deepEqual(result.wrappedPlanar, {
   displayHeight: Math.max(1, Math.floor(result.inspection.displayHeight / 2)),
   warnings: [],
 });
-assert.equal(result.wrappedRgba.path, 'preserve');
+assert.equal(result.wrappedRgba.path, 'canvas');
 assert.equal(result.wrappedRgba.format, 'RGBA');
 assert.equal(result.wrappedRgba.displayWidth, 8);
 assert.equal(result.wrappedRgba.displayHeight, 6);
@@ -598,7 +598,7 @@ assert.equal(result.wrappedRgbaRaw.path, 'none');
 assert.equal(result.wrappedRgbaRaw.format, 'RGBA');
 assert.equal(result.wrappedRgbaRaw.displayWidth, 16);
 assert.equal(result.wrappedRgbaRaw.displayHeight, 12);
-assert.ok(result.wrappedRgbaRaw.warnings.includes('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.'));
+assert.ok(result.wrappedRgbaRaw.warnings.includes('raw planar conversion was requested but packed RGB resize uses the Canvas path.'));
 assert.equal(result.wrappedRgbaRawSameFrame, true);
 assert.equal(result.bgrxDefaultCopy.format, 'RGBX');
 assert.equal(result.bgrxDefaultCopy.colorSpace, 'srgb');
@@ -606,21 +606,21 @@ assert.equal(result.bgrxDefaultCopy.byteLength, 16 * 12 * 4);
 assert.equal(result.bgrxCopy.format, 'BGRX');
 assert.equal(result.bgrxCopy.colorSpace, 'srgb');
 assert.equal(result.bgrxCopy.byteLength, 16 * 12 * 4);
-assert.equal(result.wrappedBgrx.path, 'preserve');
-assert.equal(result.wrappedBgrx.format, 'BGRX');
+assert.equal(result.wrappedBgrx.path, 'canvas');
+assert.equal(result.wrappedBgrx.format, 'RGBA');
 assert.equal(result.wrappedBgrx.displayWidth, 8);
 assert.equal(result.wrappedBgrx.displayHeight, 6);
 assert.equal(result.wrappedBgrxRaw.path, 'none');
 assert.equal(result.wrappedBgrxRaw.format, 'BGRX');
 assert.equal(result.wrappedBgrxRaw.displayWidth, 16);
 assert.equal(result.wrappedBgrxRaw.displayHeight, 12);
-assert.ok(result.wrappedBgrxRaw.warnings.includes('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.'));
+assert.ok(result.wrappedBgrxRaw.warnings.includes('raw planar conversion was requested but packed RGB resize uses the Canvas path.'));
 assert.equal(result.wrappedBgrxRawSameFrame, true);
 assert.deepEqual(result.alphaSupport, {
   rgba: true,
   bgrx: false,
 });
-assert.equal(result.wrappedCanvasSdr.path, 'canvas-sdr');
+assert.equal(result.wrappedCanvasSdr.path, 'canvas');
 assert.equal(result.wrappedCanvasSdrInspection.format, 'RGBA');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');
