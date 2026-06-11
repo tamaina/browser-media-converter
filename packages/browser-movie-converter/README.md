@@ -79,6 +79,7 @@ console.log(target.buffer);
 
 ```ts
 import {
+  checkMovieConversionSupport,
   checkMovieRawFrameSupport,
   checkMovieVideoEncoderBitDepthSupport,
   checkMovieVideoEncoderConfigSupport,
@@ -100,8 +101,16 @@ const encoder = await checkMovieVideoEncoderConfigSupport({
   framerate: 30,
 });
 
+const support = await checkMovieConversionSupport({
+  input,
+  output,
+  video: { codec: 'avc', bitrate: 4_000_000 },
+  resize: { width: 1280 },
+});
 const encoderBitDepths = await checkMovieVideoEncoderBitDepthSupport();
 
+console.log(support.supported, support.decodable, support.convertible);
+console.log(support.conversion?.discardedTracks);
 console.log(rawFrame.supported, rawFrame.format);
 console.log(encoder.supported, encoder.config?.codec);
 console.table(encoderBitDepths.map(({ codec, bitDepth, chromaSubsampling, fullCodecString, supported }) => ({
@@ -197,7 +206,7 @@ When split `quantizer` values are used with `keyFrameInterval`, the interval is 
 
 ## Notes
 
-- This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle.
+- This package builds Mediabunny `ConversionOptions`; callers choose the `Output`, target, and final `Conversion` lifecycle. `checkMovieConversionSupport()` loads the selected tracks, calls each selected track's `canDecode()`, builds the conversion plan, and initializes Mediabunny `Conversion` without executing it. It reports `supported: true` only when all selected tracks are decodable and the initialized conversion is valid.
 - When `resize` is set, the generated video options use `VideoSample.toVideoFrame()` plus `webcodecs-color.resizeVideoFrame()` inside Mediabunny's `process` hook. Supported planar YUV/YUVA and `NV12` frames use CPU planar resize. `RGBA`, `RGBX`, `BGRA`, `BGRX`, and unsupported or unknown `VideoFrame` formats resize through Canvas and return `RGBA` with a warning. `resize.rawBitDepth` and `resize.rawChromaSubsampling` can additionally convert supported planar frames before encoding; both default to `preserve`. `NV12` frames are preserved as `NV12` during resize when both controls are preserved, or unpacked to `I420` when raw planar conversion is requested.
 - `rawBitDepth` controls the raw planar `VideoFrame` produced before encoding; it does not by itself prove that the chosen movie codec accepts that frame bit depth. Use `checkMovieRawFrameSupport` for the planned raw frame format, `checkMovieVideoEncoderConfigSupport` for the exact `VideoEncoderConfig` you intend to use, and `checkMovieVideoEncoderBitDepthSupport()` to compare default 1080p 8-bit/10-bit and 4:2:0/4:2:2/4:4:4 encoder configs across codecs.
 - `convertMovieToHls` streams HLS assets through `ReadableStream<Uint8Array>` and requires `variants`, producing one HLS video encode per variant. Top-level resize, scene detection, quantizer, color metadata, force transcode, and key-frame options act as defaults; variant values override them. Audio is encoded once and paired with every video variant.

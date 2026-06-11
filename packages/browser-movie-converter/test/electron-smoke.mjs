@@ -60,6 +60,7 @@ const result = await page.evaluate(async ({ port }) => {
   const {
     buildMovieConversionOptions,
     buildMovieVideoConversionOptions,
+    checkMovieConversionSupport,
     checkMovieRawFrameSupport,
     checkMovieVideoEncoderBitDepthSupport,
     checkMovieVideoEncoderConfigSupport,
@@ -85,6 +86,31 @@ const result = await page.evaluate(async ({ port }) => {
   const output = new Output({
     target,
     format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+  });
+  const support = await checkMovieConversionSupport({
+    input: new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    }),
+    output: new Output({
+      target: new BufferTarget(),
+      format: new Mp4OutputFormat({ fastStart: 'in-memory' }),
+    }),
+    videoTrackQuery: {
+      filter: (track) => track.number === 1,
+    },
+    resize: {
+      width: 320,
+    },
+    video: {
+      keyFrameInterval: 1,
+    },
+    quantizer: {
+      keyFrame: 28,
+      deltaFrame: 36,
+    },
+    sceneDetection: false,
+    colorMetadata: 'preserve',
   });
   const plan = await buildMovieConversionOptions({
     input: sourceInput,
@@ -153,6 +179,11 @@ const result = await page.evaluate(async ({ port }) => {
       hasHighDynamicRange: async () => true,
       getDisplayWidth: async () => 1920,
       getDisplayHeight: async () => 1080,
+      getCodedWidth: async () => 1920,
+      getCodedHeight: async () => 1080,
+      getSquarePixelWidth: async () => 1920,
+      getSquarePixelHeight: async () => 1080,
+      getRotation: async () => 0,
       getCodecParameterString: async () => 'av01.0.08M.10',
       getDecoderConfig: async () => null,
     },
@@ -423,6 +454,32 @@ const result = await page.evaluate(async ({ port }) => {
   }
   return {
     length: outputBytes.byteLength,
+    support: {
+      supported: support.supported,
+      decodable: support.decodable,
+      convertible: support.convertible,
+      video: support.tracks.video.map((track) => ({
+        type: track.type,
+        number: track.number,
+        codec: track.codec,
+        supported: track.supported,
+        error: track.error,
+      })),
+      audio: support.tracks.audio.map((track) => ({
+        type: track.type,
+        number: track.number,
+        codec: track.codec,
+        supported: track.supported,
+        error: track.error,
+      })),
+      discardedTracks: support.conversion?.discardedTracks.map((track) => ({
+        type: track.type,
+        number: track.number,
+        codec: track.codec,
+        reason: track.reason,
+      })) ?? null,
+      error: support.error,
+    },
     resize: plan.resize,
     rawPlanarResize: rawPlanarPlan.resize,
     rawPlanarFullCodecString: rawPlanarVideoOptions.fullCodecString ?? null,
@@ -466,6 +523,16 @@ const result = await page.evaluate(async ({ port }) => {
 }, { port });
 
 assert.ok(result.length > 0, 'expected a non-empty converted MP4');
+assert.equal(result.support.supported, true, 'expected support check to accept the conversion plan');
+assert.equal(result.support.decodable, true, 'expected selected tracks to be decodable');
+assert.equal(result.support.convertible, true, 'expected conversion initialization to be valid');
+assert.equal(result.support.error, null);
+assert.deepEqual(result.support.discardedTracks, []);
+assert.ok(result.support.video.length > 0, 'expected support check to inspect a selected video track');
+for (const track of [...result.support.video, ...result.support.audio]) {
+  assert.equal(track.supported, true, `expected ${track.type} track ${track.number} to be decodable`);
+  assert.equal(track.error, null);
+}
 assert.deepEqual(result.resize, { width: 320, height: 180, path: 'preserve' });
 assert.deepEqual(result.rawPlanarResize, { width: 320, height: 180, path: 'preserve' });
 assert.equal(result.rawPlanarFullCodecString, 'av01.0.00M.08');

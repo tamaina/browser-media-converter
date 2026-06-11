@@ -1,5 +1,6 @@
 import {
   canEncodeAudio,
+  Conversion,
   getEncodableAudioCodecs,
   getFirstEncodableAudioCodec,
   Input,
@@ -9,7 +10,9 @@ import {
   type ConversionAudioOptions,
   type ConversionOptions,
   type ConversionVideoOptions,
+  type DiscardedTrack,
   type InputAudioTrack,
+  type InputTrack,
   type InputTrackQuery,
   type InputVideoTrack,
   type Output,
@@ -223,6 +226,43 @@ export type BrowserMovieConversionPlan = {
   warnings: BrowserMovieConversionWarning[];
 };
 
+export type BrowserMovieTrackSupportResult = {
+  track: InputTrack;
+  type: 'video' | 'audio';
+  id: number;
+  number: number;
+  codec: string | null;
+  supported: boolean;
+  error: { name: string; message: string } | null;
+};
+
+export type BrowserMovieDiscardedTrackResult = {
+  track: InputTrack;
+  type: 'video' | 'audio';
+  id: number;
+  number: number;
+  codec: string | null;
+  reason: DiscardedTrack['reason'];
+};
+
+export type BrowserMovieConversionSupportResult = {
+  supported: boolean;
+  decodable: boolean;
+  convertible: boolean;
+  plan: BrowserMovieConversionPlan | null;
+  tracks: {
+    video: BrowserMovieTrackSupportResult[];
+    audio: BrowserMovieTrackSupportResult[];
+    all: BrowserMovieTrackSupportResult[];
+  };
+  conversion: {
+    isValid: boolean;
+    discardedTracks: BrowserMovieDiscardedTrackResult[];
+  } | null;
+  warnings: BrowserMovieConversionWarning[];
+  error: { name: string; message: string } | null;
+};
+
 const defaultMovieSceneDetectionOptions = {
   sensitivity: 'high',
   sampleRate: 'all',
@@ -296,6 +336,51 @@ export async function buildMovieConversionOptions(options: BrowserMovieConversio
     audioPlans: audioPlanList,
     warnings,
   };
+}
+
+export async function checkMovieConversionSupport(
+  options: BrowserMovieConversionOptionsInput,
+): Promise<BrowserMovieConversionSupportResult> {
+  try {
+    const tracks = options.tracks ?? 'primary';
+    const videoTracks = await getSelectedVideoTracks(options.input, tracks, options.videoTrackQuery);
+    const audioTracks = await getSelectedAudioTracks(options.input, tracks);
+    const [video, audio] = await Promise.all([
+      Promise.all(videoTracks.map(checkMovieTrackDecodeSupport)),
+      Promise.all(audioTracks.map(checkMovieTrackDecodeSupport)),
+    ]);
+    const all = [...video, ...audio];
+    const decodable = all.every((track) => track.supported);
+    const plan = await buildMovieConversionOptions(options);
+    const conversion = await Conversion.init(plan.options);
+    const discardedTracks = await Promise.all(conversion.discardedTracks.map(normalizeDiscardedTrack));
+    const convertible = conversion.isValid;
+
+    return {
+      supported: decodable && convertible,
+      decodable,
+      convertible,
+      plan,
+      tracks: { video, audio, all },
+      conversion: {
+        isValid: conversion.isValid,
+        discardedTracks,
+      },
+      warnings: plan.warnings,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      decodable: false,
+      convertible: false,
+      plan: null,
+      tracks: { video: [], audio: [], all: [] },
+      conversion: null,
+      warnings: [],
+      error: normalizeSupportError(error),
+    };
+  }
 }
 
 export async function buildMovieVideoConversionOptions(options: BrowserMovieVideoConversionOptionsInput): Promise<BrowserMovieVideoConversionPlan> {
@@ -405,6 +490,39 @@ export async function buildMovieAudioConversionOptions(options: BrowserMovieAudi
     resolvedCodec,
     fallbackCodecs,
     warnings: [warning],
+  };
+}
+
+async function checkMovieTrackDecodeSupport(track: InputVideoTrack | InputAudioTrack): Promise<BrowserMovieTrackSupportResult> {
+  try {
+    return {
+      ...(await describeMovieTrack(track)),
+      supported: await track.canDecode(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ...(await describeMovieTrack(track)),
+      supported: false,
+      error: normalizeSupportError(error),
+    };
+  }
+}
+
+async function normalizeDiscardedTrack(discarded: DiscardedTrack): Promise<BrowserMovieDiscardedTrackResult> {
+  return {
+    ...(await describeMovieTrack(discarded.track)),
+    reason: discarded.reason,
+  };
+}
+
+async function describeMovieTrack(track: InputTrack) {
+  return {
+    track,
+    type: track.isVideoTrack() ? 'video' as const : 'audio' as const,
+    id: track.id,
+    number: track.number,
+    codec: await track.getCodec(),
   };
 }
 

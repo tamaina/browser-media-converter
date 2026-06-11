@@ -1,5 +1,14 @@
 # @browser-mc/browser-movie-converter
 
+## 1.2.0
+
+### Minor Changes
+
+- Add `checkMovieConversionSupport` for validating a planned movie conversion without executing it.
+
+  - The helper checks selected input tracks with `canDecode()`, builds the same conversion plan as `buildMovieConversionOptions`, and initializes Mediabunny `Conversion`.
+  - The result reports selected video/audio track decode support, conversion validity, discarded tracks, warnings, and normalized errors.
+
 ## 1.1.0
 
 ### Minor Changes
