@@ -447,7 +447,7 @@ assert.equal(result.iccWebp.kind, 'still');
 assert.equal(result.iccWebp.mime, 'image/webp');
 assert.notDeepEqual(result.iccWebp.iccProfile, [1, 2, 3, 4]);
 assert.equal(result.resized.frames.length, 2);
-assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'canvas'));
+assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'preserve'));
 assert.deepEqual(
   result.support,
   {

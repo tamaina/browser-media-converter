@@ -5,7 +5,7 @@ Helpers for inspecting, resizing, and color-routing WebCodecs `VideoFrame`s.
 The package exposes three layers:
 
 - `inspectFrame` / `classifyFrameColor` for frame metadata and color-route hints.
-- `resizeVideoFrame` for planar preserve resize, packed RGB Canvas resize, or explicit Canvas SDR conversion.
+- `resizeVideoFrame` for planar or packed RGB preserve resize, optional SIMD acceleration, or explicit Canvas SDR conversion.
 - Lower-level planar and Canvas helpers for callers that want to choose the path themselves.
 
 ## Create A VideoFrame
@@ -83,9 +83,9 @@ console.log(resized.path, resized.warnings);
 resized.frame.close();
 ```
 
-`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) resize through Canvas and return an `RGBA` frame. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
+`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) use CPU/SIMD resize while preserving their input format. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
 
-`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize uses Canvas when resizing and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame. Canvas results report `path: 'canvas'`; use `canvasColorSpace` or `inspection.colorSpace` to distinguish ordinary Canvas routing from forced sRGB conversion.
+`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize keeps the RGB format and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame. Canvas results report `path: 'canvas'`; use `canvasColorSpace` or `inspection.colorSpace` to distinguish ordinary Canvas routing from forced sRGB conversion.
 
 ## Resize A Frame Stream
 
@@ -129,7 +129,25 @@ resized4208.frame.close();
 
 For downscales of 2x or more, every algorithm except `nearest` first applies iterative 2x box reduction until the remaining scale is above 0.5, then runs the selected filter. This keeps kernel sizes bounded and makes large downscales much faster without visible quality loss. `nearest` stays a raw point-sampling decimation.
 
-Packed RGB formats are intentionally out of scope for this helper. Use `resizeVideoFrame` for the default Canvas packed-RGB resize, `resizeFrameWithCanvas` for explicit Canvas processing, or `resizeFrameRgb` when you intentionally need the lower-level CPU implementation.
+### WASM SIMD Resize
+
+CPU resize automatically probes WebAssembly SIMD support when a reusable scratch buffer is available. The WASM payload is generated into TypeScript as inline base64, so callers do not need bundler asset configuration or `import.meta.url` handling.
+
+The SIMD runtime is owned by the supplied scratch instance. `VideoFrameResizer` creates and reuses that scratch internally; function callers can get the same reuse with `createResizeScratch()`. The inline WASM exposes `c1`, `c2`, and `c4` kernels for planar single-channel, NV12 UV, and packed RGB work while sharing one memory arena. If probing or instantiation fails, the resize falls back to the JavaScript implementation.
+
+Use `simd: false` to force the JavaScript path for comparison or troubleshooting:
+
+```ts
+const resized = await resizeVideoFrame(frame, {
+  width: 1024,
+  height: 682,
+  simd: false,
+});
+```
+
+`nearest` remains JavaScript-only. The current WASM kernels cover 8-bit 2x box reduction and fixed-point convolution paths; higher bit-depth float paths and bilinear continue to use the JavaScript fallback. Fixed-point convolution uses striped intermediates for `c1`, `c2`, and `c4`, so large 4K resizes do not need a full `destinationWidth * sourceHeight` intermediate buffer.
+
+Packed RGB formats are intentionally out of scope for `resizeFramePlanar`. On this SIMD branch, use `resizeVideoFrame` for CPU/SIMD packed-RGB resize, `resizeFrameWithCanvas` for explicit Canvas processing, or `resizeFrameRgb` when you intentionally need the lower-level CPU implementation.
 
 ## Canvas Helpers
 
@@ -180,8 +198,11 @@ pnpm --filter @browser-mc/webcodecs-color build
 pnpm --filter @browser-mc/webcodecs-color typecheck
 pnpm --filter @browser-mc/webcodecs-color test:electron
 pnpm --filter @browser-mc/webcodecs-color benchmark:rgb-resize
+pnpm --filter @browser-mc/webcodecs-color benchmark:planar-resize
 ```
 
-`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, `resizeVideoFrame` packed RGB Canvas resize, and `VideoFrameResizer` buffer-reuse equivalence.
+`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, `resizeVideoFrame` packed RGB preserve resize, and `VideoFrameResizer` buffer-reuse equivalence.
 
 `benchmark:rgb-resize` compares packed RGB CPU resize algorithms against Canvas resize in Electron and prints both a table and JSON.
+
+`benchmark:planar-resize` compares I420 and NV12 planar resize paths with SIMD enabled, cached, and disabled. Recent Electron measurements on this workspace showed cached SIMD at about `209ms` for RGBA 4K to 720p `lanczos3` versus `219ms` with `simd: false`, and about `117ms` for NV12 4K to 720p `lanczos3` versus `118ms` with `simd: false`.

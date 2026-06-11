@@ -4,6 +4,8 @@ node_modules/
 dist/
 **/dist/
 
+packages/webcodecs-color/assembly/build/
+
 playground-output/
 
 IMG_3439.mov
