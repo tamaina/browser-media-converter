@@ -1,5 +1,11 @@
 # @browser-mc/browser-movie-converter
 
+## 1.0.1
+
+### Patch Changes
+
+- Patch HLS master playlists with the planned variant codec strings and resolutions.
+
 ## 1.0.0
 
 ### Major Changes
