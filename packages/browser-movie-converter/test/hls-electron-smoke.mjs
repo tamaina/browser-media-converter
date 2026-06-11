@@ -58,7 +58,9 @@ await page.goto(`http://127.0.0.1:${port}/`);
 const result = await page.evaluate(async ({ port }) => {
   const input = new Uint8Array(await (await fetch(`http://127.0.0.1:${port}/bbb.mov`)).arrayBuffer());
   const {
+    checkMovieAudioEncoderSupport,
     convertMovieToHls,
+    createMovieHlsFormat,
     decodeMovieHlsText,
   } = await import(`http://127.0.0.1:${port}/converter.js`);
   const {
@@ -132,11 +134,139 @@ const result = await page.evaluate(async ({ port }) => {
 
   const segmentSizes = {};
   const initSizes = {};
+  const segmentAudioCodecs = {};
+  const initAudioCodecs = {};
   for (const asset of assets) {
     if (asset.path.endsWith('.ts')) {
       segmentSizes[asset.path] = await readVideoSize(asset.bytes, new MpegTsInputFormat());
+      segmentAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new MpegTsInputFormat());
     } else if (/^init-\d+\.mp4$/.test(asset.path)) {
       initSizes[asset.path] = await readVideoSize(asset.bytes, new Mp4InputFormat());
+      initAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new Mp4InputFormat());
+    }
+  }
+
+  const hlsAudioCodecs = createMovieHlsFormat().getSupportedAudioCodecs();
+  const audioSupport = await checkMovieAudioEncoderSupport({
+    codecs: hlsAudioCodecs,
+    numberOfChannels: 2,
+    sampleRate: 48000,
+    bitrate: 96_000,
+  });
+  const unsupportedAudioCodec = audioSupport.find((entry) => !entry.supported)?.codec ?? null;
+  const supportedAudioCodec = audioSupport.find((entry) => entry.supported)?.codec ?? null;
+  const audioFallbackWarnings = [];
+  const fallbackAudioAssets = [];
+  if (unsupportedAudioCodec && supportedAudioCodec) {
+    const fallbackInput = new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    });
+    for await (const asset of convertMovieToHls({
+      input: fallbackInput,
+      tracks: 'primary',
+      targetDuration: 2,
+      sceneDetection: false,
+      audio: {
+        codec: unsupportedAudioCodec,
+        fallbackCodecs: [supportedAudioCodec],
+        bitrate: 96_000,
+        numberOfChannels: 2,
+        sampleRate: 48000,
+      },
+      variants: [
+        { video: { codec: 'avc', bitrate: 300_000 }, resize: { width: 160 } },
+      ],
+      onWarning: (warning) => {
+        audioFallbackWarnings.push({
+          type: warning.type,
+          requestedCodec: warning.requestedCodec,
+          resolvedCodec: warning.resolvedCodec,
+        });
+      },
+    })) {
+      const bytes = await readStream(asset.data);
+      fallbackAudioAssets.push({
+        path: asset.path,
+        bytes: [...bytes],
+      });
+    }
+  }
+
+  const fallbackAudioCodecs = {};
+  for (const asset of fallbackAudioAssets) {
+    if (asset.path.endsWith('.ts')) {
+      fallbackAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new MpegTsInputFormat());
+    } else if (/^init-\d+\.mp4$/.test(asset.path)) {
+      fallbackAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new Mp4InputFormat());
+    }
+  }
+
+  let noAudioFallbackError = null;
+  if (unsupportedAudioCodec && supportedAudioCodec) {
+    try {
+      const noFallbackInput = new Input({
+        source: new BufferSource(input),
+        formats: [new QuickTimeInputFormat()],
+      });
+      for await (const asset of convertMovieToHls({
+        input: noFallbackInput,
+        tracks: 'primary',
+        targetDuration: 2,
+        sceneDetection: false,
+        audio: {
+          codec: unsupportedAudioCodec,
+          fallbackCodecs: [unsupportedAudioCodec],
+          bitrate: 96_000,
+          numberOfChannels: 2,
+          sampleRate: 48000,
+        },
+        variants: [
+          { video: { codec: 'avc', bitrate: 300_000 }, resize: { width: 160 } },
+        ],
+      })) {
+        await readStream(asset.data);
+      }
+    } catch (error) {
+      noAudioFallbackError = error.message;
+    }
+  }
+
+  const normalAudioAssets = [];
+  if (supportedAudioCodec) {
+    const normalInput = new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    });
+    for await (const asset of convertMovieToHls({
+      input: normalInput,
+      tracks: 'primary',
+      targetDuration: 2,
+      sceneDetection: false,
+      audio: {
+        codec: supportedAudioCodec,
+        bitrate: 96_000,
+        numberOfChannels: 2,
+        sampleRate: 48000,
+      },
+      variants: [
+        { video: { codec: 'avc', bitrate: 300_000 }, resize: { width: 160 } },
+      ],
+    })) {
+      const bytes = await readStream(asset.data);
+      normalAudioAssets.push({
+        path: asset.path,
+        bytes: [...bytes],
+      });
+    }
+  }
+
+  const normalAudioCodecs = {};
+  for (const asset of normalAudioAssets) {
+    if (asset.path.endsWith('.ts')) {
+      normalAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new MpegTsInputFormat());
+    } else if (/^init-\d+\.mp4$/.test(asset.path)) {
+      normalAudioCodecs[asset.path] = await readAudioCodec(asset.bytes, new Mp4InputFormat());
     }
   }
 
@@ -201,6 +331,14 @@ const result = await page.evaluate(async ({ port }) => {
     emptyVariantsError,
     segmentSizes,
     initSizes,
+    segmentAudioCodecs,
+    initAudioCodecs,
+    unsupportedAudioCodec,
+    supportedAudioCodec,
+    audioFallbackWarnings,
+    fallbackAudioCodecs,
+    noAudioFallbackError,
+    normalAudioCodecs,
     rotatedSizes,
     rotatedAssets,
     assets,
@@ -269,6 +407,15 @@ const result = await page.evaluate(async ({ port }) => {
       height: await track.getDisplayHeight(),
     };
   }
+
+  async function readAudioCodec(bytes, format) {
+    const input = new Input({
+      source: new BufferSource(new Uint8Array(bytes)),
+      formats: [format],
+    });
+    const track = await input.getPrimaryAudioTrack();
+    return track ? await track.getCodec() : null;
+  }
 }, { port });
 
 assert.ok(result.assets.some((asset) => asset.path.endsWith('.m3u8')), 'expected HLS playlists');
@@ -313,6 +460,34 @@ assert.ok(
   Object.values(result.initSizes).some((size) => size?.width === 160 && size.height === 90),
   'expected AV1 CMAF init segment to be resized to the top-level default',
 );
+assert.ok(
+  [...Object.values(result.segmentAudioCodecs), ...Object.values(result.initAudioCodecs)].some(Boolean),
+  'expected the baseline HLS output to retain an audio track',
+);
+if (result.unsupportedAudioCodec && result.supportedAudioCodec) {
+  assert.ok(
+    result.audioFallbackWarnings.some((warning) => (
+      warning.type === 'audio-codec-fallback'
+      && warning.requestedCodec === result.unsupportedAudioCodec
+      && warning.resolvedCodec === result.supportedAudioCodec
+    )),
+    'expected unsupported requested audio codec to surface a fallback warning',
+  );
+  assert.ok(
+    Object.values(result.fallbackAudioCodecs).some((codec) => codec === result.supportedAudioCodec),
+    'expected fallback HLS output to retain audio using the resolved codec',
+  );
+  assert.ok(
+    result.noAudioFallbackError?.includes('no encodable fallback audio codec is available'),
+    'expected all-unavailable audio codecs to throw before Mediabunny silently discards audio',
+  );
+}
+if (result.supportedAudioCodec) {
+  assert.ok(
+    Object.values(result.normalAudioCodecs).some((codec) => codec === result.supportedAudioCodec),
+    'expected a normally encodable audio codec to pass through the HLS path',
+  );
+}
 const rotatedMasterPlaylist = result.rotatedAssets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';
 assert.ok(
   rotatedMasterPlaylist.includes('RESOLUTION=192x108'),

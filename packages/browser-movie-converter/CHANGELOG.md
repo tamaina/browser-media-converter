@@ -1,5 +1,17 @@
 # @browser-mc/browser-movie-converter
 
+## 1.1.0
+
+### Minor Changes
+
+- Add audio encoder capability checks and audio codec fallback planning.
+
+  - `checkMovieAudioEncoderConfigSupport` checks one audio encoder config with Mediabunny's `canEncodeAudio`.
+  - `checkMovieAudioEncoderSupport` reports support across candidate audio codecs for a channel count, sample rate, and bitrate.
+  - `BrowserMovieAudioOptions.fallbackCodecs` lets callers provide ordered audio codec fallbacks.
+  - `buildMovieConversionOptions` and `convertMovieToHls` now resolve unsupported requested audio codecs before Mediabunny can silently discard the audio track.
+  - Audio codec fallback and audio track discard events are surfaced through `onWarning`; normal conversion plans also include `audioPlans` and `warnings`.
+
 ## 1.0.2
 
 ### Patch Changes

@@ -1,6 +1,11 @@
 import {
+  canEncodeAudio,
+  getEncodableAudioCodecs,
+  getFirstEncodableAudioCodec,
   Input,
+  QUALITY_HIGH,
   VideoSample,
+  type AudioCodec,
   type ConversionAudioOptions,
   type ConversionOptions,
   type ConversionVideoOptions,
@@ -8,6 +13,7 @@ import {
   type InputTrackQuery,
   type InputVideoTrack,
   type Output,
+  type Quality,
 } from 'mediabunny';
 import {
   planSceneKeyFrames,
@@ -51,6 +57,14 @@ export type BrowserMovieVideoOptions = Omit<ConversionVideoOptions, 'process' | 
   fullCodecString?: string;
 };
 
+export type BrowserMovieAudioOptions = ConversionAudioOptions & {
+  /**
+   * Ordered fallback codecs to try when the requested codec cannot be encoded
+   * with the selected track parameters.
+   */
+  fallbackCodecs?: AudioCodec[];
+};
+
 export type BrowserMovieResizeOptions = {
   width?: number;
   height?: number;
@@ -70,7 +84,7 @@ export type BrowserMovieConversionOptionsInput = {
   input: Input;
   output: Output;
   video?: BrowserMovieVideoOptions;
-  audio?: ConversionAudioOptions;
+  audio?: BrowserMovieAudioOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   quantizer?: BrowserMovieQuantizerOptions;
@@ -78,6 +92,7 @@ export type BrowserMovieConversionOptionsInput = {
   forceTranscode?: boolean;
   tracks?: ConversionOptions['tracks'];
   videoTrackQuery?: InputTrackQuery<InputVideoTrack>;
+  onWarning?: (warning: BrowserMovieConversionWarning) => unknown;
 };
 
 export type BrowserMovieVideoConversionOptionsInput = {
@@ -90,6 +105,13 @@ export type BrowserMovieVideoConversionOptionsInput = {
   forceTranscode?: boolean;
 };
 
+export type BrowserMovieAudioConversionOptionsInput = {
+  track: InputAudioTrack;
+  output: Output;
+  audio?: BrowserMovieAudioOptions;
+  onWarning?: (warning: BrowserMovieConversionWarning) => unknown;
+};
+
 export type BrowserMovieVideoConversionPlan = {
   options: ConversionVideoOptions;
   sceneKeyFrames: SceneKeyFrameDetector | null;
@@ -99,6 +121,14 @@ export type BrowserMovieVideoConversionPlan = {
     height: number;
     path: BrowserMovieResizePath | 'none';
   } | null;
+};
+
+export type BrowserMovieAudioConversionPlan = {
+  options: ConversionAudioOptions;
+  requestedCodec: AudioCodec | null;
+  resolvedCodec: AudioCodec | null;
+  fallbackCodecs: AudioCodec[];
+  warnings: BrowserMovieConversionWarning[];
 };
 
 export type BrowserMovieTrackColor = {
@@ -148,6 +178,38 @@ export type BrowserMovieVideoEncoderBitDepthSupportResult = BrowserMovieVideoEnc
   fullCodecString: string | null;
 };
 
+export type BrowserMovieAudioEncoderConfigSupportOptions = {
+  codec: AudioCodec;
+  numberOfChannels?: number;
+  sampleRate?: number;
+  bitrate?: number | Quality;
+};
+
+export type BrowserMovieAudioEncoderConfigSupportResult = {
+  supported: boolean;
+  config: BrowserMovieAudioEncoderConfigSupportOptions;
+  error: { name: string; message: string } | null;
+};
+
+export type BrowserMovieAudioEncoderSupportOptions = {
+  codecs?: AudioCodec[];
+  numberOfChannels?: number;
+  sampleRate?: number;
+  bitrate?: number | Quality;
+};
+
+export type BrowserMovieAudioEncoderSupportResult = BrowserMovieAudioEncoderConfigSupportResult & {
+  codec: AudioCodec;
+};
+
+export type BrowserMovieConversionWarning = {
+  type: 'audio-codec-fallback' | 'audio-track-discarded';
+  message: string;
+  track: InputAudioTrack;
+  requestedCodec: AudioCodec | null;
+  resolvedCodec: AudioCodec | null;
+};
+
 export type BrowserMovieConversionPlan = {
   options: ConversionOptions;
   sceneKeyFrames: SceneKeyFrameDetector | null;
@@ -157,6 +219,8 @@ export type BrowserMovieConversionPlan = {
     height: number;
     path: BrowserMovieResizePath | 'none';
   } | null;
+  audioPlans: BrowserMovieAudioConversionPlan[];
+  warnings: BrowserMovieConversionWarning[];
 };
 
 const defaultMovieSceneDetectionOptions = {
@@ -165,6 +229,8 @@ const defaultMovieSceneDetectionOptions = {
 } satisfies SceneDetectionOptions;
 
 const defaultVideoEncoderBitDepthSupportCodecs: VideoCodecName[] = ['avc', 'hevc', 'vp8', 'vp9', 'av1'];
+
+const defaultAudioEncoderSupportCodecs: AudioCodec[] = ['aac', 'opus', 'mp3', 'vorbis', 'flac'];
 
 const defaultVideoEncoderBitDepths: VideoCodecBitDepth[] = [8, 10];
 
@@ -198,6 +264,19 @@ export async function buildMovieConversionOptions(options: BrowserMovieConversio
   }));
   const firstVideoPlan = videoTracks[0] ? videoPlans.get(videoTracks[0]) ?? null : null;
   const audioTracks = await getSelectedAudioTracks(options.input, tracks);
+  const audioPlans = new Map<InputAudioTrack, BrowserMovieAudioConversionPlan>();
+  await Promise.all(audioTracks.map(async (track) => {
+    audioPlans.set(track, await buildMovieAudioConversionOptions({
+      track,
+      output: options.output,
+      audio: options.audio,
+      onWarning: options.onWarning,
+    }));
+  }));
+  const audioPlanList = audioTracks
+    .map((track) => audioPlans.get(track))
+    .filter((plan): plan is BrowserMovieAudioConversionPlan => Boolean(plan));
+  const warnings = audioPlanList.flatMap((plan) => plan.warnings);
 
   return {
     options: {
@@ -208,12 +287,14 @@ export async function buildMovieConversionOptions(options: BrowserMovieConversio
         ? (track) => videoPlans.get(track)?.options
         : undefined,
       audio: audioTracks.length > 0
-        ? (track) => audioTracks.includes(track) ? (options.audio ?? {}) : undefined
+        ? (track) => audioTracks.includes(track) ? audioPlans.get(track)?.options : undefined
         : undefined,
     },
     sceneKeyFrames: firstVideoPlan?.sceneKeyFrames ?? null,
     videoColor: firstVideoPlan?.videoColor ?? null,
     resize: firstVideoPlan?.resize ?? null,
+    audioPlans: audioPlanList,
+    warnings,
   };
 }
 
@@ -256,6 +337,77 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
   };
 }
 
+export async function buildMovieAudioConversionOptions(options: BrowserMovieAudioConversionOptionsInput): Promise<BrowserMovieAudioConversionPlan> {
+  const base = omitAudioFallbackCodecs(options.audio);
+  if (base.discard) {
+    return {
+      options: base,
+      requestedCodec: base.codec ?? null,
+      resolvedCodec: null,
+      fallbackCodecs: options.audio?.fallbackCodecs ?? [],
+      warnings: [],
+    };
+  }
+
+  const target = await inspectAudioTrackEncodingTarget(options.track, base);
+  const supportedCodecs = options.output.format.getSupportedAudioCodecs();
+  const requestedCodec = base.codec ?? null;
+  const requestedIsSupported = requestedCodec
+    ? await checkMovieAudioEncoderConfigSupport({
+        codec: requestedCodec,
+        numberOfChannels: target.numberOfChannels,
+        sampleRate: target.sampleRate,
+        bitrate: target.bitrate,
+      })
+    : null;
+
+  if (!requestedCodec || requestedIsSupported?.supported) {
+    return {
+      options: base,
+      requestedCodec,
+      resolvedCodec: requestedCodec,
+      fallbackCodecs: options.audio?.fallbackCodecs ?? [],
+      warnings: [],
+    };
+  }
+
+  const fallbackCodecs = makeAudioFallbackCodecs({
+    requestedCodec,
+    fallbackCodecs: options.audio?.fallbackCodecs,
+    supportedCodecs,
+  });
+  const resolvedCodec = await getFirstEncodableAudioCodec(fallbackCodecs, {
+    numberOfChannels: target.numberOfChannels,
+    sampleRate: target.sampleRate,
+    bitrate: target.bitrate,
+  });
+
+  if (!resolvedCodec) {
+    throw new Error(`Audio track cannot be encoded with requested codec ${requestedCodec}; no encodable fallback audio codec is available.`);
+  }
+
+  const warning = {
+    type: 'audio-codec-fallback',
+    message: `Audio codec ${requestedCodec} is not encodable for this track; using ${resolvedCodec} instead.`,
+    track: options.track,
+    requestedCodec,
+    resolvedCodec,
+  } satisfies BrowserMovieConversionWarning;
+  options.onWarning?.(warning);
+
+  return {
+    options: {
+      ...base,
+      codec: resolvedCodec,
+      forceTranscode: true,
+    },
+    requestedCodec,
+    resolvedCodec,
+    fallbackCodecs,
+    warnings: [warning],
+  };
+}
+
 export async function inspectMovie(input: Input, videoTrackQuery?: InputTrackQuery<InputVideoTrack>): Promise<{
   videoColor: BrowserMovieTrackColor | null;
   scenePlan: SceneKeyFrameState | null;
@@ -273,6 +425,64 @@ export async function inspectVideoTrackColor(track: InputVideoTrack): Promise<Br
     colorSpace: await track.getColorSpace(),
     hasHighDynamicRange: await track.hasHighDynamicRange(),
   };
+}
+
+export async function checkMovieAudioEncoderConfigSupport(
+  config: BrowserMovieAudioEncoderConfigSupportOptions,
+): Promise<BrowserMovieAudioEncoderConfigSupportResult> {
+  try {
+    return {
+      supported: await canEncodeAudio(config.codec, {
+        numberOfChannels: config.numberOfChannels,
+        sampleRate: config.sampleRate,
+        bitrate: config.bitrate,
+      }),
+      config,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      supported: false,
+      config,
+      error: normalizeSupportError(error),
+    };
+  }
+}
+
+export async function checkMovieAudioEncoderSupport(
+  options: BrowserMovieAudioEncoderSupportOptions = {},
+): Promise<BrowserMovieAudioEncoderSupportResult[]> {
+  const codecs = options.codecs ?? defaultAudioEncoderSupportCodecs;
+  const encodableCodecs = await getEncodableAudioCodecs(codecs, {
+    numberOfChannels: options.numberOfChannels,
+    sampleRate: options.sampleRate,
+    bitrate: options.bitrate,
+  });
+
+  return Promise.all(codecs.map(async (codec) => {
+    const config = {
+      codec,
+      numberOfChannels: options.numberOfChannels,
+      sampleRate: options.sampleRate,
+      bitrate: options.bitrate,
+    };
+    if (encodableCodecs.includes(codec)) {
+      return {
+        codec,
+        supported: true,
+        config,
+        error: null,
+      };
+    }
+
+    const support = await checkMovieAudioEncoderConfigSupport(config);
+    return {
+      codec,
+      supported: support.supported,
+      config: support.config,
+      error: support.error,
+    };
+  }));
 }
 
 export function checkMovieRawFrameSupport(options: BrowserMovieRawFrameSupportOptions): BrowserMovieRawFrameSupportResult {
@@ -661,6 +871,45 @@ function omitKeyFrameInterval(
   const rest = { ...base };
   delete rest.keyFrameInterval;
   return rest;
+}
+
+function omitAudioFallbackCodecs(base: BrowserMovieAudioOptions | undefined): ConversionAudioOptions {
+  if (!base) return {};
+  const rest = { ...base };
+  delete rest.fallbackCodecs;
+  return rest;
+}
+
+async function inspectAudioTrackEncodingTarget(
+  track: InputAudioTrack,
+  options: ConversionAudioOptions,
+) {
+  return {
+    numberOfChannels: options.process && options.processedNumberOfChannels
+      ? options.processedNumberOfChannels
+      : (options.numberOfChannels ?? await track.getNumberOfChannels()),
+    sampleRate: options.process && options.processedSampleRate
+      ? options.processedSampleRate
+      : (options.sampleRate ?? await track.getSampleRate()),
+    bitrate: options.bitrate ?? QUALITY_HIGH,
+  };
+}
+
+function makeAudioFallbackCodecs(options: {
+  requestedCodec: AudioCodec;
+  fallbackCodecs: AudioCodec[] | undefined;
+  supportedCodecs: AudioCodec[];
+}) {
+  const fallbackCodecs = options.fallbackCodecs ?? [
+    ...defaultAudioEncoderSupportCodecs,
+    ...options.supportedCodecs,
+  ];
+  return uniqueAudioCodecs(fallbackCodecs)
+    .filter((codec) => codec !== options.requestedCodec && options.supportedCodecs.includes(codec));
+}
+
+function uniqueAudioCodecs(codecs: AudioCodec[]) {
+  return [...new Set(codecs)];
 }
 
 function resolveSampleQuantizer(quantizer: NormalizedMovieQuantizer | null, keyFrame: boolean) {

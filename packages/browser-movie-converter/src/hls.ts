@@ -10,16 +10,19 @@ import {
   OutputTrackGroup,
   PathedTarget,
   Target,
-  type ConversionAudioOptions,
   type ConversionOptions,
   type HlsOutputFormatOptions,
+  type InputAudioTrack,
   type InputTrackQuery,
   type InputVideoTrack,
 } from 'mediabunny';
 import {
+  buildMovieAudioConversionOptions,
   buildMovieVideoConversionOptions,
   getSelectedAudioTracks,
   getSelectedVideoTracks,
+  type BrowserMovieAudioOptions,
+  type BrowserMovieConversionWarning,
   type BrowserMovieVideoConversionPlan,
   type BrowserMovieColorMetadataPolicy,
   type BrowserMovieQuantizerOptions,
@@ -60,7 +63,7 @@ export type MovieHlsOptions = {
   rootPath?: string;
   singleFilePerPlaylist?: boolean;
   segmentFormat?: MovieHlsSegmentFormatOptions;
-  audio?: ConversionAudioOptions;
+  audio?: BrowserMovieAudioOptions;
   resize?: BrowserMovieResizeOptions;
   sceneDetection?: false | SceneDetectionOptions;
   quantizer?: BrowserMovieQuantizerOptions;
@@ -68,6 +71,7 @@ export type MovieHlsOptions = {
   forceTranscode?: boolean;
   keyFrameInterval?: number;
   onProgress?: (progress: number, processedTime: number) => unknown;
+  onWarning?: (warning: BrowserMovieConversionWarning) => unknown;
 };
 
 type HlsMasterPlaylistVariantMetadata = {
@@ -172,6 +176,16 @@ async function runHlsConversion<T extends Target>(
   masterPlaylistMetadata.value = plan.masterPlaylistVariants;
 
   const conversion = await Conversion.init(plan.options);
+  for (const discarded of conversion.discardedTracks) {
+    if (!discarded.track.isAudioTrack()) continue;
+    options.onWarning?.({
+      type: 'audio-track-discarded',
+      message: `Mediabunny discarded an audio track during HLS conversion: ${discarded.reason}.`,
+      track: discarded.track,
+      requestedCodec: null,
+      resolvedCodec: null,
+    });
+  }
   if (!conversion.isValid) {
     throw new Error(`Mediabunny could not create a valid HLS conversion: ${conversion.discardedTracks.map((track) => `${track.track.type}:${track.reason}`).join(', ')}`);
   }
@@ -186,6 +200,15 @@ async function buildMovieHlsConversionOptions(input: Input, output: Output, opti
   const tracks = options.tracks ?? 'primary';
   const videoTracks = await getSelectedVideoTracks(input, tracks, options.videoTrackQuery);
   const audioTracks = await getSelectedAudioTracks(input, tracks);
+  const audioPlans = new Map<InputAudioTrack, Awaited<ReturnType<typeof buildMovieAudioConversionOptions>>>();
+  await Promise.all(audioTracks.map(async (track) => {
+    audioPlans.set(track, await buildMovieAudioConversionOptions({
+      track,
+      output,
+      audio: options.audio,
+      onWarning: options.onWarning,
+    }));
+  }));
   const groups = videoTracks.flatMap(() => options.variants.map(() => new OutputTrackGroup()));
   const masterPlaylistVariants: HlsMasterPlaylistVariantMetadata[] = [];
 
@@ -226,7 +249,7 @@ async function buildMovieHlsConversionOptions(input: Input, output: Output, opti
       audio: audioTracks.length > 0
         ? (track) => audioTracks.includes(track)
             ? {
-                ...options.audio,
+                ...audioPlans.get(track)?.options,
                 group: groups,
               }
             : undefined
