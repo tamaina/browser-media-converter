@@ -2,11 +2,13 @@ import { inspectFrame, type FrameColorInspection } from './frame.js';
 import { isPackedRgbFrameFormat, type PackedRgbFrameFormat } from './formats.js';
 import { convertPlane, type CpuResizeAlgorithm } from './resample.js';
 import type { ResizeScratch } from './scratch.js';
+import { activateSimdScratch, deactivateSimdScratch, ensureSimdKind } from './simd.js';
 
 export type ResizeFrameRgbOptions = {
   width: number;
   height: number;
   algorithm?: CpuResizeAlgorithm;
+  simd?: boolean;
   scratch?: ResizeScratch;
 };
 
@@ -34,35 +36,46 @@ export async function resizeFrameRgb(
   }
 
   const sourceRect = visibleRectForCopy(frame);
+  const simd = options.simd !== false && options.scratch ? await ensureSimdKind(options.scratch, 'c4') : null;
   const sourceByteLength = frame.allocationSize({ rect: sourceRect, format: sourceFormat });
-  const source = options.scratch?.getBytes('source', sourceByteLength) ?? new Uint8Array(sourceByteLength);
-  const sourceLayout = await frame.copyTo(source, { rect: sourceRect, format: sourceFormat });
   const destinationLayout = [{ offset: 0, stride: options.width * 4 }];
   const destinationByteLength = destinationLayout[0].stride * options.height;
+  if (simd && options.scratch) {
+    simd.reset();
+    simd.ensureCapacity(estimateRgbSimdBytes(sourceByteLength, destinationByteLength, sourceRect.width, sourceRect.height, options.width));
+    activateSimdScratch(options.scratch, simd);
+  }
+  const source = options.scratch?.getBytes('source', sourceByteLength) ?? new Uint8Array(sourceByteLength);
+  const sourceLayout = await frame.copyTo(source, { rect: sourceRect, format: sourceFormat });
   const destination = options.scratch?.getBytes('destination', destinationByteLength)
     ?? new Uint8Array(destinationByteLength);
   const algorithm = options.algorithm ?? 'lanczos3';
 
-  convertPlane({
-    source,
-    destination,
-    sourceLayout: sourceLayout[0],
-    destinationLayout: destinationLayout[0],
-    sourceWidth: sourceRect.width,
-    sourceHeight: sourceRect.height,
-    destinationWidth: options.width,
-    destinationHeight: options.height,
-    sourceBytesPerSample: 1,
-    destinationBytesPerSample: 1,
-    sourceBitDepth: 8,
-    destinationBitDepth: 8,
-    sourceSamplesPerPixel: 4,
-    destinationSamplesPerPixel: 4,
-    sourceComponent: 0,
-    algorithm,
-    scratch: options.scratch,
-    skipFourthComponent: sourceFormat === 'RGBX' || sourceFormat === 'BGRX',
-  });
+  try {
+    convertPlane({
+      source,
+      destination,
+      sourceLayout: sourceLayout[0],
+      destinationLayout: destinationLayout[0],
+      sourceWidth: sourceRect.width,
+      sourceHeight: sourceRect.height,
+      destinationWidth: options.width,
+      destinationHeight: options.height,
+      sourceBytesPerSample: 1,
+      destinationBytesPerSample: 1,
+      sourceBitDepth: 8,
+      destinationBitDepth: 8,
+      sourceSamplesPerPixel: 4,
+      destinationSamplesPerPixel: 4,
+      sourceComponent: 0,
+      algorithm,
+      simd: options.simd,
+      scratch: options.scratch,
+      skipFourthComponent: sourceFormat === 'RGBX' || sourceFormat === 'BGRX',
+    });
+  } finally {
+    if (options.scratch) deactivateSimdScratch(options.scratch);
+  }
 
   const init: VideoFrameBufferInit = {
     format: sourceFormat,
@@ -86,6 +99,17 @@ export async function resizeFrameRgb(
     byteLength: destination.byteLength,
     algorithm,
   };
+}
+
+function estimateRgbSimdBytes(
+  sourceByteLength: number,
+  destinationByteLength: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  destinationWidth: number,
+) {
+  const intermediateBytes = destinationWidth * sourceHeight * 4 * Int16Array.BYTES_PER_ELEMENT;
+  return sourceByteLength + destinationByteLength + sourceByteLength * 2 + intermediateBytes + 1024 * 1024;
 }
 
 function visibleRectForCopy(frame: VideoFrame): Required<Pick<DOMRectInit, 'x' | 'y' | 'width' | 'height'>> {

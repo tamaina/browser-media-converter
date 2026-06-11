@@ -10,6 +10,7 @@ import {
 import type { FrameColorInspection } from './frame.js';
 import { convertPlane, type CpuResizeAlgorithm } from './resample.js';
 import type { ResizeScratch } from './scratch.js';
+import { activateSimdScratch, deactivateSimdScratch, ensureSimdKind, ensureSimdKinds, type SimdKind } from './simd.js';
 
 export type PlanarResizeAlgorithm = CpuResizeAlgorithm;
 
@@ -19,6 +20,7 @@ export type ResizeFramePlanarOptions = {
   chromaSubsampling?: PlanarChromaSubsampling;
   bitDepth?: PlanarBitDepth;
   algorithm?: PlanarResizeAlgorithm;
+  simd?: boolean;
   scratch?: ResizeScratch;
 };
 
@@ -57,9 +59,8 @@ export async function resizeFramePlanar(
   assertCanConvertChroma(sourceDescriptor, destinationDescriptor, sourceFormat, destinationFormat);
 
   const sourceRect = visibleRectForCopy(frame);
+  const simdKinds = simdKindsForDescriptor(sourceDescriptor, destinationDescriptor);
   const sourceByteLength = frame.allocationSize({ rect: sourceRect });
-  const source = options.scratch?.getBytes('source', sourceByteLength) ?? new Uint8Array(sourceByteLength);
-  const sourceLayout = await frame.copyTo(source, { rect: sourceRect });
   const destinationLayout = makeDestinationLayout(destinationDescriptor, options.width, options.height);
   const destinationByteLength = allocationFromLayout(
     destinationLayout,
@@ -67,33 +68,59 @@ export async function resizeFramePlanar(
     options.width,
     options.height,
   );
+  const shouldUseSimdScratch = options.simd !== false
+    && options.scratch
+    && sourceDescriptor.bytesPerSample === 1
+    && destinationDescriptor.bytesPerSample === 1
+    && simdKinds.length > 0;
+  if (
+    options.simd !== false
+    && options.scratch
+  ) {
+    await ensureSimdKinds(options.scratch, simdKinds);
+  }
+  if (shouldUseSimdScratch && options.scratch) {
+    const simd = await ensureSimdKind(options.scratch, simdKinds[0]);
+    if (simd) {
+      simd.reset();
+      simd.ensureCapacity(estimatePlanarSimdBytes(sourceByteLength, destinationByteLength, sourceRect.width, sourceRect.height, options.width));
+      activateSimdScratch(options.scratch, simd);
+    }
+  }
+  const source = options.scratch?.getBytes('source', sourceByteLength) ?? new Uint8Array(sourceByteLength);
+  const sourceLayout = await frame.copyTo(source, { rect: sourceRect });
   const destination = options.scratch?.getBytes('destination', destinationByteLength)
     ?? new Uint8Array(destinationByteLength);
   const algorithm = options.algorithm ?? 'lanczos3';
 
-  for (let planeIndex = 0; planeIndex < destinationDescriptor.planes.length; planeIndex++) {
-    const sourcePlaneIndex = sourcePlaneIndexForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex);
-    const sourcePlane = sourceDescriptor.planes[sourcePlaneIndex];
-    const destinationPlane = destinationDescriptor.planes[planeIndex];
-    convertPlane({
-      source,
-      destination,
-      sourceLayout: sourceLayout[sourcePlaneIndex],
-      destinationLayout: destinationLayout[planeIndex],
-      sourceWidth: planeDimension(sourceRect.width, sourcePlane.subsampleX),
-      sourceHeight: planeDimension(sourceRect.height, sourcePlane.subsampleY),
-      destinationWidth: planeDimension(options.width, destinationPlane.subsampleX),
-      destinationHeight: planeDimension(options.height, destinationPlane.subsampleY),
-      sourceBytesPerSample: sourceDescriptor.bytesPerSample,
-      destinationBytesPerSample: destinationDescriptor.bytesPerSample,
-      sourceBitDepth: sourceDescriptor.bitDepth,
-      destinationBitDepth: destinationDescriptor.bitDepth,
-      sourceSamplesPerPixel: sourcePlane.samplesPerPixel ?? 1,
-      destinationSamplesPerPixel: destinationPlane.samplesPerPixel ?? 1,
-      sourceComponent: sourceComponentForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex),
-      algorithm,
-      scratch: options.scratch,
-    });
+  try {
+    for (let planeIndex = 0; planeIndex < destinationDescriptor.planes.length; planeIndex++) {
+      const sourcePlaneIndex = sourcePlaneIndexForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex);
+      const sourcePlane = sourceDescriptor.planes[sourcePlaneIndex];
+      const destinationPlane = destinationDescriptor.planes[planeIndex];
+      convertPlane({
+        source,
+        destination,
+        sourceLayout: sourceLayout[sourcePlaneIndex],
+        destinationLayout: destinationLayout[planeIndex],
+        sourceWidth: planeDimension(sourceRect.width, sourcePlane.subsampleX),
+        sourceHeight: planeDimension(sourceRect.height, sourcePlane.subsampleY),
+        destinationWidth: planeDimension(options.width, destinationPlane.subsampleX),
+        destinationHeight: planeDimension(options.height, destinationPlane.subsampleY),
+        sourceBytesPerSample: sourceDescriptor.bytesPerSample,
+        destinationBytesPerSample: destinationDescriptor.bytesPerSample,
+        sourceBitDepth: sourceDescriptor.bitDepth,
+        destinationBitDepth: destinationDescriptor.bitDepth,
+        sourceSamplesPerPixel: sourcePlane.samplesPerPixel ?? 1,
+        destinationSamplesPerPixel: destinationPlane.samplesPerPixel ?? 1,
+        sourceComponent: sourceComponentForDestinationPlane(sourceDescriptor, destinationDescriptor, planeIndex),
+        algorithm,
+        simd: options.simd,
+        scratch: options.scratch,
+      });
+    }
+  } finally {
+    if (options.scratch) deactivateSimdScratch(options.scratch);
   }
 
   const init: VideoFrameBufferInit = {
@@ -120,6 +147,18 @@ export async function resizeFramePlanar(
     bitDepth,
     algorithm,
   };
+}
+
+function estimatePlanarSimdBytes(
+  sourceByteLength: number,
+  destinationByteLength: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  destinationWidth: number,
+) {
+  const intermediateBytes = destinationWidth * sourceHeight * 2 * Int16Array.BYTES_PER_ELEMENT;
+  const kernelBytes = (sourceWidth + sourceHeight + destinationWidth) * 32;
+  return sourceByteLength + destinationByteLength + sourceByteLength * 2 + intermediateBytes + kernelBytes + 1024 * 1024;
 }
 
 function visibleRectForCopy(frame: VideoFrame): Required<Pick<DOMRectInit, 'x' | 'y' | 'width' | 'height'>> {
@@ -209,6 +248,24 @@ function sourceComponentForDestinationPlane(
     return destinationPlaneIndex === 2 ? 1 : 0;
   }
   throw new Error('Cannot map incompatible planar plane components');
+}
+
+function simdKindsForDescriptor(
+  source: PlanarFormatDescriptor,
+  destination: PlanarFormatDescriptor,
+): SimdKind[] {
+  const kinds = new Set<SimdKind>();
+  for (const plane of source.planes) {
+    const samples = plane.samplesPerPixel ?? 1;
+    if (samples === 1) kinds.add('c1');
+    if (samples === 2) kinds.add('c2');
+  }
+  for (const plane of destination.planes) {
+    const samples = plane.samplesPerPixel ?? 1;
+    if (samples === 1) kinds.add('c1');
+    if (samples === 2) kinds.add('c2');
+  }
+  return [...kinds];
 }
 
 function clamp(value: number, min: number, max: number) {

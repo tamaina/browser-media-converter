@@ -53,6 +53,8 @@ const result = await page.evaluate(async ({ port }) => {
     copyFrameToRgba,
     frameFormatCanHaveAlpha,
     inspectFrame,
+    createResizeScratch,
+    resizeFrameRgb,
     resizeVideoFrame,
     resizeFrameWithCanvas,
     resizeFramePlanar,
@@ -283,6 +285,7 @@ const result = await page.evaluate(async ({ port }) => {
   };
   rgbFirst.frame.close();
   rgbSecond.frame.close();
+  const simdEquivalence = await probeSimdEquivalence();
   bgrxFrame.close();
   rgbaFrame.close();
   frame.close();
@@ -348,6 +351,7 @@ const result = await page.evaluate(async ({ port }) => {
     unsupportedPreserve,
     resizerPlanar,
     resizerRgb,
+    simdEquivalence,
     canvasSdrInspection,
     canvasP3ResizeInspection,
   };
@@ -490,6 +494,130 @@ const result = await page.evaluate(async ({ port }) => {
       layout: [{ offset: 0, stride: width * 4 }],
       colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true },
     });
+  }
+
+  function makeGradientPackedFrame(format, width, height) {
+    const data = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const offset = (y * width + x) * 4;
+        data[offset] = (x * 17 + y * 3) & 255;
+        data[offset + 1] = (x * 5 + y * 19) & 255;
+        data[offset + 2] = (x * 11 + y * 7) & 255;
+        data[offset + 3] = 255;
+      }
+    }
+    return new VideoFrame(data, {
+      format,
+      codedWidth: width,
+      codedHeight: height,
+      displayWidth: width,
+      displayHeight: height,
+      timestamp: 0,
+      layout: [{ offset: 0, stride: width * 4 }],
+      colorSpace: { primaries: 'bt709', transfer: 'iec61966-2-1', matrix: 'rgb', fullRange: true },
+    });
+  }
+
+  async function probeSimdEquivalence() {
+    const halveAndFixed = await compareRgbResize(makeGradientPackedFrame('RGBA', 16, 12), 8, 6, 'lanczos3');
+    const fixedConvolution = await compareRgbResize(makeGradientPackedFrame('RGBA', 17, 13), 11, 7, 'catmullrom');
+    const rgbx = await compareRgbResize(makeGradientPackedFrame('RGBX', 16, 12), 8, 6, 'lanczos3');
+    const bgrx = await compareRgbResize(makeGradientPackedFrame('BGRX', 17, 13), 11, 7, 'catmullrom');
+    const i420 = await comparePlanarResize(makeSyntheticPlanarFrame('I420', 17, 13), 11, 7, 'catmullrom');
+    const nv12 = await comparePlanarResize(makeSyntheticPlanarFrame('NV12', 16, 12), 8, 6, 'lanczos3');
+    return { halveAndFixed, fixedConvolution, rgbx, bgrx, i420, nv12 };
+  }
+
+  async function compareRgbResize(source, width, height, algorithm) {
+    try {
+      const js = await resizeFrameRgb(source, {
+        width,
+        height,
+        algorithm,
+        simd: false,
+        scratch: createResizeScratch(),
+      });
+      const wasm = await resizeFrameRgb(source, {
+        width,
+        height,
+        algorithm,
+        scratch: createResizeScratch(),
+      });
+      try {
+        const jsBytes = await frameBytes(js.frame);
+        const wasmBytes = await frameBytes(wasm.frame);
+        return {
+          algorithm,
+          width,
+          height,
+          equal: bytesEqual(jsBytes, wasmBytes),
+          jsDigest: digestBytes(jsBytes),
+          wasmDigest: digestBytes(wasmBytes),
+        };
+      } finally {
+        js.frame.close();
+        wasm.frame.close();
+      }
+    } finally {
+      source.close();
+    }
+  }
+
+  async function comparePlanarResize(source, width, height, algorithm) {
+    try {
+      const js = await resizeFramePlanar(source, {
+        width,
+        height,
+        algorithm,
+        simd: false,
+        scratch: createResizeScratch(),
+      });
+      const wasm = await resizeFramePlanar(source, {
+        width,
+        height,
+        algorithm,
+        scratch: createResizeScratch(),
+      });
+      try {
+        const jsBytes = await frameBytes(js.frame);
+        const wasmBytes = await frameBytes(wasm.frame);
+        return {
+          format: source.format,
+          algorithm,
+          width,
+          height,
+          equal: bytesEqual(jsBytes, wasmBytes),
+          jsDigest: digestBytes(jsBytes),
+          wasmDigest: digestBytes(wasmBytes),
+        };
+      } finally {
+        js.frame.close();
+        wasm.frame.close();
+      }
+    } finally {
+      source.close();
+    }
+  }
+
+  async function frameBytes(frame) {
+    const data = new Uint8Array(frame.allocationSize());
+    await frame.copyTo(data);
+    return data;
+  }
+
+  function bytesEqual(left, right) {
+    if (left.byteLength !== right.byteLength) return false;
+    for (let index = 0; index < left.byteLength; index++) {
+      if (left[index] !== right[index]) return false;
+    }
+    return true;
+  }
+
+  function digestBytes(data) {
+    let hash = 0;
+    for (let index = 0; index < data.length; index++) hash = (hash * 31 + data[index]) >>> 0;
+    return hash;
   }
 
   function syntheticDescriptor(format) {
@@ -636,6 +764,18 @@ assert.deepEqual(result.resizerRgb.digests, [
   result.resizerRgb.directDigest,
   result.resizerRgb.directDigest,
 ]);
+assert.equal(result.simdEquivalence.halveAndFixed.equal, true);
+assert.equal(result.simdEquivalence.halveAndFixed.jsDigest, result.simdEquivalence.halveAndFixed.wasmDigest);
+assert.equal(result.simdEquivalence.fixedConvolution.equal, true);
+assert.equal(result.simdEquivalence.fixedConvolution.jsDigest, result.simdEquivalence.fixedConvolution.wasmDigest);
+assert.equal(result.simdEquivalence.rgbx.equal, true);
+assert.equal(result.simdEquivalence.rgbx.jsDigest, result.simdEquivalence.rgbx.wasmDigest);
+assert.equal(result.simdEquivalence.bgrx.equal, true);
+assert.equal(result.simdEquivalence.bgrx.jsDigest, result.simdEquivalence.bgrx.wasmDigest);
+assert.equal(result.simdEquivalence.i420.equal, true);
+assert.equal(result.simdEquivalence.i420.jsDigest, result.simdEquivalence.i420.wasmDigest);
+assert.equal(result.simdEquivalence.nv12.equal, true);
+assert.equal(result.simdEquivalence.nv12.jsDigest, result.simdEquivalence.nv12.wasmDigest);
 assert.equal(result.unsupportedPreserve.threw, true);
 assert.equal(result.unsupportedPreserve.format, 'unsupported-packed');
 assert.ok(result.unsupportedPreserve.message.includes('Preserve resize does not support VideoFrame format unsupported-packed'));

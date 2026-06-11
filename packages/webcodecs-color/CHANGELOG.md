@@ -1,5 +1,16 @@
 # @browser-mc/webcodecs-color
 
+## Unreleased
+
+### Minor Changes
+
+- Add inline WebAssembly SIMD resize kernels for 8-bit halve and fixed-point convolution paths.
+  - The SIMD payload is generated into TypeScript and exposes `c1`, `c2`, and `c4` kernels owned by each resize scratch instance.
+  - Fixed-point SIMD convolution now uses striped intermediates for `c1`, `c2`, and `c4`, reducing peak intermediate memory for large 4K inputs.
+  - Add `simd: false` resize options to force the existing JavaScript path.
+  - JavaScript fallback remains available for unsupported engines and non-WASM resize paths.
+  - Add planar resize benchmarks alongside the packed RGB benchmark. Recent Electron measurements showed cached SIMD at about `209ms` for RGBA 4K to 720p `lanczos3` versus `219ms` with `simd: false`, and about `117ms` for NV12 4K to 720p `lanczos3` versus `118ms` with `simd: false`.
+
 ## 1.0.0
 
 ### Major Changes

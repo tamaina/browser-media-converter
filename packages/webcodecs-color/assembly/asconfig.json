@@ -1,0 +1,15 @@
+{
+  "options": {
+    "bindings": "esm",
+    "converge": false,
+    "exportRuntime": false,
+    "importMemory": true,
+    "noAssert": true,
+    "optimizeLevel": 3,
+    "runtime": "stub",
+    "shrinkLevel": 1,
+    "use": "abort=",
+    "enable": ["simd"]
+  },
+  "entries": ["./index.ts"]
+}

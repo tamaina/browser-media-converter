@@ -27,6 +27,7 @@ export type ResizeVideoFrameOptions = {
   width: number;
   height: number;
   rawResizeAlgorithm?: PlanarResizeAlgorithm;
+  simd?: boolean;
   rawBitDepth?: 'preserve' | PlanarBitDepth;
   rawChromaSubsampling?: 'preserve' | PlanarChromaSubsampling;
   colorMetadata?: FrameColorMetadataPolicy;
@@ -86,6 +87,7 @@ export async function resizeVideoFrame(
         bitDepth: rawBitDepth === 'preserve' ? undefined : rawBitDepth,
         chromaSubsampling: rawChromaSubsampling === 'preserve' ? undefined : rawChromaSubsampling,
         algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
+        simd: options.simd,
         scratch: options.scratch,
       });
       return {
@@ -110,6 +112,7 @@ export async function resizeVideoFrame(
       width: options.width,
       height: options.height,
       algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
+      simd: options.simd,
       scratch: options.scratch,
     });
     return {

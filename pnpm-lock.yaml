@@ -115,7 +115,11 @@ importers:
         specifier: workspace:^
         version: link:../webcodecs-color
 
-  packages/webcodecs-color: {}
+  packages/webcodecs-color:
+    devDependencies:
+      assemblyscript:
+        specifier: ^0.28.18
+        version: 0.28.18
 
 packages:
 
@@ -760,6 +764,11 @@ packages:
     resolution: {integrity: sha512-BNoCY6SXXPQ7gF2opIP4GBE+Xw7U+pHMYKuzjgCN3GwiaIR09UUeKfheyIry77QtrCBlC0KK0q5/TER/tYh3PQ==}
     engines: {node: '>= 0.4'}
 
+  assemblyscript@0.28.18:
+    resolution: {integrity: sha512-NWvSjTS0bC0SVTLdJ4x8M0fezsFmYvGk+dIXGQZnvSSvnl/6PsY+kdLJ+pcS1idkEOHtGQMBtSSUyLBXH2gn5w==}
+    engines: {node: '>=20', npm: '>=10'}
+    hasBin: true
+
   async-function@1.0.0:
     resolution: {integrity: sha512-hsU18Ae8CDTR6Kgu9DYf0EbCr/a5iGL0rytQDobUcdpYOKokk8LEjVphnXkDkgpi0wYVsqrXuP0bZxJaTqdgoA==}
     engines: {node: '>= 0.4'}
@@ -778,6 +787,10 @@ packages:
   better-path-resolve@1.0.0:
     resolution: {integrity: sha512-pbnl5XzGBdrFU/wT4jqmJVPn2B6UHPBOhzMQkY/SPUPB6QtUXtmBHBIwCbXJol93mOpGMnQyP/+BB19q04xj7g==}
     engines: {node: '>=4'}
+
+  binaryen@129.0.0-nightly.20260428:
+    resolution: {integrity: sha512-RpjRVPZw8NOhkGzx3tTaKYdv4C+zO1VVI0VB9GSCNLM81flHOAZUwRJTLDM3Hqco3OmwB8hTLpkkpMSJjUfHXw==}
+    hasBin: true
 
   brace-expansion@1.1.15:
     resolution: {integrity: sha512-EwOCDEex4quD37XhqM3omwtMoJjr//isUZz1JopUNWms+4Z2ViyM/k1YIRePpoVNnQhENnxtFjLaxNHrT7xIUg==}
@@ -1378,6 +1391,9 @@ packages:
 
   lodash.startcase@4.4.0:
     resolution: {integrity: sha512-+WKqsK294HMSc2jEbNgpHpd0JfIBhp7rEV4aqXWqFr6AlXov+SlcgB1Fv01y2kGe3Gc8nMW7VA0SrGuSkRfIEg==}
+
+  long@5.3.2:
+    resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -2492,6 +2508,11 @@ snapshots:
       get-intrinsic: 1.3.0
       is-array-buffer: 3.0.5
 
+  assemblyscript@0.28.18:
+    dependencies:
+      binaryen: 129.0.0-nightly.20260428
+      long: 5.3.2
+
   async-function@1.0.0: {}
 
   available-typed-arrays@1.0.7:
@@ -2505,6 +2526,8 @@ snapshots:
   better-path-resolve@1.0.0:
     dependencies:
       is-windows: 1.0.2
+
+  binaryen@129.0.0-nightly.20260428: {}
 
   brace-expansion@1.1.15:
     dependencies:
@@ -3229,6 +3252,8 @@ snapshots:
   lodash.merge@4.6.2: {}
 
   lodash.startcase@4.4.0: {}
+
+  long@5.3.2: {}
 
   math-intrinsics@1.1.0: {}
 

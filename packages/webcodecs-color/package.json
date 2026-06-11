@@ -16,13 +16,15 @@
     }
   },
   "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
     "build": "pnpm --filter @browser-mc/webcodecs-color... build:package",
     "build:package": "tsc -p tsconfig.json",
     "typecheck": "pnpm --filter @browser-mc/webcodecs-color... typecheck:package",
     "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs",
-    "benchmark:rgb-resize": "env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/benchmark-rgb-resize.mjs"
+    "benchmark:rgb-resize": "env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/benchmark-rgb-resize.mjs",
+    "benchmark:planar-resize": "env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/benchmark-planar-resize.mjs"
   },
   "files": [
     "dist",
@@ -30,5 +32,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.28.18"
   }
 }
