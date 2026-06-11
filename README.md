@@ -10,8 +10,8 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-mc/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
 - `@browser-mc/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
 - `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
-- `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware raw resize.
-- `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware raw resize, scene-keyframe forcing, and stream-only HLS output.
+- `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware CPU preserve resize.
+- `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware CPU preserve resize, scene-keyframe forcing, and stream-only HLS output.
 
 ## Commands
 
@@ -61,12 +61,12 @@ Verified outputs:
 
 ## HDR and wide-gamut resize
 
-`@browser-mc/webcodecs-color` provides helpers for inspecting and resizing non-sRGB `VideoFrame`s without forcing supported planar frames through Canvas.
+`@browser-mc/webcodecs-color` provides helpers for inspecting and resizing non-sRGB `VideoFrame`s without forcing supported preserve paths through Canvas.
 
 - `inspectFrame` reads `VideoFrame.format` and `VideoFrame.colorSpace`.
 - `resizeFramePlanar` uses `VideoFrame.copyTo()` plus a self-managed planar resizer, then creates a new `VideoFrame` from the resized buffer.
 - `resizeFramePlanar` reads `visibleRect` rather than coded padding, avoiding padded bottom/right rows in raw output.
-- `resizeVideoFrame` picks the planar path for supported YUV/YUVA and `NV12`, and falls back to Canvas for packed RGB or unsupported formats.
+- `resizeVideoFrame` picks the CPU preserve path for supported YUV/YUVA, `NV12`, and packed RGB formats; Canvas is used only for explicit `canvas-sdr` conversion.
 - Supported planar resize formats are `NV12`, `I420`, `I422`, `I444`, Chromium's 10-bit `I420P10`, `I422P10`, `I444P10`, and related 12-bit or alpha variants when the browser can construct those `VideoFrame` formats.
 - `resizeFrameWithCanvas` remains available for explicit Canvas processing.
 

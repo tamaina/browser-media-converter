@@ -37,7 +37,7 @@ export type BrowserMovieColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
 export type BrowserMovieResizeFit = 'contain' | 'cover' | 'fill';
 
-export type BrowserMovieResizePath = 'raw';
+export type BrowserMovieResizePath = 'preserve';
 
 export type BrowserMovieRawBitDepth = 'preserve' | PlanarBitDepth;
 
@@ -656,7 +656,7 @@ async function resolveTrackResize(track: InputVideoTrack, options: BrowserMovieR
   return {
     width: size.width,
     height: size.height,
-    path: 'raw',
+    path: 'preserve',
     rawAlgorithm: options.rawAlgorithm ?? 'lanczos3',
     rawBitDepth: options.rawBitDepth ?? 'preserve',
     rawChromaSubsampling: options.rawChromaSubsampling ?? 'preserve',
@@ -676,7 +676,7 @@ function makeResizeProcessor(resize: ResolvedMovieResize, colorMetadata: Browser
         colorMetadata,
       });
       if (resized.path === 'none') return sample;
-      const colorSpace = resized.path === 'raw'
+      const colorSpace = resized.path === 'preserve'
         ? sample.colorSpace.toJSON()
         : resized.frame.colorSpace.toJSON();
       return makeVideoSampleFromFrame(resized.frame, sample, colorSpace, resize);
@@ -761,7 +761,7 @@ function makeCanvasSdrProcessor() {
   return (sample: VideoSample): Promise<VideoSample> => makeResizeProcessor({
     width: sample.displayWidth,
     height: sample.displayHeight,
-    path: 'raw',
+    path: 'preserve',
     rawAlgorithm: 'lanczos3',
     rawBitDepth: 'preserve',
     rawChromaSubsampling: 'preserve',

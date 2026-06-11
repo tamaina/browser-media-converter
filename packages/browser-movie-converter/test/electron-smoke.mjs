@@ -466,8 +466,8 @@ const result = await page.evaluate(async ({ port }) => {
 }, { port });
 
 assert.ok(result.length > 0, 'expected a non-empty converted MP4');
-assert.deepEqual(result.resize, { width: 320, height: 180, path: 'raw' });
-assert.deepEqual(result.rawPlanarResize, { width: 320, height: 180, path: 'raw' });
+assert.deepEqual(result.resize, { width: 320, height: 180, path: 'preserve' });
+assert.deepEqual(result.rawPlanarResize, { width: 320, height: 180, path: 'preserve' });
 assert.equal(result.rawPlanarFullCodecString, 'av01.0.00M.08');
 assert.equal(result.preservedBitDepthFullCodecString, 'av01.0.00M.10');
 assert.equal(result.processedRawPlanar.format, 'I420');

@@ -419,7 +419,7 @@ assert.deepEqual(
     mime: 'image/avif',
     width: 40,
     height: 24,
-    resizePath: 'canvas',
+    resizePath: 'canvas-sdr',
     outputColorSpace: {
       primaries: 'bt709',
       transfer: 'iec61966-2-1',
@@ -441,13 +441,13 @@ assert.deepEqual(
   { kind: result.canvasSdrAnimated.kind, width: result.canvasSdrAnimated.width, height: result.canvasSdrAnimated.height, frameCount: result.canvasSdrAnimated.frameCount },
   { kind: 'animated', width: 40, height: 24, frameCount: 2 },
 );
-assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas'));
+assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas-sdr'));
 assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.inspection.colorSpace.primaries === 'bt709'));
 assert.equal(result.iccWebp.kind, 'still');
 assert.equal(result.iccWebp.mime, 'image/webp');
 assert.notDeepEqual(result.iccWebp.iccProfile, [1, 2, 3, 4]);
 assert.equal(result.resized.frames.length, 2);
-assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'canvas'));
+assert.ok(result.resized.frames.every((frame) => frame.resizePath === 'preserve'));
 assert.deepEqual(
   result.support,
   {
@@ -484,7 +484,7 @@ assert.equal(result.hdrChecks.firstFrame.animated, false);
 assert.equal(result.hdrRawPlanar.kind, 'still');
 assert.equal(result.hdrRawPlanar.mime, 'image/avif');
 assert.equal(result.hdrRawPlanar.width, 64);
-assert.equal(result.hdrRawPlanar.resizePath, 'raw');
+assert.equal(result.hdrRawPlanar.resizePath, 'preserve');
 assert.equal(result.hdrRawPlanar.output?.format, 'I420');
 assert.equal(result.hdrRawPlanar.output?.colorSpace.primaries, 'bt2020');
 assert.deepEqual(result.hdrRawPlanar.containerColorSpace, result.hdrInputColorSpace);
@@ -494,7 +494,7 @@ assert.deepEqual(result.hdrRawPlanar.warnings, []);
 assert.equal(result.hdrImplicitAvif.kind, 'still');
 assert.equal(result.hdrImplicitAvif.mime, 'image/avif');
 assert.equal(result.hdrImplicitAvif.width, 64);
-assert.equal(result.hdrImplicitAvif.resizePath, 'raw');
+assert.equal(result.hdrImplicitAvif.resizePath, 'preserve');
 assert.deepEqual(result.hdrImplicitAvif.containerColorSpace, result.hdrInputColorSpace);
 assert.deepEqual(result.hdrExplicitColorSpaceAvif.containerColorSpace, {
   primaries: 'bt709',

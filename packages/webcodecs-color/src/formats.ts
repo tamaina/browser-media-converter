@@ -2,6 +2,8 @@ export type PlanarChromaSubsampling = '420' | '422' | '444';
 
 export type PlanarBitDepth = 8 | 10 | 12;
 
+export type PackedRgbFrameFormat = 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX';
+
 export type PlanarFormatDescriptor = {
   bytesPerSample: 1 | 2;
   bitDepth: PlanarBitDepth;
@@ -15,6 +17,10 @@ export function frameFormatCanHaveAlpha(frame: VideoFrame) {
   return format === 'RGBA'
     || format === 'BGRA'
     || describePlanarFormat(format)?.hasAlpha === true;
+}
+
+export function isPackedRgbFrameFormat(format: string | null): format is PackedRgbFrameFormat {
+  return format === 'RGBA' || format === 'RGBX' || format === 'BGRA' || format === 'BGRX';
 }
 
 export function describePlanarFormat(format: string): PlanarFormatDescriptor | null {

@@ -1,5 +1,16 @@
 # @browser-mc/browser-image-resizer-ex
 
+## 1.0.0
+
+### Major Changes
+
+- Rename `resizeFrameForColor` to `resizeVideoFrame` and delegate it to `@browser-mc/webcodecs-color`.
+
+  - `BrowserImageResizePath`, `BrowserImageColorMetadataPolicy`, and `BrowserImageResizeResult` are now aliases of the corresponding `@browser-mc/webcodecs-color` types.
+  - Resize path values are renamed: `raw` is now `preserve` and `canvas` is now `canvas-sdr`. Animated WebP frame results report the new values in `resizePath`.
+  - Packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) are now resized on the CPU while preserving their format instead of going through Canvas.
+  - `rawResizeAlgorithm` accepts the new `catmullrom` filter, and CPU resizing is several times faster. Downscales of 2x or more now apply iterative 2x box reduction before filtering (every algorithm except `nearest`), which slightly changes output bytes while reducing aliasing.
+
 ## 0.6.2
 
 ### Patch Changes

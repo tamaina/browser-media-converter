@@ -1,7 +1,5 @@
 import { classifyFrameColor, inspectFrame, type FrameColorInspection } from './frame.js';
-import { frameFormatCanHaveAlpha } from './formats.js';
-
-export type PackedRgbFrameFormat = 'RGBA' | 'RGBX' | 'BGRA' | 'BGRX';
+import { frameFormatCanHaveAlpha, type PackedRgbFrameFormat } from './formats.js';
 
 export type RgbaCopyResult = {
   data: Uint8Array;

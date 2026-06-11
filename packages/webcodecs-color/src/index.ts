@@ -9,15 +9,19 @@ import {
   convertFrameToCanvasSdr,
   resizeFrameWithCanvas,
 } from './canvas.js';
+import { isPackedRgbFrame, resizeFrameRgb } from './rgb.js';
+import { createResizeScratch, type ResizeScratch } from './scratch.js';
 
 export * from './formats.js';
 export * from './frame.js';
 export * from './planar.js';
 export * from './canvas.js';
+export * from './rgb.js';
+export * from './scratch.js';
 
 export type FrameColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
-export type FrameResizePath = 'none' | 'raw' | 'canvas';
+export type FrameResizePath = 'none' | 'preserve' | 'canvas-sdr';
 
 export type ResizeVideoFrameOptions = {
   width: number;
@@ -26,6 +30,7 @@ export type ResizeVideoFrameOptions = {
   rawBitDepth?: 'preserve' | PlanarBitDepth;
   rawChromaSubsampling?: 'preserve' | PlanarChromaSubsampling;
   colorMetadata?: FrameColorMetadataPolicy;
+  scratch?: ResizeScratch;
 };
 
 export type ResizeVideoFrameResult = {
@@ -60,7 +65,7 @@ export async function resizeVideoFrame(
       return {
         frame: converted.frame,
         inspection: converted.inspection,
-        path: 'canvas',
+        path: 'canvas-sdr',
         warnings,
         canvasColorSpace: 'srgb',
       };
@@ -81,11 +86,12 @@ export async function resizeVideoFrame(
         bitDepth: rawBitDepth === 'preserve' ? undefined : rawBitDepth,
         chromaSubsampling: rawChromaSubsampling === 'preserve' ? undefined : rawChromaSubsampling,
         algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
+        scratch: options.scratch,
       });
       return {
         frame: resized.frame,
         inspection: resized.inspection,
-        path: 'raw',
+        path: 'preserve',
         warnings,
       };
     } catch (error) {
@@ -93,27 +99,57 @@ export async function resizeVideoFrame(
     }
   }
 
+  if (isPackedRgbFrame(frame)) {
+    if (wantsRawPlanarConversion) {
+      warnings.push('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.');
+    }
+    if (sameSize) {
+      return { frame, inspection: inspectFrame(frame), path: 'none', warnings };
+    }
+    const resized = await resizeFrameRgb(frame, {
+      width: options.width,
+      height: options.height,
+      algorithm: options.rawResizeAlgorithm ?? 'lanczos3',
+      scratch: options.scratch,
+    });
+    return {
+      frame: resized.frame,
+      inspection: resized.inspection,
+      path: 'preserve',
+      warnings,
+    };
+  }
+
   if (sameSize && !wantsRawPlanarConversion) {
     return { frame, inspection: inspectFrame(frame), path: 'none', warnings };
   }
 
-  const color = classifyFrameColor(frame);
-  const resized = resizeFrameWithCanvas(frame, { width: options.width, height: options.height });
-  if (color.recommendedPath === 'raw-hdr') {
-    warnings.push('Canvas fallback may collapse HDR/BT.2020 content to sRGB or Display P3.');
-  }
-  if (wantsRawPlanarConversion) {
-    warnings.push('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.');
-  }
-  return {
-    frame: resized.frame,
-    inspection: resized.inspection,
-    path: 'canvas',
-    warnings,
-    canvasColorSpace: resized.colorSpace,
-  };
+  throw new Error(`Preserve resize does not support VideoFrame format ${frame.format ?? 'unknown'}`);
 }
 
 function isSupportedPlanarFrame(frame: VideoFrame) {
   return frame.format !== null && describePlanarFormat(frame.format) !== null;
+}
+
+export type VideoFrameResizerOptions = Omit<ResizeVideoFrameOptions, 'scratch'>;
+
+/**
+ * Resizes a stream of frames with the same options while reusing working
+ * buffers and cached filter tables across frames. Calls to resize() are
+ * serialized internally because the scratch buffers are shared.
+ */
+export class VideoFrameResizer {
+  private readonly options: VideoFrameResizerOptions;
+  private readonly scratch = createResizeScratch();
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(options: VideoFrameResizerOptions) {
+    this.options = { ...options };
+  }
+
+  resize(frame: VideoFrame): Promise<ResizeVideoFrameResult> {
+    const result = this.queue.then(() => resizeVideoFrame(frame, { ...this.options, scratch: this.scratch }));
+    this.queue = result.then(() => undefined, () => undefined);
+    return result;
+  }
 }

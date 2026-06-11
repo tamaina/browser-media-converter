@@ -1,5 +1,15 @@
 # @browser-mc/browser-movie-converter
 
+## 1.0.0
+
+### Major Changes
+
+- Resize movie samples through `resizeVideoFrame` from `@browser-mc/webcodecs-color`.
+
+  - `BrowserMovieResizePath` is now `'preserve'` (was `'raw'`), and resize sample metadata reports `path: 'preserve'` accordingly.
+  - Packed RGB decoder output is now resized on the CPU while preserving its RGB format.
+  - `rawAlgorithm` accepts the new `catmullrom` filter, and CPU resizing is several times faster. Downscales of 2x or more now apply iterative 2x box reduction before filtering (every algorithm except `nearest`), which slightly changes output bytes while reducing aliasing.
+
 ## 0.4.0
 
 ### Minor Changes

@@ -5,7 +5,7 @@ Helpers for inspecting, resizing, and color-routing WebCodecs `VideoFrame`s.
 The package exposes three layers:
 
 - `inspectFrame` / `classifyFrameColor` for frame metadata and color-route hints.
-- `resizeVideoFrame` for the practical mixed path: raw planar when possible, Canvas fallback when needed.
+- `resizeVideoFrame` for preserve CPU resize or explicit Canvas SDR conversion.
 - Lower-level planar and Canvas helpers for callers that want to choose the path themselves.
 
 ## Create A VideoFrame
@@ -83,9 +83,28 @@ console.log(resized.path, resized.warnings);
 resized.frame.close();
 ```
 
-`resizeVideoFrame` is the high-level path picker. Supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar` when resize or raw conversion is needed. Packed RGB, unknown, or otherwise unsupported `VideoFrame` formats, including `RGBA`, `RGBX`, `BGRA`, and `BGRX`, use Canvas for resize or forced color conversion and return an `RGBA` frame. If no processing is needed, the original frame can be returned with `path: 'none'`.
+`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) use CPU resize while preserving their input format. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
 
-`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. If those controls are requested for a frame that must use Canvas fallback, the result still succeeds and includes a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame.
+`rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize keeps the RGB format and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame.
+
+## Resize A Frame Stream
+
+```ts
+import { VideoFrameResizer } from '@browser-mc/webcodecs-color';
+
+const resizer = new VideoFrameResizer({ width: 1024, height: 682 });
+
+for await (const frame of frames) {
+  const resized = await resizer.resize(frame);
+  // use resized.frame ...
+  resized.frame.close();
+  frame.close();
+}
+```
+
+`VideoFrameResizer` runs the same path picking as `resizeVideoFrame` with fixed options, but reuses working buffers and cached Lanczos filter tables across frames, avoiding per-frame allocations. Because the buffers are shared, `resize()` calls on one instance are serialized internally; create separate instances for independent pipelines.
+
+The same reuse is available on the function APIs through the `scratch` option (`createResizeScratch()`), which the class manages for you.
 
 ## Planar Resize
 
@@ -106,9 +125,11 @@ resized4208.frame.close();
 
 `resizeFramePlanar` is strict and only accepts supported planar YUV/YUVA formats plus 8-bit `NV12`. It copies only the source `visibleRect`, so coded padding rows and columns are not fed into processing. It can resize, chroma-downsample, and convert bit depth in one CPU pass.
 
-`NV12` is preserved as `NV12` when bit depth and chroma are preserved. Explicit planar conversion can unpack `NV12` to `I420`. The default algorithm is `lanczos3`; `bilinear` and `nearest` are also available.
+`NV12` is preserved as `NV12` when bit depth and chroma are preserved. Explicit planar conversion can unpack `NV12` to `I420`. The default algorithm is `lanczos3`; `catmullrom` (no ringing, fewer taps), `bilinear`, and `nearest` are also available.
 
-Packed RGB formats are intentionally out of scope for this helper. Use `resizeVideoFrame` or the Canvas helpers for those frames.
+For downscales of 2x or more, every algorithm except `nearest` first applies iterative 2x box reduction until the remaining scale is above 0.5, then runs the selected filter. This keeps kernel sizes bounded and makes large downscales much faster without visible quality loss. `nearest` stays a raw point-sampling decimation.
+
+Packed RGB formats are intentionally out of scope for this helper. Use `resizeVideoFrame` for CPU packed-RGB resize or the Canvas helpers for explicit Canvas processing.
 
 ## Canvas Helpers
 
@@ -158,6 +179,9 @@ import {
 pnpm --filter @browser-mc/webcodecs-color build
 pnpm --filter @browser-mc/webcodecs-color typecheck
 pnpm --filter @browser-mc/webcodecs-color test:electron
+pnpm --filter @browser-mc/webcodecs-color benchmark:rgb-resize
 ```
 
-`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, and `resizeVideoFrame` Canvas fallback.
+`test:electron` uses `hdrrec2020.avif`. Current smoke coverage checks raw HDR-like planar resize, planar conversion, Canvas SDR conversion, packed RGB copy formats, `resizeVideoFrame` CPU preserve resize, and `VideoFrameResizer` buffer-reuse equivalence.
+
+`benchmark:rgb-resize` compares packed RGB CPU resize algorithms against Canvas resize in Electron and prints both a table and JSON.

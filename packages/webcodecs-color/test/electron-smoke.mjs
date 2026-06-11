@@ -56,6 +56,7 @@ const result = await page.evaluate(async ({ port }) => {
     resizeVideoFrame,
     resizeFrameWithCanvas,
     resizeFramePlanar,
+    VideoFrameResizer,
   } = await import(`http://127.0.0.1:${port}/color.js`);
 
   const frame = await decodeFirstFrame(input, 'image/avif');
@@ -86,6 +87,18 @@ const result = await page.evaluate(async ({ port }) => {
   });
   const resizedInspection = resized.inspection;
   resized.frame.close();
+  const resizedCatmull = await resizeFramePlanar(frame, {
+    width: Math.max(1, Math.floor(frame.displayWidth / 3)),
+    height: Math.max(1, Math.floor(frame.displayHeight / 3)),
+    algorithm: 'catmullrom',
+  });
+  const resizedCatmullInfo = {
+    algorithm: resizedCatmull.algorithm,
+    format: resizedCatmull.inspection.format,
+    displayWidth: resizedCatmull.inspection.displayWidth,
+    displayHeight: resizedCatmull.inspection.displayHeight,
+  };
+  resizedCatmull.frame.close();
   const planar8 = await resizeFramePlanar(frame, {
     width: frame.displayWidth,
     height: frame.displayHeight,
@@ -167,7 +180,7 @@ const result = await page.evaluate(async ({ port }) => {
     displayHeight: wrappedRgbaRawRequest.inspection.displayHeight,
     warnings: wrappedRgbaRawRequest.warnings,
   };
-  wrappedRgbaRawRequest.frame.close();
+  const wrappedRgbaRawSameFrame = wrappedRgbaRawRequest.frame === rgbaFrame;
   const bgrxFrame = makeSyntheticPackedFrame('BGRX', 16, 12);
   const bgrxDefaultCopy = await copyFrameToRgba(bgrxFrame, { colorSpace: 'srgb' }).then((copy) => ({
     byteLength: copy.data.byteLength,
@@ -194,7 +207,19 @@ const result = await page.evaluate(async ({ port }) => {
     displayHeight: wrappedBgrxRawRequest.inspection.displayHeight,
     warnings: wrappedBgrxRawRequest.warnings,
   };
-  wrappedBgrxRawRequest.frame.close();
+  const wrappedBgrxRawSameFrame = wrappedBgrxRawRequest.frame === bgrxFrame;
+  const wrappedBgrxResize = await resizeVideoFrame(bgrxFrame, {
+    width: 8,
+    height: 6,
+  });
+  const wrappedBgrx = {
+    path: wrappedBgrxResize.path,
+    format: wrappedBgrxResize.inspection.format,
+    displayWidth: wrappedBgrxResize.inspection.displayWidth,
+    displayHeight: wrappedBgrxResize.inspection.displayHeight,
+    warnings: wrappedBgrxResize.warnings,
+  };
+  wrappedBgrxResize.frame.close();
   const alphaSupport = {
     rgba: frameFormatCanHaveAlpha(rgbaFrame),
     bgrx: frameFormatCanHaveAlpha(bgrxFrame),
@@ -206,6 +231,58 @@ const result = await page.evaluate(async ({ port }) => {
   });
   const wrappedCanvasSdrInspection = wrappedCanvasSdr.inspection;
   wrappedCanvasSdr.frame.close();
+  const unsupportedPreserveFrame = {
+    format: 'unsupported-packed',
+    displayWidth: 16,
+    displayHeight: 12,
+  };
+  const unsupportedPreserve = await resizeVideoFrame(unsupportedPreserveFrame, {
+    width: 8,
+    height: 6,
+  }).then(
+    (resized) => {
+      resized.frame.close();
+      return { threw: false, format: unsupportedPreserveFrame.format, message: null };
+    },
+    (error) => ({
+      threw: true,
+      format: unsupportedPreserveFrame.format,
+      message: error instanceof Error ? error.message : String(error),
+    }),
+  );
+  const resizerWidth = Math.max(1, Math.floor(frame.displayWidth / 2));
+  const resizerHeight = Math.max(1, Math.floor(frame.displayHeight / 2));
+  const directPlanarResize = await resizeVideoFrame(frame, { width: resizerWidth, height: resizerHeight });
+  const directPlanarDigest = await frameDigest(directPlanarResize.frame);
+  directPlanarResize.frame.close();
+  const planarResizer = new VideoFrameResizer({ width: resizerWidth, height: resizerHeight });
+  const resizerPlanarDigests = [];
+  let resizerPlanarPath = null;
+  for (let index = 0; index < 3; index++) {
+    const resized = await planarResizer.resize(frame);
+    resizerPlanarPath = resized.path;
+    resizerPlanarDigests.push(await frameDigest(resized.frame));
+    resized.frame.close();
+  }
+  const resizerPlanar = {
+    path: resizerPlanarPath,
+    digests: resizerPlanarDigests,
+    directDigest: directPlanarDigest,
+  };
+  const directRgbResize = await resizeVideoFrame(rgbaFrame, { width: 8, height: 6 });
+  const directRgbDigest = await frameDigest(directRgbResize.frame);
+  directRgbResize.frame.close();
+  const rgbResizer = new VideoFrameResizer({ width: 8, height: 6 });
+  const [rgbFirst, rgbSecond] = await Promise.all([
+    rgbResizer.resize(rgbaFrame),
+    rgbResizer.resize(rgbaFrame),
+  ]);
+  const resizerRgb = {
+    digests: [await frameDigest(rgbFirst.frame), await frameDigest(rgbSecond.frame)],
+    directDigest: directRgbDigest,
+  };
+  rgbFirst.frame.close();
+  rgbSecond.frame.close();
   bgrxFrame.close();
   rgbaFrame.close();
   frame.close();
@@ -245,6 +322,7 @@ const result = await page.evaluate(async ({ port }) => {
       chromaSubsampling: resizedPlanar4208.chromaSubsampling,
     },
     resizedInspection,
+    resizedCatmullInfo,
     planar8Inspection,
     planar420Inspection,
     resizedPlanar4208Inspection,
@@ -255,14 +333,32 @@ const result = await page.evaluate(async ({ port }) => {
     wrappedPlanar,
     wrappedRgba,
     wrappedRgbaRaw,
+    wrappedRgbaRawSameFrame,
     bgrxDefaultCopy,
     bgrxCopy,
+    wrappedBgrx,
     wrappedBgrxRaw,
+    wrappedBgrxRawSameFrame,
     alphaSupport,
+    wrappedCanvasSdr: {
+      path: wrappedCanvasSdr.path,
+      warnings: wrappedCanvasSdr.warnings,
+    },
     wrappedCanvasSdrInspection,
+    unsupportedPreserve,
+    resizerPlanar,
+    resizerRgb,
     canvasSdrInspection,
     canvasP3ResizeInspection,
   };
+
+  async function frameDigest(videoFrame) {
+    const data = new Uint8Array(videoFrame.allocationSize());
+    await videoFrame.copyTo(data);
+    let hash = 0;
+    for (let index = 0; index < data.length; index++) hash = (hash * 31 + data[index]) >>> 0;
+    return hash;
+  }
 
   async function decodeFirstFrame(data, type) {
     const decoder = new ImageDecoder({
@@ -435,6 +531,10 @@ assert.equal(result.resizedInspection.displayWidth, Math.max(1, Math.floor(resul
 assert.equal(result.resizedInspection.displayHeight, Math.max(1, Math.floor(result.inspection.displayHeight / 2)));
 assert.equal(result.resizedInspection.colorSpace.primaries, result.inspection.colorSpace.primaries);
 assert.equal(result.resizedInspection.colorSpace.matrix, result.inspection.colorSpace.matrix);
+assert.equal(result.resizedCatmullInfo.algorithm, 'catmullrom');
+assert.equal(result.resizedCatmullInfo.format, result.inspection.format);
+assert.equal(result.resizedCatmullInfo.displayWidth, Math.max(1, Math.floor(result.inspection.displayWidth / 3)));
+assert.equal(result.resizedCatmullInfo.displayHeight, Math.max(1, Math.floor(result.inspection.displayHeight / 3)));
 assert.equal(result.planar8.sourceFormat, result.inspection.format);
 assert.equal(result.planar8.format, 'I444');
 assert.equal(result.planar8.bitDepth, 8);
@@ -483,42 +583,62 @@ if (result.syntheticAlpha.supported) {
   assert.equal(result.syntheticAlpha.converted.displayHeight, 8);
 }
 assert.deepEqual(result.wrappedPlanar, {
-  path: 'raw',
+  path: 'preserve',
   format: result.inspection.format,
   displayWidth: Math.max(1, Math.floor(result.inspection.displayWidth / 2)),
   displayHeight: Math.max(1, Math.floor(result.inspection.displayHeight / 2)),
   warnings: [],
 });
-assert.equal(result.wrappedRgba.path, 'canvas');
+assert.equal(result.wrappedRgba.path, 'preserve');
 assert.equal(result.wrappedRgba.format, 'RGBA');
 assert.equal(result.wrappedRgba.displayWidth, 8);
 assert.equal(result.wrappedRgba.displayHeight, 6);
 assert.equal(result.wrappedRgba.colorSpace.primaries, 'bt709');
-assert.equal(result.wrappedRgbaRaw.path, 'canvas');
+assert.equal(result.wrappedRgbaRaw.path, 'none');
 assert.equal(result.wrappedRgbaRaw.format, 'RGBA');
 assert.equal(result.wrappedRgbaRaw.displayWidth, 16);
 assert.equal(result.wrappedRgbaRaw.displayHeight, 12);
-assert.ok(result.wrappedRgbaRaw.warnings.includes('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.'));
+assert.ok(result.wrappedRgbaRaw.warnings.includes('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.'));
+assert.equal(result.wrappedRgbaRawSameFrame, true);
 assert.equal(result.bgrxDefaultCopy.format, 'RGBX');
 assert.equal(result.bgrxDefaultCopy.colorSpace, 'srgb');
 assert.equal(result.bgrxDefaultCopy.byteLength, 16 * 12 * 4);
 assert.equal(result.bgrxCopy.format, 'BGRX');
 assert.equal(result.bgrxCopy.colorSpace, 'srgb');
 assert.equal(result.bgrxCopy.byteLength, 16 * 12 * 4);
-assert.equal(result.wrappedBgrxRaw.path, 'canvas');
-assert.equal(result.wrappedBgrxRaw.format, 'RGBA');
+assert.equal(result.wrappedBgrx.path, 'preserve');
+assert.equal(result.wrappedBgrx.format, 'BGRX');
+assert.equal(result.wrappedBgrx.displayWidth, 8);
+assert.equal(result.wrappedBgrx.displayHeight, 6);
+assert.equal(result.wrappedBgrxRaw.path, 'none');
+assert.equal(result.wrappedBgrxRaw.format, 'BGRX');
 assert.equal(result.wrappedBgrxRaw.displayWidth, 16);
 assert.equal(result.wrappedBgrxRaw.displayHeight, 12);
-assert.ok(result.wrappedBgrxRaw.warnings.includes('raw planar conversion was requested but Canvas resize output is not a supported planar YUV frame.'));
+assert.ok(result.wrappedBgrxRaw.warnings.includes('raw planar conversion was requested but packed RGB preserve resize keeps the source RGB format.'));
+assert.equal(result.wrappedBgrxRawSameFrame, true);
 assert.deepEqual(result.alphaSupport, {
   rgba: true,
   bgrx: false,
 });
+assert.equal(result.wrappedCanvasSdr.path, 'canvas-sdr');
 assert.equal(result.wrappedCanvasSdrInspection.format, 'RGBA');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.matrix, 'rgb');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.fullRange, true);
+assert.equal(result.resizerPlanar.path, 'preserve');
+assert.deepEqual(result.resizerPlanar.digests, [
+  result.resizerPlanar.directDigest,
+  result.resizerPlanar.directDigest,
+  result.resizerPlanar.directDigest,
+]);
+assert.deepEqual(result.resizerRgb.digests, [
+  result.resizerRgb.directDigest,
+  result.resizerRgb.directDigest,
+]);
+assert.equal(result.unsupportedPreserve.threw, true);
+assert.equal(result.unsupportedPreserve.format, 'unsupported-packed');
+assert.ok(result.unsupportedPreserve.message.includes('Preserve resize does not support VideoFrame format unsupported-packed'));
 assert.equal(result.canvasSdrInspection.format, 'RGBA');
 assert.equal(result.canvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');

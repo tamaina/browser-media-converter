@@ -1,6 +1,6 @@
 {
   "name": "@browser-mc/browser-image-resizer-ex",
-  "version": "0.6.2",
+  "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@browser-mc/webcodecs-color",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,7 +21,8 @@
     "typecheck": "pnpm --filter @browser-mc/webcodecs-color... typecheck:package",
     "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
-    "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
+    "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs",
+    "benchmark:rgb-resize": "env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/benchmark-rgb-resize.mjs"
   },
   "files": [
     "dist",
