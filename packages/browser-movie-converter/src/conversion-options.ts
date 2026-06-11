@@ -37,7 +37,7 @@ export type BrowserMovieColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
 export type BrowserMovieResizeFit = 'contain' | 'cover' | 'fill';
 
-export type BrowserMovieResizePath = 'preserve';
+export type BrowserMovieResizePath = 'preserve' | 'canvas';
 
 export type BrowserMovieRawBitDepth = 'preserve' | PlanarBitDepth;
 

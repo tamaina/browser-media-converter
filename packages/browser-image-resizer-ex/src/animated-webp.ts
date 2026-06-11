@@ -58,7 +58,7 @@ export type BrowserAnimatedImageResizerResult = {
   frames: Array<{
     duration: number;
     inspection: FrameColorInspection;
-    resizePath: 'none' | 'preserve' | 'canvas-sdr';
+    resizePath: 'none' | 'preserve' | 'canvas';
   }>;
   warnings: string[];
 };

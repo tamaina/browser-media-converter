@@ -748,7 +748,7 @@ assert.deepEqual(result.alphaSupport, {
   rgba: true,
   bgrx: false,
 });
-assert.equal(result.wrappedCanvasSdr.path, 'canvas-sdr');
+assert.equal(result.wrappedCanvasSdr.path, 'canvas');
 assert.equal(result.wrappedCanvasSdrInspection.format, 'RGBA');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.wrappedCanvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');

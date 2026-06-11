@@ -21,7 +21,7 @@ export * from './scratch.js';
 
 export type FrameColorMetadataPolicy = 'preserve' | 'canvas-sdr';
 
-export type FrameResizePath = 'none' | 'preserve' | 'canvas-sdr';
+export type FrameResizePath = 'none' | 'preserve' | 'canvas';
 
 export type ResizeVideoFrameOptions = {
   width: number;
@@ -66,7 +66,7 @@ export async function resizeVideoFrame(
       return {
         frame: converted.frame,
         inspection: converted.inspection,
-        path: 'canvas-sdr',
+        path: 'canvas',
         warnings,
         canvasColorSpace: 'srgb',
       };

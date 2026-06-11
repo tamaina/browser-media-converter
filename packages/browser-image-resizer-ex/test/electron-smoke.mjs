@@ -419,7 +419,7 @@ assert.deepEqual(
     mime: 'image/avif',
     width: 40,
     height: 24,
-    resizePath: 'canvas-sdr',
+    resizePath: 'canvas',
     outputColorSpace: {
       primaries: 'bt709',
       transfer: 'iec61966-2-1',
@@ -441,7 +441,7 @@ assert.deepEqual(
   { kind: result.canvasSdrAnimated.kind, width: result.canvasSdrAnimated.width, height: result.canvasSdrAnimated.height, frameCount: result.canvasSdrAnimated.frameCount },
   { kind: 'animated', width: 40, height: 24, frameCount: 2 },
 );
-assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas-sdr'));
+assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas'));
 assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.inspection.colorSpace.primaries === 'bt709'));
 assert.equal(result.iccWebp.kind, 'still');
 assert.equal(result.iccWebp.mime, 'image/webp');
