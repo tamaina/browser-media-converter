@@ -231,25 +231,22 @@ const result = await page.evaluate(async ({ port }) => {
   });
   const wrappedCanvasSdrInspection = wrappedCanvasSdr.inspection;
   wrappedCanvasSdr.frame.close();
-  const unsupportedPreserveFrame = {
-    format: 'unsupported-packed',
-    displayWidth: 16,
-    displayHeight: 12,
-  };
-  const unsupportedPreserve = await resizeVideoFrame(unsupportedPreserveFrame, {
+  const unsupportedPreserveFrame = makeSyntheticPackedFrame('RGBA', 16, 12);
+  Object.defineProperty(unsupportedPreserveFrame, 'format', { value: 'unsupported-packed' });
+  const unsupportedPreserveResize = await resizeVideoFrame(unsupportedPreserveFrame, {
     width: 8,
     height: 6,
-  }).then(
-    (resized) => {
-      resized.frame.close();
-      return { threw: false, format: unsupportedPreserveFrame.format, message: null };
-    },
-    (error) => ({
-      threw: true,
-      format: unsupportedPreserveFrame.format,
-      message: error instanceof Error ? error.message : String(error),
-    }),
-  );
+  });
+  const unsupportedPreserve = {
+    path: unsupportedPreserveResize.path,
+    sourceFormat: unsupportedPreserveFrame.format,
+    format: unsupportedPreserveResize.inspection.format,
+    displayWidth: unsupportedPreserveResize.inspection.displayWidth,
+    displayHeight: unsupportedPreserveResize.inspection.displayHeight,
+    warnings: unsupportedPreserveResize.warnings,
+  };
+  unsupportedPreserveResize.frame.close();
+  unsupportedPreserveFrame.close();
   const resizerWidth = Math.max(1, Math.floor(frame.displayWidth / 2));
   const resizerHeight = Math.max(1, Math.floor(frame.displayHeight / 2));
   const directPlanarResize = await resizeVideoFrame(frame, { width: resizerWidth, height: resizerHeight });
@@ -636,9 +633,12 @@ assert.deepEqual(result.resizerRgb.digests, [
   result.resizerRgb.directDigest,
   result.resizerRgb.directDigest,
 ]);
-assert.equal(result.unsupportedPreserve.threw, true);
-assert.equal(result.unsupportedPreserve.format, 'unsupported-packed');
-assert.ok(result.unsupportedPreserve.message.includes('Preserve resize does not support VideoFrame format unsupported-packed'));
+assert.equal(result.unsupportedPreserve.path, 'canvas');
+assert.equal(result.unsupportedPreserve.sourceFormat, 'unsupported-packed');
+assert.equal(result.unsupportedPreserve.format, 'RGBA');
+assert.equal(result.unsupportedPreserve.displayWidth, 8);
+assert.equal(result.unsupportedPreserve.displayHeight, 6);
+assert.ok(result.unsupportedPreserve.warnings.includes('preserve resize fell back to Canvas because VideoFrame format unsupported-packed is unsupported.'));
 assert.equal(result.canvasSdrInspection.format, 'RGBA');
 assert.equal(result.canvasSdrInspection.colorSpace.primaries, 'bt709');
 assert.equal(result.canvasSdrInspection.colorSpace.transfer, 'iec61966-2-1');

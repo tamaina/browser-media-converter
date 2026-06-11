@@ -1,5 +1,11 @@
 # @browser-mc/webcodecs-color
 
+## 1.0.1
+
+### Patch Changes
+
+- Fall back to Canvas resize for unsupported or unknown `VideoFrame` formats, including `VideoFrame.format === null`, and return a warning instead of throwing in the default `colorMetadata: 'preserve'` mode.
+
 ## 1.0.0
 
 ### Major Changes

@@ -83,7 +83,7 @@ console.log(resized.path, resized.warnings);
 resized.frame.close();
 ```
 
-`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) resize through Canvas and return an `RGBA` frame. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported formats throw instead of silently falling back to Canvas.
+`resizeVideoFrame` is the high-level path picker. With the default `colorMetadata: 'preserve'`, supported planar YUV/YUVA and `NV12` frames use `resizeFramePlanar`, and packed RGB frames (`RGBA`, `RGBX`, `BGRA`, `BGRX`) resize through Canvas and return an `RGBA` frame. If no processing is needed, the original frame can be returned with `path: 'none'`. Unsupported or unknown formats, including `VideoFrame.format === null`, fall back to Canvas and return a warning.
 
 `rawBitDepth` and `rawChromaSubsampling` request planar conversion before encoding. These controls are planar-only; if they are requested for packed RGB input, the resize uses Canvas when resizing and returns a warning. `colorMetadata: 'canvas-sdr'` forces the sRGB Canvas path and returns an RGB/full-range BT.709-style frame. Canvas results report `path: 'canvas'`; use `canvasColorSpace` or `inspection.colorSpace` to distinguish ordinary Canvas routing from forced sRGB conversion.
 

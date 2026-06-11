@@ -116,11 +116,18 @@ export async function resizeVideoFrame(
     };
   }
 
-  if (sameSize && !wantsRawPlanarConversion) {
-    return { frame, inspection: inspectFrame(frame), path: 'none', warnings };
+  warnings.push(`preserve resize fell back to Canvas because VideoFrame format ${frame.format ?? 'unknown'} is unsupported.`);
+  if (wantsRawPlanarConversion) {
+    warnings.push('raw planar conversion was requested but unsupported format resize uses the Canvas path.');
   }
-
-  throw new Error(`Preserve resize does not support VideoFrame format ${frame.format ?? 'unknown'}`);
+  const resized = resizeFrameWithCanvas(frame, { width: options.width, height: options.height });
+  return {
+    frame: resized.frame,
+    inspection: resized.inspection,
+    path: 'canvas',
+    warnings,
+    canvasColorSpace: resized.colorSpace,
+  };
 }
 
 function isSupportedPlanarFrame(frame: VideoFrame) {
