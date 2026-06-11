@@ -64,6 +64,8 @@ const result = await page.evaluate(async ({ port }) => {
   const {
     BufferSource,
     Input,
+    Mp4InputFormat,
+    MpegTsInputFormat,
     QuickTimeInputFormat,
   } = await import(`http://127.0.0.1:${port}/mediabunny.js`);
   const sourceInput = new Input({
@@ -124,6 +126,16 @@ const result = await page.evaluate(async ({ port }) => {
     });
   }
 
+  const segmentSizes = {};
+  const initSizes = {};
+  for (const asset of assets) {
+    if (asset.path.endsWith('.ts')) {
+      segmentSizes[asset.path] = await readVideoSize(asset.bytes, new MpegTsInputFormat());
+    } else if (/^init-\d+\.mp4$/.test(asset.path)) {
+      initSizes[asset.path] = await readVideoSize(asset.bytes, new Mp4InputFormat());
+    }
+  }
+
   let emptyVariantsError = null;
   try {
     for await (const asset of convertMovieToHls({ input: sourceInput, variants: [] })) {
@@ -136,6 +148,8 @@ const result = await page.evaluate(async ({ port }) => {
   return {
     masterPath: assets.find((asset) => asset.preview.includes('#EXT-X-STREAM-INF'))?.path ?? null,
     emptyVariantsError,
+    segmentSizes,
+    initSizes,
     assets,
   };
 
@@ -156,6 +170,19 @@ const result = await page.evaluate(async ({ port }) => {
       offset += chunk.length;
     }
     return bytes;
+  }
+
+  async function readVideoSize(bytes, format) {
+    const input = new Input({
+      source: new BufferSource(new Uint8Array(bytes)),
+      formats: [format],
+    });
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) return null;
+    return {
+      width: await track.getDisplayWidth(),
+      height: await track.getDisplayHeight(),
+    };
   }
 }, { port });
 
@@ -188,6 +215,18 @@ assert.ok(
 assert.ok(
   masterPlaylist.includes('RESOLUTION=160x90'),
   'expected HLS output to use top-level resize defaults',
+);
+assert.ok(
+  Object.values(result.segmentSizes).some((size) => size?.width === 320 && size.height === 180),
+  'expected an HLS TS variant segment to be resized to the variant override',
+);
+assert.ok(
+  Object.values(result.segmentSizes).some((size) => size?.width === 160 && size.height === 90),
+  'expected an HLS TS variant segment to be resized to the top-level default',
+);
+assert.ok(
+  Object.values(result.initSizes).some((size) => size?.width === 160 && size.height === 90),
+  'expected AV1 CMAF init segment to be resized to the top-level default',
 );
 assert.equal(
   result.emptyVariantsError,
