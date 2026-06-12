@@ -270,6 +270,41 @@ const result = await page.evaluate(async ({ port }) => {
     }
   }
 
+  const opusSupport = await checkMovieAudioEncoderSupport({
+    codecs: ['opus'],
+    numberOfChannels: 2,
+    sampleRate: 48000,
+    bitrate: 96_000,
+  });
+  let opusMasterPlaylist = null;
+  if (opusSupport[0]?.supported) {
+    const opusInput = new Input({
+      source: new BufferSource(input),
+      formats: [new QuickTimeInputFormat()],
+    });
+    for await (const asset of convertMovieToHls({
+      input: opusInput,
+      tracks: 'primary',
+      targetDuration: 2,
+      sceneDetection: false,
+      segmentFormat: { mpegts: false, cmaf: true },
+      audio: {
+        codec: 'opus',
+        bitrate: 96_000,
+        numberOfChannels: 2,
+        sampleRate: 48000,
+      },
+      variants: [
+        { video: { codec: 'avc', bitrate: 300_000 }, resize: { width: 160 } },
+      ],
+    })) {
+      const bytes = await readStream(asset.data);
+      if (asset.path === 'master.m3u8') {
+        opusMasterPlaylist = decodeMovieHlsText(bytes);
+      }
+    }
+  }
+
   const rotatedSource = await createRotatedSource();
   const rotatedInput = new Input({
     source: new BufferSource(rotatedSource),
@@ -339,6 +374,7 @@ const result = await page.evaluate(async ({ port }) => {
     fallbackAudioCodecs,
     noAudioFallbackError,
     normalAudioCodecs,
+    opusMasterPlaylist,
     rotatedSizes,
     rotatedAssets,
     assets,
@@ -449,6 +485,14 @@ assert.ok(
   'expected HLS output to use top-level resize defaults',
 );
 assert.ok(
+  !/BANDWIDTH=0(?:,|$)/.test(masterPlaylist),
+  'expected HLS master playlist bandwidth values to be positive',
+);
+assert.ok(
+  !masterPlaylist.includes('CODECS="opus') && !masterPlaylist.includes(',opus'),
+  'expected HLS master playlist codecs to avoid plain opus codec strings',
+);
+assert.ok(
   Object.values(result.segmentSizes).some((size) => size?.width === 320 && size.height === 180),
   'expected an HLS TS variant segment to be resized to the variant override',
 );
@@ -486,6 +530,25 @@ if (result.supportedAudioCodec) {
   assert.ok(
     Object.values(result.normalAudioCodecs).some((codec) => codec === result.supportedAudioCodec),
     'expected a normally encodable audio codec to pass through the HLS path',
+  );
+}
+if (result.opusMasterPlaylist) {
+  assert.match(
+    result.opusMasterPlaylist,
+    /#EXT-X-STREAM-INF:[^\n]*BANDWIDTH=(?!0(?:,|$))\d+/,
+    'expected AVC + Opus HLS master playlist to use a positive bandwidth',
+  );
+  assert.ok(
+    result.opusMasterPlaylist.includes('CODECS="avc1.'),
+    'expected AVC + Opus HLS master playlist to keep the full AVC codec string',
+  );
+  assert.ok(
+    result.opusMasterPlaylist.includes('mp4a.ad'),
+    'expected AVC + Opus HLS master playlist to use the RFC 6381 Opus codec string',
+  );
+  assert.ok(
+    !result.opusMasterPlaylist.includes(',opus'),
+    'expected AVC + Opus HLS master playlist not to emit plain opus',
   );
 }
 const rotatedMasterPlaylist = result.rotatedAssets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';

@@ -22,6 +22,7 @@ import {
   getSelectedAudioTracks,
   getSelectedVideoTracks,
   type BrowserMovieAudioOptions,
+  type BrowserMovieAudioConversionPlan,
   type BrowserMovieConversionWarning,
   type BrowserMovieVideoConversionPlan,
   type BrowserMovieColorMetadataPolicy,
@@ -80,6 +81,8 @@ type HlsMasterPlaylistVariantMetadata = {
     height: number;
   } | null;
   videoCodec: string | null;
+  audioCodecs: string[];
+  bandwidth: number;
 };
 
 export async function* convertMovieToHls(options: MovieHlsOptions): AsyncGenerator<MovieHlsAsset> {
@@ -237,7 +240,10 @@ async function buildMovieHlsConversionOptions(input: Input, output: Output, opti
               forceTranscode: resolved.forceTranscode,
             });
 
-            masterPlaylistVariants[trackIndex * options.variants.length + variantIndex] = hlsMasterPlaylistMetadataFromPlan(plan);
+            masterPlaylistVariants[trackIndex * options.variants.length + variantIndex] = hlsMasterPlaylistMetadataFromPlan(
+              plan,
+              [...audioPlans.values()],
+            );
 
             return {
               ...plan.options,
@@ -271,15 +277,25 @@ function resolveVariantOptions(options: MovieHlsOptions, variant: MovieHlsVarian
   };
 }
 
-function hlsMasterPlaylistMetadataFromPlan(plan: BrowserMovieVideoConversionPlan): HlsMasterPlaylistVariantMetadata {
+function hlsMasterPlaylistMetadataFromPlan(
+  plan: BrowserMovieVideoConversionPlan,
+  audioPlans: BrowserMovieAudioConversionPlan[],
+): HlsMasterPlaylistVariantMetadata {
   const videoOptions = plan.options as BrowserMovieVideoConversionPlan['options'] & {
     fullCodecString?: string;
   };
+  const audioCodecs = audioPlans
+    .map((audioPlan) => rfc6381AudioCodecString(audioPlan.options.codec ?? audioPlan.resolvedCodec))
+    .filter((codec): codec is string => Boolean(codec));
+  const resolution = plan.resize
+    ? { width: plan.resize.width, height: plan.resize.height }
+    : null;
+
   return {
-    resolution: plan.resize
-      ? { width: plan.resize.width, height: plan.resize.height }
-      : null,
+    resolution,
     videoCodec: videoOptions.fullCodecString ?? videoOptions.codec ?? null,
+    audioCodecs,
+    bandwidth: estimateHlsVariantBandwidth(videoOptions.bitrate, resolution, audioPlans),
   };
 }
 
@@ -329,15 +345,27 @@ function patchHlsMasterPlaylistText(text: string, variants: HlsMasterPlaylistVar
   let variantIndex = 0;
   return text.replace(/^#EXT-X-(?:I-FRAME-)?STREAM-INF:([^\r\n]*)$/gm, (line: string, attrs: string) => {
     const variant = variants[variantIndex++];
-    if (!variant) return line;
 
     let nextLine = line;
-    if (variant.videoCodec) {
-      nextLine = replaceFirstCodecAttribute(nextLine, attrs, variant.videoCodec);
+    if (variant?.videoCodec) {
+      nextLine = replaceCodecAttribute(nextLine, attrs, [
+        variant.videoCodec,
+        ...variant.audioCodecs,
+      ]);
+    } else if (variant?.audioCodecs.length) {
+      nextLine = replaceCodecAttribute(nextLine, attrs, variant.audioCodecs);
+    } else {
+      nextLine = normalizeExistingCodecAttribute(nextLine, attrs);
     }
+    const bandwidth = variant?.bandwidth ?? readPositiveBandwidth(attrs) ?? 1;
+    nextLine = replaceBandwidthAttribute(nextLine, bandwidth);
+    if (!variant) {
+      return nextLine;
+    }
+    const nextAttrs = getHlsAttributeText(nextLine) ?? attrs;
     if (variant.resolution) {
       const resolution = `RESOLUTION=${variant.resolution.width}x${variant.resolution.height}`;
-      nextLine = attrs.includes('RESOLUTION=')
+      nextLine = nextAttrs.includes('RESOLUTION=')
         ? nextLine.replace(/RESOLUTION=\d+x\d+/, resolution)
         : `${nextLine},${resolution}`;
     }
@@ -345,13 +373,89 @@ function patchHlsMasterPlaylistText(text: string, variants: HlsMasterPlaylistVar
   });
 }
 
-function replaceFirstCodecAttribute(line: string, attrs: string, videoCodec: string): string {
+function normalizeExistingCodecAttribute(line: string, attrs: string): string {
   const match = attrs.match(/CODECS="([^"]*)"|CODECS=([^,]*)/);
-  if (!match) return `${line},CODECS="${videoCodec}"`;
+  if (!match) return line;
+  const codecs = (match[1] ?? match[2] ?? '')
+    .split(',')
+    .map(rfc6381CodecString)
+    .filter(Boolean);
+  return line.replace(/CODECS="[^"]*"|CODECS=[^,]*/, `CODECS="${codecs.join(',')}"`);
+}
 
-  const codecs = (match[1] ?? match[2] ?? '').split(',').filter(Boolean);
-  if (codecs.length === 0) codecs.push(videoCodec);
-  else codecs[0] = videoCodec;
+function replaceCodecAttribute(line: string, attrs: string, plannedCodecs: string[]): string {
+  const match = attrs.match(/CODECS="([^"]*)"|CODECS=([^,]*)/);
+  const normalizedPlannedCodecs = plannedCodecs.map(rfc6381CodecString).filter(Boolean);
+  if (normalizedPlannedCodecs.length === 0) return line;
+  if (!match) return `${line},CODECS="${normalizedPlannedCodecs.join(',')}"`;
+
+  const existingCodecs = (match[1] ?? match[2] ?? '')
+    .split(',')
+    .map(rfc6381CodecString)
+    .filter(Boolean);
+  const videoCodec = normalizedPlannedCodecs[0];
+  const codecs = [
+    videoCodec,
+    ...uniqueStrings([
+      ...normalizedPlannedCodecs.slice(1),
+      ...existingCodecs.slice(1),
+    ]),
+  ];
 
   return line.replace(/CODECS="[^"]*"|CODECS=[^,]*/, `CODECS="${codecs.join(',')}"`);
+}
+
+function replaceBandwidthAttribute(line: string, bandwidth: number): string {
+  const positiveBandwidth = Math.max(1, Math.round(bandwidth));
+  return /BANDWIDTH=\d+/.test(line)
+    ? line.replace(/BANDWIDTH=\d+/, `BANDWIDTH=${positiveBandwidth}`)
+    : `${line},BANDWIDTH=${positiveBandwidth}`;
+}
+
+function readPositiveBandwidth(attrs: string): number | null {
+  const value = attrs.match(/BANDWIDTH=(\d+)/)?.[1];
+  if (!value) return null;
+  const bandwidth = Number(value);
+  return bandwidth > 0 ? bandwidth : null;
+}
+
+function getHlsAttributeText(line: string): string | null {
+  const index = line.indexOf(':');
+  return index === -1 ? null : line.slice(index + 1);
+}
+
+function estimateHlsVariantBandwidth(
+  videoBitrate: BrowserMovieVideoConversionPlan['options']['bitrate'],
+  resolution: HlsMasterPlaylistVariantMetadata['resolution'],
+  audioPlans: BrowserMovieAudioConversionPlan[],
+): number {
+  const video = typeof videoBitrate === 'number'
+    ? videoBitrate
+    : estimateVideoBitrate(resolution);
+  const audio = audioPlans.reduce((sum, plan) => {
+    if (plan.options.discard) return sum;
+    return sum + (typeof plan.options.bitrate === 'number' ? plan.options.bitrate : 128_000);
+  }, 0);
+  return Math.max(1, video + audio);
+}
+
+function estimateVideoBitrate(resolution: HlsMasterPlaylistVariantMetadata['resolution']): number {
+  if (!resolution) return 1_000_000;
+  return Math.max(150_000, Math.round(resolution.width * resolution.height * 6));
+}
+
+function rfc6381CodecString(codec: string): string {
+  return rfc6381AudioCodecString(codec) ?? codec;
+}
+
+function rfc6381AudioCodecString(codec: string | null | undefined): string | null {
+  if (!codec) return null;
+  if (codec === 'aac') return 'mp4a.40.2';
+  if (codec === 'opus') return 'mp4a.ad';
+  if (codec === 'mp3') return 'mp4a.6B';
+  return codec;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }

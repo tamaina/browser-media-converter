@@ -1,5 +1,14 @@
 # @browser-mc/browser-movie-converter
 
+## 1.3.0
+
+### Minor Changes
+
+- Improve HLS master playlist compatibility for Safari and iOS.
+
+  - Master playlist `BANDWIDTH` attributes now use positive estimated variant bitrates instead of `0`.
+  - Generated `CODECS` attributes now keep planned full video codec strings and normalize audio codec names to RFC 6381 strings, including Opus as `mp4a.ad`.
+
 ## 1.2.0
 
 ### Minor Changes
