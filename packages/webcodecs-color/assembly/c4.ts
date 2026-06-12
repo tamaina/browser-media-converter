@@ -115,9 +115,44 @@ export function resizeFixed8_c4_striped(
     const sourceBegin = <i32>(range >> 32);
     const sourceEnd = <i32>(range & 0xffffffff);
 
-    for (let sourceY = sourceBegin; sourceY < sourceEnd; sourceY++) {
+    // Process two source rows per iteration so weight vectors and start
+    // offsets are loaded once per two accumulator chains.
+    const intermediateRowBytes = <usize>intermediateRowValues << 1;
+    let sourceY = sourceBegin;
+    for (; sourceY + 2 <= sourceEnd; sourceY += 2) {
+      const row0 = sourcePtr + <usize>(sourceY * sourceStride);
+      const row1 = row0 + <usize>sourceStride;
+      let out0 = intermediatePtr + <usize>(sourceY - sourceBegin) * intermediateRowBytes;
+      let out1 = out0 + intermediateRowBytes;
+      let weightPtr = horizontalWeightsPtr;
+      for (let x = 0; x < destinationWidth; x++) {
+        const start = <usize>load<i32>(horizontalStartsPtr + (<usize>x << 2)) << 2;
+        let acc0Even = i32x4.splat(0);
+        let acc0Odd = acc0Even;
+        let acc1Even = acc0Even;
+        let acc1Odd = acc0Even;
+        for (let k = 0; k < horizontalPaddedTaps; k += 2) {
+          const weights = v128.load(weightPtr + (<usize>k << 3));
+          const samples0 = v128.load8x8_u(row0 + start + (<usize>k << 2));
+          const samples1 = v128.load8x8_u(row1 + start + (<usize>k << 2));
+          acc0Even = i32x4.add(acc0Even, i32x4.extmul_low_i16x8_s(samples0, weights));
+          acc0Odd = i32x4.add(acc0Odd, i32x4.extmul_high_i16x8_s(samples0, weights));
+          acc1Even = i32x4.add(acc1Even, i32x4.extmul_low_i16x8_s(samples1, weights));
+          acc1Odd = i32x4.add(acc1Odd, i32x4.extmul_high_i16x8_s(samples1, weights));
+        }
+        weightPtr += weightRowBytes;
+        const rounded0 = i32x4.shr_s(i32x4.add(i32x4.add(acc0Even, acc0Odd), halfIntermediate), FIXED_INTERMEDIATE_SHIFT);
+        const rounded1 = i32x4.shr_s(i32x4.add(i32x4.add(acc1Even, acc1Odd), halfIntermediate), FIXED_INTERMEDIATE_SHIFT);
+        const packed = i16x8.narrow_i32x4_s(rounded0, rounded1);
+        v128.store64_lane(out0, packed, 0);
+        v128.store64_lane(out1, packed, 1);
+        out0 += 8;
+        out1 += 8;
+      }
+    }
+    for (; sourceY < sourceEnd; sourceY++) {
       const sourceRow = sourcePtr + <usize>(sourceY * sourceStride);
-      let out = intermediatePtr + (<usize>((sourceY - sourceBegin) * intermediateRowValues) << 1);
+      let out = intermediatePtr + <usize>(sourceY - sourceBegin) * intermediateRowBytes;
       let weightPtr = horizontalWeightsPtr;
       for (let x = 0; x < destinationWidth; x++) {
         const sampleBase = sourceRow + (<usize>load<i32>(horizontalStartsPtr + (<usize>x << 2)) << 2);

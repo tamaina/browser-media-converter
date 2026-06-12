@@ -147,6 +147,8 @@ const resized = await resizeVideoFrame(frame, {
 
 `nearest` remains JavaScript-only. The current WASM kernels cover 8-bit 2x box reduction and fixed-point convolution paths; higher bit-depth float paths and bilinear continue to use the JavaScript fallback. Fixed-point convolution uses striped intermediates for `c1`, `c2`, and `c4`, so large 4K resizes do not need a full `destinationWidth * sourceHeight` intermediate buffer.
 
+The kernels vectorize along the filter taps: horizontal weights are pre-padded per output pixel to a uniform, group-aligned tap count and duplicated per component, so the inner loops are branch-free `v128` loads feeding `i32x4.dot_i16x8_s` (`c1`) or extended multiplies (`c2`/`c4`). The vertical pass is a single shared kernel that streams 16 int16 lanes per step and narrows with saturation, which matches the JavaScript clamp bit for bit, so `simd: true` and `simd: false` produce identical bytes. On a Node/V8 x64 microbenchmark the WASM path is roughly 5-11x faster than the JavaScript fixed-point path across 4K/1080p/360p down- and upscales.
+
 Packed RGB formats are intentionally out of scope for `resizeFramePlanar`. On this SIMD branch, use `resizeVideoFrame` for CPU/SIMD packed-RGB resize, `resizeFrameWithCanvas` for explicit Canvas processing, or `resizeFrameRgb` when you intentionally need the lower-level CPU implementation.
 
 ## Canvas Helpers
@@ -205,4 +207,10 @@ pnpm --filter @browser-mc/webcodecs-color benchmark:planar-resize
 
 `benchmark:rgb-resize` compares packed RGB CPU resize algorithms against Canvas resize in Electron and prints both a table and JSON.
 
-`benchmark:planar-resize` compares I420 and NV12 planar resize paths with SIMD enabled, cached, and disabled. Recent Electron measurements on this workspace showed cached SIMD at about `209ms` for RGBA 4K to 720p `lanczos3` versus `219ms` with `simd: false`, and about `117ms` for NV12 4K to 720p `lanczos3` versus `118ms` with `simd: false`.
+`benchmark:planar-resize` compares I420 and NV12 planar resize paths with SIMD enabled, cached, and disabled.
+
+`test/benchmark-node-kernels.mjs` runs the same `convertPlane` kernels directly under Node (no Electron needed) and verifies the WASM output is byte-identical to the JavaScript path. Representative results on x64 V8 (`lanczos3`): luma 4K to 720p `9.1ms` WASM versus `100ms` JS, NV12 chroma 4K to 720p `4.0ms` versus `44ms`, RGBA 1080p to 720p `21.6ms` versus `175ms`, RGBA 720p to 1080p upscale `21.1ms` versus `196ms`.
+
+### Rust Comparison Experiment
+
+`rust/` contains an experimental WASM build backed by the [`fast_image_resize`](https://crates.io/crates/fast_image_resize) crate (`cargo build --release --target wasm32-unknown-unknown` with `RUSTFLAGS="-C target-feature=+simd128"`), and `test/benchmark-rust-kernel.mjs` compares it against the AssemblyScript kernels. Findings: the Rust build wins on single-pass convolutions without box reduction (about 1.3-1.5x faster for RGBA 1080p to 720p and upscales) but loses end-to-end whenever the 2x box-reduction pipeline applies (4K to 720p, 1080p to 540p), its payload is about `188KB` versus `5KB`, and its output is not bit-identical to the JavaScript fallback. The AssemblyScript kernels therefore remain the production path.

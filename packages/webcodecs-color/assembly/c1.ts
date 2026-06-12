@@ -99,7 +99,8 @@ export function resizeFixed8_c1_striped(
     const sourceBegin = <i32>(range >> 32);
     const sourceEnd = <i32>(range & 0xffffffff);
 
-    for (let sourceY = sourceBegin; sourceY < sourceEnd; sourceY++) {
+    let sourceY = sourceBegin;
+    for (; sourceY < sourceEnd; sourceY++) {
       const sourceRow = sourcePtr + <usize>(sourceY * sourceStride);
       let out = intermediatePtr + (<usize>((sourceY - sourceBegin) * destinationWidth) << 1);
       let weightPtr = horizontalWeightsPtr;
