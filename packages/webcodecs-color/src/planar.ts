@@ -157,7 +157,9 @@ function estimatePlanarSimdBytes(
   destinationWidth: number,
 ) {
   const intermediateBytes = destinationWidth * sourceHeight * 2 * Int16Array.BYTES_PER_ELEMENT;
-  const kernelBytes = (sourceWidth + sourceHeight + destinationWidth) * 32;
+  // Includes the per-pixel padded horizontal weight tables (up to 128 bytes
+  // per destination column for duplicated 16-tap kernels).
+  const kernelBytes = (sourceWidth + sourceHeight + destinationWidth) * 32 + destinationWidth * 128;
   return sourceByteLength + destinationByteLength + sourceByteLength * 2 + intermediateBytes + kernelBytes + 1024 * 1024;
 }
 
@@ -268,9 +270,6 @@ function simdKindsForDescriptor(
   return [...kinds];
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
 
 function videoColorSpaceInit(frame: VideoFrame): VideoColorSpaceInit {
   const colorSpace = frame.colorSpace;

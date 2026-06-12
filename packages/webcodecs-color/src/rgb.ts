@@ -109,7 +109,9 @@ function estimateRgbSimdBytes(
   destinationWidth: number,
 ) {
   const intermediateBytes = destinationWidth * sourceHeight * 4 * Int16Array.BYTES_PER_ELEMENT;
-  return sourceByteLength + destinationByteLength + sourceByteLength * 2 + intermediateBytes + 1024 * 1024;
+  // Includes the per-pixel padded horizontal weight tables (up to 128 bytes
+  // per destination column for duplicated 16-tap kernels).
+  return sourceByteLength + destinationByteLength + sourceByteLength * 2 + intermediateBytes + destinationWidth * 128 + 1024 * 1024;
 }
 
 function visibleRectForCopy(frame: VideoFrame): Required<Pick<DOMRectInit, 'x' | 'y' | 'width' | 'height'>> {

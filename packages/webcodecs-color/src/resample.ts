@@ -366,16 +366,20 @@ function resampleConvolution(view: PlaneView, options: ConvertPlaneOptions, comp
   const verticalFirstCost = view.width * vertical.weights.length + options.destinationHeight * horizontal.weights.length;
   const outputComponents = options.skipFourthComponent && components === 4 ? 3 : components;
 
+  const canUseFixedPoint = options.sourceBytesPerSample === 1
+    && options.destinationBytesPerSample === 1
+    && options.sourceBitDepth === 8
+    && options.destinationBitDepth === 8;
+  // The fixed-point path (and its SIMD kernels) is horizontal-first only, and
+  // it beats the float passes by a wide margin per multiply-accumulate. Prefer
+  // it even when vertical-first would do moderately less arithmetic; only an
+  // overwhelming vertical-first advantage justifies the float path for 8-bit.
+  if (canUseFixedPoint && horizontalFirstCost <= verticalFirstCost * 2) {
+    if (tryResampleFixedSimd(view, horizontal, vertical, options, components, outputComponents)) return;
+    resampleFixedConvolution(view, horizontal, vertical, options, components, outputComponents);
+    return;
+  }
   if (horizontalFirstCost <= verticalFirstCost) {
-    const canUseFixedPoint = options.sourceBytesPerSample === 1
-      && options.destinationBytesPerSample === 1
-      && options.sourceBitDepth === 8
-      && options.destinationBitDepth === 8;
-    if (canUseFixedPoint) {
-      if (tryResampleFixedSimd(view, horizontal, vertical, options, components, outputComponents)) return;
-      resampleFixedConvolution(view, horizontal, vertical, options, components, outputComponents);
-      return;
-    }
     resampleFloatConvolutionHorizontalFirst(view, horizontal, vertical, options, components);
   } else {
     resampleFloatConvolutionVerticalFirst(view, horizontal, vertical, options, components);
@@ -471,18 +475,15 @@ function tryResampleFixedSimd(
   if (!simd) return false;
   const horizontalWeights = getFixedKernelWeights(horizontal, options.algorithm, view.width, options.destinationWidth, options.scratch);
   const verticalWeights = getFixedKernelWeights(vertical, options.algorithm, view.height, options.destinationHeight, options.scratch);
+  const padded = getPaddedHorizontalWeights(horizontal, horizontalWeights, kind, options.algorithm, view.width, options.destinationWidth, options.scratch);
   const sourcePtr = pointerForBytes(simd, view.data);
-  const destinationPtr = pointerForBytes(simd, options.destination);
-  const horizontalOffsets = materializeInt32(options.scratch, `horizontal-offsets:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.offsets);
-  const horizontalCounts = materializeInt32(options.scratch, `horizontal-counts:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.counts);
+  const destinationPtr = pointerForOutput(simd, options.destination);
   const horizontalStarts = materializeInt32(options.scratch, `horizontal-starts:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.starts);
   const verticalOffsets = materializeInt32(options.scratch, `vertical-offsets:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.offsets);
   const verticalCounts = materializeInt32(options.scratch, `vertical-counts:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.counts);
   const verticalStarts = materializeInt32(options.scratch, `vertical-starts:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.starts);
-  const horizontalOffsetsPtr = copyInt32(simd, horizontalOffsets);
-  const horizontalCountsPtr = copyInt32(simd, horizontalCounts);
   const horizontalStartsPtr = copyInt32(simd, horizontalStarts);
-  const horizontalWeightsPtr = copyInt16(simd, horizontalWeights);
+  const horizontalWeightsPtr = copyInt16(simd, padded.weights);
   const verticalOffsetsPtr = copyInt32(simd, verticalOffsets);
   const verticalCountsPtr = copyInt32(simd, verticalCounts);
   const verticalStartsPtr = copyInt32(simd, verticalStarts);
@@ -490,22 +491,24 @@ function tryResampleFixedSimd(
 
   // Keep fixed-convolution intermediates small enough to stay cache-friendly on 4K inputs.
   const stripeRows = SIMD_FIXED_STRIPE_ROWS;
+  const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
+  // The c4 kernel always keeps 4 intermediate values per pixel; for
+  // 3-component output the alpha lane carries garbage that the vertical pass
+  // overwrites with 255.
+  const intermediateComponents = kind === 'c4' ? 4 : components;
+  const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * intermediateComponents * Int16Array.BYTES_PER_ELEMENT, 16);
   if (kind === 'c4') {
-    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
-    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * outputComponents * Int16Array.BYTES_PER_ELEMENT, 2);
     simd.exports.resizeFixed8_c4_striped!(
       sourcePtr + view.offset,
       destinationPtr + options.destinationLayout.offset,
-      horizontalOffsetsPtr,
-      horizontalCountsPtr,
       horizontalStartsPtr,
       horizontalWeightsPtr,
+      padded.paddedTaps,
       verticalOffsetsPtr,
       verticalCountsPtr,
       verticalStartsPtr,
       verticalWeightsPtr,
       intermediatePtr,
-      view.width,
       view.height,
       view.stride,
       options.destinationWidth,
@@ -514,45 +517,19 @@ function tryResampleFixedSimd(
       outputComponents,
       stripeRows,
     );
-  } else if (kind === 'c1') {
-    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
-    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * Int16Array.BYTES_PER_ELEMENT, 2);
-    simd.exports.resizeFixed8_c1_striped!(
-      sourcePtr + view.offset,
-      destinationPtr + options.destinationLayout.offset,
-      horizontalOffsetsPtr,
-      horizontalCountsPtr,
-      horizontalStartsPtr,
-      horizontalWeightsPtr,
-      verticalOffsetsPtr,
-      verticalCountsPtr,
-      verticalStartsPtr,
-      verticalWeightsPtr,
-      intermediatePtr,
-      view.width,
-      view.height,
-      view.stride,
-      options.destinationWidth,
-      options.destinationHeight,
-      options.destinationLayout.stride,
-      stripeRows,
-    );
   } else {
-    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
-    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * 2 * Int16Array.BYTES_PER_ELEMENT, 2);
-    simd.exports.resizeFixed8_c2_striped!(
+    const resize = kind === 'c1' ? simd.exports.resizeFixed8_c1_striped! : simd.exports.resizeFixed8_c2_striped!;
+    resize(
       sourcePtr + view.offset,
       destinationPtr + options.destinationLayout.offset,
-      horizontalOffsetsPtr,
-      horizontalCountsPtr,
       horizontalStartsPtr,
       horizontalWeightsPtr,
+      padded.paddedTaps,
       verticalOffsetsPtr,
       verticalCountsPtr,
       verticalStartsPtr,
       verticalWeightsPtr,
       intermediatePtr,
-      view.width,
       view.height,
       view.stride,
       options.destinationWidth,
@@ -567,11 +544,61 @@ function tryResampleFixedSimd(
   return true;
 }
 
+const PADDED_TAP_GROUP = { c1: 8, c2: 4, c4: 2 } as const;
+const PADDED_WEIGHT_DUP = { c1: 1, c2: 2, c4: 4 } as const;
+
+/**
+ * Lays horizontal kernel weights out per output pixel with a uniform,
+ * group-aligned tap count (zero padded) and the weight duplicated per
+ * component, so the WASM kernels can run a branch-free tap loop with
+ * unconditional vector loads.
+ */
+function getPaddedHorizontalWeights(
+  table: KernelTable,
+  fixedWeights: Int16Array,
+  kind: SimdKind,
+  algorithm: CpuResizeAlgorithm,
+  sourceSize: number,
+  destinationSize: number,
+  scratch: ResizeScratch | undefined,
+): { weights: Int16Array; paddedTaps: number } {
+  const build = () => {
+    const group = PADDED_TAP_GROUP[kind];
+    const dup = PADDED_WEIGHT_DUP[kind];
+    let maxCount = 1;
+    for (let x = 0; x < table.counts.length; x++) {
+      if (table.counts[x] > maxCount) maxCount = table.counts[x];
+    }
+    const paddedTaps = Math.ceil(maxCount / group) * group;
+    const weights = new Int16Array(destinationSize * paddedTaps * dup);
+    for (let x = 0; x < destinationSize; x++) {
+      const offset = table.offsets[x];
+      const count = table.counts[x];
+      const base = x * paddedTaps * dup;
+      for (let k = 0; k < count; k++) {
+        const weight = fixedWeights[offset + k];
+        for (let d = 0; d < dup; d++) weights[base + k * dup + d] = weight;
+      }
+    }
+    return { weights, paddedTaps };
+  };
+  return scratch
+    ? scratch.memo(`plane-kernel-padded:${kind}:${algorithm}:${sourceSize}/${destinationSize}`, build)
+    : build();
+}
+
 function pointerForBytes(simd: SimdContext, view: Uint8Array) {
   if (view.buffer === simd.memory.buffer) return view.byteOffset;
   const ptr = simd.allocate(view.byteLength, 16);
   new Uint8Array(simd.memory.buffer, ptr, view.byteLength).set(view);
   return ptr;
+}
+
+// Like pointerForBytes, but skips the copy-in: the kernel overwrites every
+// destination byte, so only the copy-out after the call matters.
+function pointerForOutput(simd: SimdContext, view: Uint8Array) {
+  if (view.buffer === simd.memory.buffer) return view.byteOffset;
+  return simd.allocate(view.byteLength, 16);
 }
 
 function materializeInt32(scratch: ResizeScratch | undefined, key: string, source: Int32Array) {
@@ -857,8 +884,8 @@ function accumulateRowsToFloats(
       if (k < lastPair) {
         const weightA = weights[k];
         const weightB = weights[k + 1];
-        let rowA = viewOffset + starts[y] * viewStride + sourceByteOffset;
-        let rowB = rowA + viewStride;
+        const rowA = viewOffset + starts[y] * viewStride + sourceByteOffset;
+        const rowB = rowA + viewStride;
         for (let index = 0; index < rowValues; index++) {
           intermediate[outputRow + index] = data[rowA + index] * weightA + data[rowB + index] * weightB;
         }

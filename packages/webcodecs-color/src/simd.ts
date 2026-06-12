@@ -34,16 +34,14 @@ type HalveExport = (
 type ResizeFixedStripedExport = (
   sourcePtr: number,
   destinationPtr: number,
-  horizontalOffsetsPtr: number,
-  horizontalCountsPtr: number,
   horizontalStartsPtr: number,
   horizontalWeightsPtr: number,
+  horizontalPaddedTaps: number,
   verticalOffsetsPtr: number,
   verticalCountsPtr: number,
   verticalStartsPtr: number,
   verticalWeightsPtr: number,
   intermediatePtr: number,
-  sourceWidth: number,
   sourceHeight: number,
   sourceStride: number,
   destinationWidth: number,
@@ -55,16 +53,14 @@ type ResizeFixedStripedExport = (
 type ResizeFixedC4StripedExport = (
   sourcePtr: number,
   destinationPtr: number,
-  horizontalOffsetsPtr: number,
-  horizontalCountsPtr: number,
   horizontalStartsPtr: number,
   horizontalWeightsPtr: number,
+  horizontalPaddedTaps: number,
   verticalOffsetsPtr: number,
   verticalCountsPtr: number,
   verticalStartsPtr: number,
   verticalWeightsPtr: number,
   intermediatePtr: number,
-  sourceWidth: number,
   sourceHeight: number,
   sourceStride: number,
   destinationWidth: number,
@@ -128,7 +124,9 @@ async function createSimd(): Promise<SimdContext | null> {
         cursor = align(cursor, alignment);
         const offset = cursor;
         cursor += byteLength;
-        ensureMemoryCapacity(memory, cursor);
+        // Keep slack after the arena so padded-tap kernels can over-read a few
+        // bytes past the last allocation without trapping.
+        ensureMemoryCapacity(memory, cursor + 16);
         return offset;
       },
       ensureCapacity(byteLength: number) {

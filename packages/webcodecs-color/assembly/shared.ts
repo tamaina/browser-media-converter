@@ -7,157 +7,146 @@ export function simdProbe(value: i32): i32 {
   return i32x4.extract_lane(incremented, 0);
 }
 
-export function halve8Generic(
-  sourcePtr: usize,
-  destinationPtr: usize,
-  sourceWidth: i32,
-  sourceHeight: i32,
-  sourceStride: i32,
-  components: i32,
-  halveWidth: i32,
-  halveHeight: i32,
-): void {
-  const width = halveWidth != 0 ? (sourceWidth + 1) >> 1 : sourceWidth;
-  const height = halveHeight != 0 ? (sourceHeight + 1) >> 1 : sourceHeight;
-  const destinationStride = width * components;
-  for (let y = 0; y < height; y++) {
-    const sourceY = halveHeight != 0 ? y << 1 : y;
-    const nextY = halveHeight != 0 ? minI32(sourceY + 1, sourceHeight - 1) : sourceY;
-    const row0 = sourcePtr + <usize>(sourceY * sourceStride);
-    const row1 = sourcePtr + <usize>(nextY * sourceStride);
-    const destinationRow = destinationPtr + <usize>(y * destinationStride);
-    for (let x = 0; x < width; x++) {
-      const sourceX = halveWidth != 0 ? x << 1 : x;
-      const nextX = halveWidth != 0 ? minI32(sourceX + 1, sourceWidth - 1) : sourceX;
-      const column0 = sourceX * components;
-      const column1 = nextX * components;
-      const destinationBase = destinationRow + <usize>(x * components);
-      for (let component = 0; component < components; component++) {
-        let value: i32;
-        if (components == 4 && halveWidth != 0 && halveHeight != 0) {
-          value = avgByteRounded(
-            avgByteRounded(
-              load<u8>(row0 + <usize>(column0 + component)),
-              load<u8>(row0 + <usize>(column1 + component)),
-            ),
-            avgByteRounded(
-              load<u8>(row1 + <usize>(column0 + component)),
-              load<u8>(row1 + <usize>(column1 + component)),
-            ),
-          );
-        } else if (components == 4 && halveWidth != 0) {
-          value = avgByteRounded(
-            load<u8>(row0 + <usize>(column0 + component)),
-            load<u8>(row0 + <usize>(column1 + component)),
-          );
-        } else if (components == 4 && halveHeight != 0) {
-          value = avgByteRounded(
-            load<u8>(row0 + <usize>(column0 + component)),
-            load<u8>(row1 + <usize>(column0 + component)),
-          );
-        } else if (halveWidth != 0 && halveHeight != 0) {
-          value = (
-            load<u8>(row0 + <usize>(column0 + component))
-              + load<u8>(row0 + <usize>(column1 + component))
-              + load<u8>(row1 + <usize>(column0 + component))
-              + load<u8>(row1 + <usize>(column1 + component))
-              + 2
-          ) >> 2;
-        } else if (halveWidth != 0) {
-          value = (
-            load<u8>(row0 + <usize>(column0 + component))
-              + load<u8>(row0 + <usize>(column1 + component))
-              + 1
-          ) >> 1;
-        } else {
-          value = (
-            load<u8>(row0 + <usize>(column0 + component))
-              + load<u8>(row1 + <usize>(column0 + component))
-              + 1
-          ) >> 1;
-        }
-        store<u8>(destinationBase + <usize>component, <u8>value);
-      }
-    }
-  }
+export function minI32(a: i32, b: i32): i32 {
+  return a < b ? a : b;
 }
 
-export function resizeFixed8Generic(
-  sourcePtr: usize,
+export function clampByte(value: i32): i32 {
+  return value < 0 ? 0 : value > 255 ? 255 : value;
+}
+
+// Sums all four i32 lanes of an accumulator vector.
+export function sumLanes(v: v128): i32 {
+  const high = i8x16.shuffle(v, v, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7);
+  const pair = i32x4.add(v, high);
+  const odd = i8x16.shuffle(pair, pair, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11);
+  return i32x4.extract_lane(i32x4.add(pair, odd), 0);
+}
+
+// Packs the clamped vertical source range for a stripe into an i64:
+// begin in the high 32 bits, end in the low 32 bits.
+export function stripeSourceRange(
+  verticalCountsPtr: usize,
+  verticalStartsPtr: usize,
+  stripeY: i32,
+  stripeEnd: i32,
+  sourceHeight: i32,
+): i64 {
+  let begin = sourceHeight;
+  let end = 0;
+  for (let y = stripeY; y < stripeEnd; y++) {
+    const start = load<i32>(verticalStartsPtr + (<usize>y << 2));
+    const count = load<i32>(verticalCountsPtr + (<usize>y << 2));
+    if (start < begin) begin = start;
+    if (start + count > end) end = start + count;
+  }
+  if (begin < 0) begin = 0;
+  if (end > sourceHeight) end = sourceHeight;
+  if (end < begin) end = begin;
+  return (<i64>begin << 32) | <i64><u32>end;
+}
+
+// Vertical fixed-point pass shared by all channel layouts: every output row is
+// a weighted sum of contiguous intermediate rows, so the kernel streams
+// rowValues int16 lanes regardless of how many components a pixel has.
+// alphaMask forces every 4th byte to 255 (c4 sources whose alpha is ignored).
+export function verticalPassStripe(
   destinationPtr: usize,
-  horizontalOffsetsPtr: usize,
-  horizontalCountsPtr: usize,
-  horizontalStartsPtr: usize,
-  horizontalWeightsPtr: usize,
   verticalOffsetsPtr: usize,
   verticalCountsPtr: usize,
   verticalStartsPtr: usize,
   verticalWeightsPtr: usize,
   intermediatePtr: usize,
-  sourceWidth: i32,
-  sourceHeight: i32,
-  sourceStride: i32,
-  destinationWidth: i32,
-  destinationHeight: i32,
+  rowValues: i32,
   destinationStride: i32,
-  components: i32,
-  outputComponents: i32,
+  stripeY: i32,
+  stripeEnd: i32,
+  sourceBegin: i32,
+  alphaMask: i32,
 ): void {
-  const halfIntermediate = 1 << (FIXED_INTERMEDIATE_SHIFT - 1);
-  const intermediateRowValues = destinationWidth * outputComponents;
-
-  for (let y = 0; y < sourceHeight; y++) {
-    const sourceRow = sourcePtr + <usize>(y * sourceStride);
-    const intermediateRow = intermediatePtr + <usize>(y * intermediateRowValues * 2);
-    for (let x = 0; x < destinationWidth; x++) {
-      const start = load<i32>(horizontalOffsetsPtr + <usize>(x * 4));
-      const count = load<i32>(horizontalCountsPtr + <usize>(x * 4));
-      const sourceStart = load<i32>(horizontalStartsPtr + <usize>(x * 4));
-      const outputBase = intermediateRow + <usize>(x * outputComponents * 2);
-      for (let component = 0; component < outputComponents; component++) {
-        let total = 0;
-        for (let k = 0; k < count; k++) {
-          const weight = <i32>load<i16>(horizontalWeightsPtr + <usize>((start + k) * 2));
-          const sample = <i32>load<u8>(sourceRow + <usize>((sourceStart + k) * components + component));
-          total += sample * weight;
-        }
-        store<i16>(outputBase + <usize>(component * 2), <i16>((total + halfIntermediate) >> FIXED_INTERMEDIATE_SHIFT));
-      }
-    }
-  }
-
-  const halfOutput = 1 << (FIXED_OUTPUT_SHIFT - 1);
-  for (let y = 0; y < destinationHeight; y++) {
+  const half = 1 << (FIXED_OUTPUT_SHIFT - 1);
+  const halfVector = i32x4.splat(half);
+  const mask = i8x16(0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1);
+  const rowBytes = rowValues << 1;
+  for (let y = stripeY; y < stripeEnd; y++) {
     const destinationRow = destinationPtr + <usize>(y * destinationStride);
-    const start = load<i32>(verticalOffsetsPtr + <usize>(y * 4));
-    const count = load<i32>(verticalCountsPtr + <usize>(y * 4));
-    const sourceStart = load<i32>(verticalStartsPtr + <usize>(y * 4));
-    for (let x = 0; x < destinationWidth; x++) {
-      const destinationBase = destinationRow + <usize>(x * components);
-      const intermediateColumn = x * outputComponents;
-      for (let component = 0; component < outputComponents; component++) {
-        let total = 0;
-        for (let k = 0; k < count; k++) {
-          const weight = <i32>load<i16>(verticalWeightsPtr + <usize>((start + k) * 2));
-          const value = <i32>load<i16>(intermediatePtr + <usize>(((sourceStart + k) * intermediateRowValues + intermediateColumn + component) * 2));
-          total += value * weight;
-        }
-        const rounded = (total + halfOutput) >> FIXED_OUTPUT_SHIFT;
-        store<u8>(destinationBase + <usize>component, <u8>clampByte(rounded));
+    const start = load<i32>(verticalOffsetsPtr + (<usize>y << 2));
+    const count = load<i32>(verticalCountsPtr + (<usize>y << 2));
+    const sourceStart = load<i32>(verticalStartsPtr + (<usize>y << 2)) - sourceBegin;
+    const baseRow = intermediatePtr + <usize>(sourceStart * rowBytes);
+    const weightBase = verticalWeightsPtr + (<usize>start << 1);
+    let x = 0;
+    const vectorLimit = rowValues & ~15;
+    for (; x < vectorLimit; x += 16) {
+      let acc0 = i32x4.splat(0);
+      let acc1 = acc0;
+      let acc2 = acc0;
+      let acc3 = acc0;
+      let rowPtr = baseRow + (<usize>x << 1);
+      for (let k = 0; k < count; k++) {
+        const weight = i16x8.splat(load<i16>(weightBase + (<usize>k << 1)));
+        const v0 = v128.load(rowPtr);
+        const v1 = v128.load(rowPtr, 16);
+        acc0 = i32x4.add(acc0, i32x4.extmul_low_i16x8_s(v0, weight));
+        acc1 = i32x4.add(acc1, i32x4.extmul_high_i16x8_s(v0, weight));
+        acc2 = i32x4.add(acc2, i32x4.extmul_low_i16x8_s(v1, weight));
+        acc3 = i32x4.add(acc3, i32x4.extmul_high_i16x8_s(v1, weight));
+        rowPtr += <usize>rowBytes;
       }
-      if (components == 4 && outputComponents == 3) store<u8>(destinationBase + 3, 255);
+      const r0 = i32x4.shr_s(i32x4.add(acc0, halfVector), FIXED_OUTPUT_SHIFT);
+      const r1 = i32x4.shr_s(i32x4.add(acc1, halfVector), FIXED_OUTPUT_SHIFT);
+      const r2 = i32x4.shr_s(i32x4.add(acc2, halfVector), FIXED_OUTPUT_SHIFT);
+      const r3 = i32x4.shr_s(i32x4.add(acc3, halfVector), FIXED_OUTPUT_SHIFT);
+      let packed = i8x16.narrow_i16x8_u(i16x8.narrow_i32x4_s(r0, r1), i16x8.narrow_i32x4_s(r2, r3));
+      if (alphaMask != 0) packed = v128.or(packed, mask);
+      v128.store(destinationRow + <usize>x, packed);
+    }
+    for (; x + 8 <= rowValues; x += 8) {
+      let acc0 = i32x4.splat(0);
+      let acc1 = acc0;
+      let rowPtr = baseRow + (<usize>x << 1);
+      for (let k = 0; k < count; k++) {
+        const weight = i16x8.splat(load<i16>(weightBase + (<usize>k << 1)));
+        const v0 = v128.load(rowPtr);
+        acc0 = i32x4.add(acc0, i32x4.extmul_low_i16x8_s(v0, weight));
+        acc1 = i32x4.add(acc1, i32x4.extmul_high_i16x8_s(v0, weight));
+        rowPtr += <usize>rowBytes;
+      }
+      const r0 = i32x4.shr_s(i32x4.add(acc0, halfVector), FIXED_OUTPUT_SHIFT);
+      const r1 = i32x4.shr_s(i32x4.add(acc1, halfVector), FIXED_OUTPUT_SHIFT);
+      const narrowed = i16x8.narrow_i32x4_s(r0, r1);
+      let packed = i8x16.narrow_i16x8_u(narrowed, narrowed);
+      if (alphaMask != 0) packed = v128.or(packed, mask);
+      v128.store64_lane(destinationRow + <usize>x, packed, 0);
+    }
+    for (; x < rowValues; x++) {
+      if (alphaMask != 0 && (x & 3) == 3) {
+        store<u8>(destinationRow + <usize>x, 255);
+        continue;
+      }
+      let total = 0;
+      let rowPtr = baseRow + (<usize>x << 1);
+      for (let k = 0; k < count; k++) {
+        total += <i32>load<i16>(rowPtr) * <i32>load<i16>(weightBase + (<usize>k << 1));
+        rowPtr += <usize>rowBytes;
+      }
+      store<u8>(destinationRow + <usize>x, <u8>clampByte((total + half) >> FIXED_OUTPUT_SHIFT));
     }
   }
 }
 
-function clampByte(value: i32): i32 {
-  return value < 0 ? 0 : value > 255 ? 255 : value;
-}
-
-function minI32(a: i32, b: i32): i32 {
-  return a < b ? a : b;
-}
-
-function avgByteRounded(a: i32, b: i32): i32 {
-  return (a + b + 1) >> 1;
+// Byte-wise rounded average of two rows; height-only halving is the same
+// operation for every channel layout.
+export function halveRowsAverage(row0: usize, row1: usize, destinationRow: usize, rowBytes: i32): void {
+  let x = 0;
+  const vectorLimit = rowBytes & ~15;
+  for (; x < vectorLimit; x += 16) {
+    v128.store(
+      destinationRow + <usize>x,
+      i8x16.avgr_u(v128.load(row0 + <usize>x), v128.load(row1 + <usize>x)),
+    );
+  }
+  for (; x < rowBytes; x++) {
+    store<u8>(destinationRow + <usize>x, <u8>((<i32>load<u8>(row0 + <usize>x) + <i32>load<u8>(row1 + <usize>x) + 1) >> 1));
+  }
 }
