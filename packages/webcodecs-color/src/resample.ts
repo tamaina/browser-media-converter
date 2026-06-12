@@ -1,4 +1,5 @@
 import type { ResizeScratch } from './scratch.js';
+import { peekSimdKind, type SimdContext, type SimdKind } from './simd.js';
 
 export type CpuResizeAlgorithm = 'nearest' | 'bilinear' | 'catmullrom' | 'lanczos3';
 
@@ -19,6 +20,7 @@ export type ConvertPlaneOptions = {
   destinationSamplesPerPixel: 1 | 2 | 4;
   sourceComponent: number;
   algorithm: CpuResizeAlgorithm;
+  simd?: boolean;
   scratch?: ResizeScratch;
   skipFourthComponent?: boolean;
 };
@@ -37,6 +39,8 @@ type KernelTable = {
   starts: Int32Array;
   weights: Float32Array;
 };
+
+const SIMD_FIXED_STRIPE_ROWS = 64;
 
 export function convertPlane(options: ConvertPlaneOptions) {
   if (options.sourceSamplesPerPixel !== options.destinationSamplesPerPixel && options.destinationSamplesPerPixel !== 1) {
@@ -57,7 +61,7 @@ export function convertPlane(options: ConvertPlaneOptions) {
     resampleNearest(view, options, components);
     return;
   }
-  view = halveTowardTarget(view, options.destinationWidth, options.destinationHeight, components, options.sourceBytesPerSample, options.scratch);
+  view = halveTowardTarget(view, options.destinationWidth, options.destinationHeight, components, options.sourceBytesPerSample, options.simd, options.scratch);
   if (options.algorithm === 'bilinear') {
     resampleBilinear(view, options, components);
     return;
@@ -106,6 +110,7 @@ function halveTowardTarget(
   destinationHeight: number,
   components: number,
   bytesPerSample: 1 | 2,
+  simd: boolean | undefined,
   scratch?: ResizeScratch,
 ): PlaneView {
   let pingPong = 0;
@@ -113,7 +118,7 @@ function halveTowardTarget(
     const halveWidth = view.width >= destinationWidth * 2;
     const halveHeight = view.height >= destinationHeight * 2;
     if (!halveWidth && !halveHeight) return view;
-    view = halvePlane(view, halveWidth, halveHeight, components, bytesPerSample, scratch, pingPong === 0 ? 'plane-halve-a' : 'plane-halve-b');
+    view = halvePlane(view, halveWidth, halveHeight, components, bytesPerSample, simd, scratch, pingPong === 0 ? 'plane-halve-a' : 'plane-halve-b');
     pingPong ^= 1;
   }
 }
@@ -124,6 +129,7 @@ function halvePlane(
   halveHeight: boolean,
   components: number,
   bytesPerSample: 1 | 2,
+  simd: boolean | undefined,
   scratch: ResizeScratch | undefined,
   key: string,
 ): PlaneView {
@@ -132,6 +138,8 @@ function halvePlane(
   const sampleBytes = components * bytesPerSample;
   const stride = width * sampleBytes;
   const data = scratch?.getBytes(key, stride * height) ?? new Uint8Array(stride * height);
+  const usedSimd = tryHalvePlaneSimd(view, data, width, height, halveWidth, halveHeight, components, bytesPerSample, simd, scratch);
+  if (usedSimd) return { data, offset: 0, stride, width, height };
 
   for (let y = 0; y < height; y++) {
     const sourceY = halveHeight ? y * 2 : y;
@@ -364,6 +372,7 @@ function resampleConvolution(view: PlaneView, options: ConvertPlaneOptions, comp
       && options.sourceBitDepth === 8
       && options.destinationBitDepth === 8;
     if (canUseFixedPoint) {
+      if (tryResampleFixedSimd(view, horizontal, vertical, options, components, outputComponents)) return;
       resampleFixedConvolution(view, horizontal, vertical, options, components, outputComponents);
       return;
     }
@@ -408,6 +417,195 @@ function resampleFloatConvolutionVerticalFirst(
     accumulateRowsToFloats(view, vertical, intermediate, components, options.sourceBytesPerSample, begin, end);
     convolveFloatsToPlane(intermediate, horizontal, options, components, end - begin, begin, stripeX, stripeEnd);
   }
+}
+
+function tryHalvePlaneSimd(
+  view: PlaneView,
+  destination: Uint8Array,
+  width: number,
+  height: number,
+  halveWidth: boolean,
+  halveHeight: boolean,
+  components: number,
+  bytesPerSample: 1 | 2,
+  simdEnabled: boolean | undefined,
+  scratch?: ResizeScratch,
+) {
+  if (simdEnabled === false) return false;
+  if (bytesPerSample !== 1) return false;
+  const kind = simdKindForComponents(components);
+  if (!kind) return false;
+  const simd = peekSimdKind(scratch, kind);
+  if (!simd) return false;
+  const sourcePtr = pointerForBytes(simd, view.data);
+  const destinationPtr = pointerForBytes(simd, destination);
+  const halve = halveExportForKind(simd, kind);
+  if (!halve) return false;
+  halve(
+    sourcePtr + view.offset,
+    destinationPtr,
+    view.width,
+    view.height,
+    view.stride,
+    halveWidth ? 1 : 0,
+    halveHeight ? 1 : 0,
+  );
+  if (destination.buffer !== simd.memory.buffer) {
+    destination.set(new Uint8Array(simd.memory.buffer, destinationPtr, width * height * components));
+  }
+  return true;
+}
+
+function tryResampleFixedSimd(
+  view: PlaneView,
+  horizontal: KernelTable,
+  vertical: KernelTable,
+  options: ConvertPlaneOptions,
+  components: number,
+  outputComponents: number,
+) {
+  if (options.simd === false) return false;
+  const kind = simdKindForComponents(components);
+  if (!kind) return false;
+  const simd = peekSimdKind(options.scratch, kind);
+  if (!simd) return false;
+  const horizontalWeights = getFixedKernelWeights(horizontal, options.algorithm, view.width, options.destinationWidth, options.scratch);
+  const verticalWeights = getFixedKernelWeights(vertical, options.algorithm, view.height, options.destinationHeight, options.scratch);
+  const sourcePtr = pointerForBytes(simd, view.data);
+  const destinationPtr = pointerForBytes(simd, options.destination);
+  const horizontalOffsets = materializeInt32(options.scratch, `horizontal-offsets:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.offsets);
+  const horizontalCounts = materializeInt32(options.scratch, `horizontal-counts:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.counts);
+  const horizontalStarts = materializeInt32(options.scratch, `horizontal-starts:${options.algorithm}:${view.width}/${options.destinationWidth}`, horizontal.starts);
+  const verticalOffsets = materializeInt32(options.scratch, `vertical-offsets:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.offsets);
+  const verticalCounts = materializeInt32(options.scratch, `vertical-counts:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.counts);
+  const verticalStarts = materializeInt32(options.scratch, `vertical-starts:${options.algorithm}:${view.height}/${options.destinationHeight}`, vertical.starts);
+  const horizontalOffsetsPtr = copyInt32(simd, horizontalOffsets);
+  const horizontalCountsPtr = copyInt32(simd, horizontalCounts);
+  const horizontalStartsPtr = copyInt32(simd, horizontalStarts);
+  const horizontalWeightsPtr = copyInt16(simd, horizontalWeights);
+  const verticalOffsetsPtr = copyInt32(simd, verticalOffsets);
+  const verticalCountsPtr = copyInt32(simd, verticalCounts);
+  const verticalStartsPtr = copyInt32(simd, verticalStarts);
+  const verticalWeightsPtr = copyInt16(simd, verticalWeights);
+
+  // Keep fixed-convolution intermediates small enough to stay cache-friendly on 4K inputs.
+  const stripeRows = SIMD_FIXED_STRIPE_ROWS;
+  if (kind === 'c4') {
+    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
+    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * outputComponents * Int16Array.BYTES_PER_ELEMENT, 2);
+    simd.exports.resizeFixed8_c4_striped!(
+      sourcePtr + view.offset,
+      destinationPtr + options.destinationLayout.offset,
+      horizontalOffsetsPtr,
+      horizontalCountsPtr,
+      horizontalStartsPtr,
+      horizontalWeightsPtr,
+      verticalOffsetsPtr,
+      verticalCountsPtr,
+      verticalStartsPtr,
+      verticalWeightsPtr,
+      intermediatePtr,
+      view.width,
+      view.height,
+      view.stride,
+      options.destinationWidth,
+      options.destinationHeight,
+      options.destinationLayout.stride,
+      outputComponents,
+      stripeRows,
+    );
+  } else if (kind === 'c1') {
+    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
+    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * Int16Array.BYTES_PER_ELEMENT, 2);
+    simd.exports.resizeFixed8_c1_striped!(
+      sourcePtr + view.offset,
+      destinationPtr + options.destinationLayout.offset,
+      horizontalOffsetsPtr,
+      horizontalCountsPtr,
+      horizontalStartsPtr,
+      horizontalWeightsPtr,
+      verticalOffsetsPtr,
+      verticalCountsPtr,
+      verticalStartsPtr,
+      verticalWeightsPtr,
+      intermediatePtr,
+      view.width,
+      view.height,
+      view.stride,
+      options.destinationWidth,
+      options.destinationHeight,
+      options.destinationLayout.stride,
+      stripeRows,
+    );
+  } else {
+    const stripeSourceRows = maxStripedSourceRows(vertical, options.destinationHeight, stripeRows, view.height);
+    const intermediatePtr = simd.allocate(options.destinationWidth * stripeSourceRows * 2 * Int16Array.BYTES_PER_ELEMENT, 2);
+    simd.exports.resizeFixed8_c2_striped!(
+      sourcePtr + view.offset,
+      destinationPtr + options.destinationLayout.offset,
+      horizontalOffsetsPtr,
+      horizontalCountsPtr,
+      horizontalStartsPtr,
+      horizontalWeightsPtr,
+      verticalOffsetsPtr,
+      verticalCountsPtr,
+      verticalStartsPtr,
+      verticalWeightsPtr,
+      intermediatePtr,
+      view.width,
+      view.height,
+      view.stride,
+      options.destinationWidth,
+      options.destinationHeight,
+      options.destinationLayout.stride,
+      stripeRows,
+    );
+  }
+  if (options.destination.buffer !== simd.memory.buffer) {
+    options.destination.set(new Uint8Array(simd.memory.buffer, destinationPtr, options.destination.byteLength));
+  }
+  return true;
+}
+
+function pointerForBytes(simd: SimdContext, view: Uint8Array) {
+  if (view.buffer === simd.memory.buffer) return view.byteOffset;
+  const ptr = simd.allocate(view.byteLength, 16);
+  new Uint8Array(simd.memory.buffer, ptr, view.byteLength).set(view);
+  return ptr;
+}
+
+function materializeInt32(scratch: ResizeScratch | undefined, key: string, source: Int32Array) {
+  const target = scratch?.getInts(`plane-kernel-${key}`, source.length);
+  if (!target) return source;
+  target.set(source);
+  return target;
+}
+
+function simdKindForComponents(components: number): SimdKind | null {
+  if (components === 1) return 'c1';
+  if (components === 2) return 'c2';
+  if (components === 4) return 'c4';
+  return null;
+}
+
+function halveExportForKind(simd: SimdContext, kind: SimdKind) {
+  if (kind === 'c1') return simd.exports.halve8_c1;
+  if (kind === 'c2') return simd.exports.halve8_c2;
+  return simd.exports.halve8_c4;
+}
+
+function copyInt32(simd: SimdContext, source: Int32Array) {
+  if (source.buffer === simd.memory.buffer) return source.byteOffset;
+  const ptr = simd.allocate(source.byteLength, Int32Array.BYTES_PER_ELEMENT);
+  new Int32Array(simd.memory.buffer, ptr, source.length).set(source);
+  return ptr;
+}
+
+function copyInt16(simd: SimdContext, source: Int16Array) {
+  if (source.buffer === simd.memory.buffer) return source.byteOffset;
+  const ptr = simd.allocate(source.byteLength, Int16Array.BYTES_PER_ELEMENT);
+  new Int16Array(simd.memory.buffer, ptr, source.length).set(source);
+  return ptr;
 }
 
 function convolveRowsToFloats(
@@ -1215,15 +1413,12 @@ function getFixedKernelWeights(
   destinationSize: number,
   scratch?: ResizeScratch,
 ): Int16Array {
-  const compute = () => {
-    const fixed = new Int16Array(table.weights.length);
-    for (let index = 0; index < fixed.length; index++) {
-      fixed[index] = Math.round(table.weights[index] * (1 << FIXED_WEIGHT_SHIFT));
-    }
-    return fixed;
-  };
-  if (!scratch) return compute();
-  return scratch.memo(`plane-kernel-fixed:${algorithm}:${sourceSize}/${destinationSize}`, compute);
+  const fixed = scratch?.getShorts(`plane-kernel-fixed:${algorithm}:${sourceSize}/${destinationSize}`, table.weights.length)
+    ?? new Int16Array(table.weights.length);
+  for (let index = 0; index < fixed.length; index++) {
+    fixed[index] = Math.round(table.weights[index] * (1 << FIXED_WEIGHT_SHIFT));
+  }
+  return fixed;
 }
 
 function getFloats(scratch: ResizeScratch | undefined, key: string, length: number) {

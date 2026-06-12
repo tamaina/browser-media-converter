@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/webcodecs-color/test/electron-main.cjs');
-const benchDir = await mkdtemp(resolve(tmpdir(), 'webcodecs-color-bench-'));
+const benchDir = await mkdtemp(resolve(tmpdir(), 'webcodecs-color-planar-bench-'));
 const benchBundle = resolve(benchDir, 'color.js');
 
 await build({
@@ -41,106 +41,122 @@ try {
   await page.goto(`http://127.0.0.1:${port}/`);
   const result = await page.evaluate(async ({ port }) => {
     const {
-      resizeFrameRgb,
-      resizeFrameWithCanvas,
+      resizeFramePlanar,
       createResizeScratch,
       VideoFrameResizer,
     } = await import(`http://127.0.0.1:${port}/color.js`);
     const cases = [
-      { format: 'RGBA', sw: 640, sh: 360, dw: 320, dh: 180, iterations: 20 },
-      { format: 'RGBA', sw: 1920, sh: 1080, dw: 960, dh: 540, iterations: 6 },
-      { format: 'RGBA', sw: 1920, sh: 1080, dw: 1280, dh: 720, iterations: 6 },
-      { format: 'RGBA', sw: 3840, sh: 2160, dw: 1280, dh: 720, iterations: 4 },
-      { format: 'RGBA', sw: 3840, sh: 2160, dw: 1600, dh: 900, iterations: 4 },
-      { format: 'BGRX', sw: 1920, sh: 1080, dw: 1280, dh: 720, iterations: 6 },
+      { format: 'I420', sw: 640, sh: 360, dw: 320, dh: 180, iterations: 20 },
+      { format: 'I420', sw: 1920, sh: 1080, dw: 960, dh: 540, iterations: 6 },
+      { format: 'I420', sw: 3840, sh: 2160, dw: 1280, dh: 720, iterations: 4 },
+      { format: 'I420', sw: 3840, sh: 2160, dw: 1600, dh: 900, iterations: 4 },
+      { format: 'NV12', sw: 640, sh: 360, dw: 320, dh: 180, iterations: 20 },
+      { format: 'NV12', sw: 1920, sh: 1080, dw: 960, dh: 540, iterations: 6 },
+      { format: 'NV12', sw: 3840, sh: 2160, dw: 1280, dh: 720, iterations: 4 },
+      { format: 'NV12', sw: 3840, sh: 2160, dw: 1600, dh: 900, iterations: 4 },
     ];
+    const algorithms = ['catmullrom', 'lanczos3'];
 
     const rows = [];
     for (const testCase of cases) {
-      const source = makeFrame(testCase.format, testCase.sw, testCase.sh);
+      const source = makePlanarFrame(testCase.format, testCase.sw, testCase.sh);
       try {
-        if (testCase.format === 'RGBA' || testCase.format === 'BGRX') {
+        for (const algorithm of algorithms) {
           const simdScratch = createResizeScratch();
-          const firstSimd = await timeAsync('rgb-lanczos3-simd-first', 1, async () => {
-            const resized = await resizeFrameRgb(source, {
+          const firstSimd = await timeAsync(`planar-${algorithm}-simd-first`, 1, async () => {
+            const resized = await resizeFramePlanar(source, {
               width: testCase.dw,
               height: testCase.dh,
-              algorithm: 'lanczos3',
+              algorithm,
               scratch: simdScratch,
             });
             return resized.frame;
           }, 0);
           rows.push(resultRow({ ...testCase, iterations: 1 }, firstSimd));
-          const cachedSimd = await timeAsync('rgb-lanczos3-simd-cached', testCase.iterations, async () => {
-            const resized = await resizeFrameRgb(source, {
+
+          const cachedSimd = await timeAsync(`planar-${algorithm}-simd-cached`, testCase.iterations, async () => {
+            const resized = await resizeFramePlanar(source, {
               width: testCase.dw,
               height: testCase.dh,
-              algorithm: 'lanczos3',
+              algorithm,
               scratch: simdScratch,
             });
             return resized.frame;
           });
           rows.push(resultRow(testCase, cachedSimd));
+
           const noSimdScratch = createResizeScratch();
-          const noSimd = await timeAsync('rgb-lanczos3-simd-false', testCase.iterations, async () => {
-            const resized = await resizeFrameRgb(source, {
+          const noSimd = await timeAsync(`planar-${algorithm}-simd-false`, testCase.iterations, async () => {
+            const resized = await resizeFramePlanar(source, {
               width: testCase.dw,
               height: testCase.dh,
-              algorithm: 'lanczos3',
+              algorithm,
               simd: false,
               scratch: noSimdScratch,
             });
             return resized.frame;
           });
           rows.push(resultRow(testCase, noSimd));
-        }
-        for (const algorithm of ['nearest', 'bilinear', 'catmullrom', 'lanczos3']) {
-          const stats = await timeAsync(`rgb-${algorithm}`, testCase.iterations, async () => {
-            const resized = await resizeFrameRgb(source, {
+
+          const direct = await timeAsync(`planar-${algorithm}`, testCase.iterations, async () => {
+            const resized = await resizeFramePlanar(source, {
               width: testCase.dw,
               height: testCase.dh,
               algorithm,
             });
             return resized.frame;
           });
-          rows.push(resultRow(testCase, stats));
+          rows.push(resultRow(testCase, direct));
+
           const resizer = new VideoFrameResizer({
             width: testCase.dw,
             height: testCase.dh,
             rawResizeAlgorithm: algorithm,
           });
-          const cachedStats = await timeAsync(`resizer-${algorithm}`, testCase.iterations, async () => {
+          const resizerStats = await timeAsync(`resizer-${algorithm}`, testCase.iterations, async () => {
             const resized = await resizer.resize(source);
             return resized.frame;
           });
-          rows.push(resultRow(testCase, cachedStats));
+          rows.push(resultRow(testCase, resizerStats));
         }
-        const canvasStats = await timeAsync('canvas-high', testCase.iterations, async () => {
-          const resized = resizeFrameWithCanvas(source, {
-            width: testCase.dw,
-            height: testCase.dh,
-            imageSmoothingQuality: 'high',
-          });
-          return resized.frame;
-        });
-        rows.push(resultRow(testCase, canvasStats));
       } finally {
         source.close();
       }
     }
     return rows;
 
-    function makeFrame(format, width, height) {
-      const data = new Uint8Array(width * height * 4);
-      for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) {
-          const offset = (y * width + x) * 4;
-          data[offset] = x & 255;
-          data[offset + 1] = y & 255;
-          data[offset + 2] = (x + y) & 255;
-          data[offset + 3] = 255;
+    function makePlanarFrame(format, width, height) {
+      const descriptor = planarDescriptor(format);
+      const layout = [];
+      const planes = [];
+      let offset = 0;
+      for (const plane of descriptor.planes) {
+        const planeWidth = Math.ceil(width / plane.subsampleX);
+        const planeHeight = Math.ceil(height / plane.subsampleY);
+        const samplesPerPixel = plane.samplesPerPixel ?? 1;
+        const stride = planeWidth * samplesPerPixel;
+        layout.push({ offset, stride });
+        planes.push({ ...plane, offset, stride, planeWidth, planeHeight, samplesPerPixel });
+        offset += stride * planeHeight;
+      }
+
+      const data = new Uint8Array(offset);
+      for (let planeIndex = 0; planeIndex < planes.length; planeIndex++) {
+        const plane = planes[planeIndex];
+        for (let y = 0; y < plane.planeHeight; y++) {
+          for (let x = 0; x < plane.planeWidth; x++) {
+            const base = plane.offset + y * plane.stride + x * plane.samplesPerPixel;
+            if (plane.samplesPerPixel === 2) {
+              data[base] = (90 + x * 3 + y) & 255;
+              data[base + 1] = (160 + x + y * 5) & 255;
+            } else {
+              const bias = planeIndex === 0 ? 32 : planeIndex === 1 ? 96 : 160;
+              data[base] = (bias + x * (planeIndex + 1) + y * (planeIndex + 3)) & 255;
+            }
+          }
         }
       }
+
       return new VideoFrame(data, {
         format,
         codedWidth: width,
@@ -148,14 +164,30 @@ try {
         displayWidth: width,
         displayHeight: height,
         timestamp: 0,
-        layout: [{ offset: 0, stride: width * 4 }],
-        colorSpace: {
-          primaries: 'bt709',
-          transfer: 'iec61966-2-1',
-          matrix: 'rgb',
-          fullRange: true,
-        },
+        layout,
+        colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false },
       });
+    }
+
+    function planarDescriptor(format) {
+      if (format === 'NV12') {
+        return {
+          planes: [
+            { subsampleX: 1, subsampleY: 1 },
+            { subsampleX: 2, subsampleY: 2, samplesPerPixel: 2 },
+          ],
+        };
+      }
+      if (format === 'I420') {
+        return {
+          planes: [
+            { subsampleX: 1, subsampleY: 1 },
+            { subsampleX: 2, subsampleY: 2 },
+            { subsampleX: 2, subsampleY: 2 },
+          ],
+        };
+      }
+      throw new Error(`Unsupported planar benchmark format ${format}`);
     }
 
     async function timeAsync(label, iterations, makeWork, warmups = 2) {

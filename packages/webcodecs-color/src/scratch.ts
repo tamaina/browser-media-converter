@@ -10,6 +10,10 @@ export type ResizeScratch = {
   memo<T>(key: string, create: () => T): T;
 };
 
+export type ResizeScratchWasmAllocator = {
+  allocateScratch(key: string, byteLength: number, alignment: number): ArrayBufferView<ArrayBuffer> | null;
+};
+
 export function createResizeScratch(): ResizeScratch {
   const buffers = new Map<string, ArrayBuffer>();
   const memos = new Map<string, unknown>();
@@ -23,10 +27,25 @@ export function createResizeScratch(): ResizeScratch {
   }
 
   return {
-    getBytes: (key, byteLength) => new Uint8Array(ensure(`bytes:${key}`, byteLength), 0, byteLength),
-    getFloats: (key, length) => new Float32Array(ensure(`floats:${key}`, length * Float32Array.BYTES_PER_ELEMENT), 0, length),
-    getInts: (key, length) => new Int32Array(ensure(`ints:${key}`, length * Int32Array.BYTES_PER_ELEMENT), 0, length),
-    getShorts: (key, length) => new Int16Array(ensure(`shorts:${key}`, length * Int16Array.BYTES_PER_ELEMENT), 0, length),
+    getBytes(key, byteLength) {
+      const wasm = activeWasmAllocator(memos)?.allocateScratch(`bytes:${key}`, byteLength, 16);
+      return wasm instanceof Uint8Array ? wasm : new Uint8Array(ensure(`bytes:${key}`, byteLength), 0, byteLength);
+    },
+    getFloats(key, length) {
+      const byteLength = length * Float32Array.BYTES_PER_ELEMENT;
+      const wasm = activeWasmAllocator(memos)?.allocateScratch(`floats:${key}`, byteLength, Float32Array.BYTES_PER_ELEMENT);
+      return wasm instanceof Float32Array ? wasm : new Float32Array(ensure(`floats:${key}`, byteLength), 0, length);
+    },
+    getInts(key, length) {
+      const byteLength = length * Int32Array.BYTES_PER_ELEMENT;
+      const wasm = activeWasmAllocator(memos)?.allocateScratch(`ints:${key}`, byteLength, Int32Array.BYTES_PER_ELEMENT);
+      return wasm instanceof Int32Array ? wasm : new Int32Array(ensure(`ints:${key}`, byteLength), 0, length);
+    },
+    getShorts(key, length) {
+      const byteLength = length * Int16Array.BYTES_PER_ELEMENT;
+      const wasm = activeWasmAllocator(memos)?.allocateScratch(`shorts:${key}`, byteLength, Int16Array.BYTES_PER_ELEMENT);
+      return wasm instanceof Int16Array ? wasm : new Int16Array(ensure(`shorts:${key}`, byteLength), 0, length);
+    },
     memo<T>(key: string, create: () => T): T {
       if (memos.has(key)) return memos.get(key) as T;
       const value = create();
@@ -34,4 +53,9 @@ export function createResizeScratch(): ResizeScratch {
       return value;
     },
   };
+}
+
+function activeWasmAllocator(memos: Map<string, unknown>): ResizeScratchWasmAllocator | null {
+  const state = memos.get('simd:active-allocator-state') as { allocator: ResizeScratchWasmAllocator | null } | undefined;
+  return state?.allocator ?? null;
 }
