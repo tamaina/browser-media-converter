@@ -12,7 +12,6 @@
   - Add planar resize benchmarks alongside the packed RGB benchmark, plus a Node-only kernel microbenchmark (`test/benchmark-node-kernels.mjs`).
 - Rework the SIMD kernels for real vector throughput. Horizontal convolution runs tap-direction SIMD over per-pixel padded weight tables (`i32x4.dot_i16x8_s` for `c1`, extended multiplies for `c2`/`c4` with two-row batching), the vertical pass is a shared 16-lane streaming kernel with saturating narrowing, and all halve directions are vectorized. Output stays byte-identical to the JavaScript fixed-point path. Node/V8 x64 microbenchmarks show roughly 5-11x over `simd: false` (previously the WASM path was often slower than JavaScript).
 - Prefer the fixed-point (SIMD-capable) convolution whenever 8-bit fixed point applies and horizontal-first is at most twice the vertical-first arithmetic; common 1.5x scales such as 1080p to 720p previously fell into the float vertical-first path and bypassed both the fixed-point and SIMD implementations.
-- Add an experimental Rust/`fast_image_resize` WASM build under `rust/` with a comparison benchmark (`test/benchmark-rust-kernel.mjs`). It is not wired into the library: it only wins on single-pass convolutions (about 1.3-1.5x), loses when the 2x box-reduction pipeline applies, weighs about `188KB` versus `5KB`, and is not bit-identical to the JavaScript fallback.
 
 ## 1.0.1
 

@@ -5,7 +5,6 @@ dist/
 **/dist/
 
 packages/webcodecs-color/assembly/build/
-packages/webcodecs-color/rust/target/
 
 playground-output/
 

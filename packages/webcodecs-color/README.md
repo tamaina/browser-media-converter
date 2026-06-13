@@ -211,6 +211,3 @@ pnpm --filter @browser-mc/webcodecs-color benchmark:planar-resize
 
 `test/benchmark-node-kernels.mjs` runs the same `convertPlane` kernels directly under Node (no Electron needed) and verifies the WASM output is byte-identical to the JavaScript path. Representative results on x64 V8 (`lanczos3`): luma 4K to 720p `9.1ms` WASM versus `100ms` JS, NV12 chroma 4K to 720p `4.0ms` versus `44ms`, RGBA 1080p to 720p `21.6ms` versus `175ms`, RGBA 720p to 1080p upscale `21.1ms` versus `196ms`.
 
-### Rust Comparison Experiment
-
-`rust/` contains an experimental WASM build backed by the [`fast_image_resize`](https://crates.io/crates/fast_image_resize) crate (`cargo build --release --target wasm32-unknown-unknown` with `RUSTFLAGS="-C target-feature=+simd128"`), and `test/benchmark-rust-kernel.mjs` compares it against the AssemblyScript kernels. Findings: the Rust build wins on single-pass convolutions without box reduction (about 1.3-1.5x faster for RGBA 1080p to 720p and upscales) but loses end-to-end whenever the 2x box-reduction pipeline applies (4K to 720p, 1080p to 540p), its payload is about `188KB` versus `5KB`, and its output is not bit-identical to the JavaScript fallback. The AssemblyScript kernels therefore remain the production path.

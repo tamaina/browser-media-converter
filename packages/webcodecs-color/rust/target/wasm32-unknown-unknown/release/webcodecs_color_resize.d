@@ -1,0 +1,1 @@
+/home/user/browser-media-converter/packages/webcodecs-color/rust/target/wasm32-unknown-unknown/release/webcodecs_color_resize.wasm: /home/user/browser-media-converter/packages/webcodecs-color/rust/src/lib.rs
