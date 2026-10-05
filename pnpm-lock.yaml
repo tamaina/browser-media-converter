@@ -77,8 +77,8 @@ importers:
         specifier: workspace:^
         version: link:../webcodecs-color
       mediabunny:
-        specifier: ^1.46.0
-        version: 1.46.0
+        specifier: ^1.61.1
+        version: 1.61.1
 
   packages/exif-transplant:
     dependencies:
@@ -98,8 +98,8 @@ importers:
   packages/mediabunny-scene-keyframes:
     dependencies:
       mediabunny:
-        specifier: ^1.46.0
-        version: 1.46.0
+        specifier: ^1.61.1
+        version: 1.61.1
 
   packages/video-codec: {}
 
@@ -1383,8 +1383,8 @@ packages:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
 
-  mediabunny@1.46.0:
-    resolution: {integrity: sha512-HIaMQ6PVMndrFb9sNCh9/uAsLFBfLzyAgbk3kN7ZqlRRq//9RPYqIOQtXYpkbWBZU8ZJkaAUNLDtwTcdKo7yQw==}
+  mediabunny@1.61.1:
+    resolution: {integrity: sha512-530o7Q2OkChbfXt8N9WmzcW/wmUN0Vdxgl3RE5zUlzny3aNJUi7huOjdOVVq60aCEjTaMR1Ikby+61+co8gRwA==}
 
   merge2@1.4.1:
     resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
@@ -3232,7 +3232,7 @@ snapshots:
 
   math-intrinsics@1.1.0: {}
 
-  mediabunny@1.46.0:
+  mediabunny@1.61.1:
     dependencies:
       '@types/dom-mediacapture-transform': 0.1.11
       '@types/dom-webcodecs': 0.1.13

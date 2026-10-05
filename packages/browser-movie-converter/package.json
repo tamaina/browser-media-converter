@@ -1,6 +1,6 @@
 {
   "name": "@browser-mc/browser-movie-converter",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,13 +22,16 @@
     "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs",
-    "test:hls:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/hls-electron-smoke.mjs"
+    "test:hls:codecs": "BROWSER_MC_STRICT_HLS_CODECS=1 BROWSER_MC_TEST_BROWSER=chromium node test/hls-electron-smoke.mjs",
+    "test:worker": "node test/worker-regression.mjs",
+    "test:hls:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/hls-electron-smoke.mjs",
+    "test:package": "node --test test/options.test.mjs"
   },
   "dependencies": {
     "@browser-mc/mediabunny-scene-keyframes": "workspace:^",
     "@browser-mc/video-codec": "workspace:^",
     "@browser-mc/webcodecs-color": "workspace:^",
-    "mediabunny": "^1.46.0"
+    "mediabunny": "^1.61.1"
   },
   "files": [
     "dist",

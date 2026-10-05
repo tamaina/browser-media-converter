@@ -1,6 +1,6 @@
 {
   "name": "@browser-mc/mediabunny-scene-keyframes",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
   "dependencies": {
-    "mediabunny": "^1.46.0"
+    "mediabunny": "^1.61.1"
   },
   "files": [
     "dist",
