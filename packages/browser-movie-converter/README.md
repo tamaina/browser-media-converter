@@ -224,6 +224,8 @@ Legacy numeric `bitrate` and `bitrate: QUALITY_HIGH` options remain accepted. Th
 
 `fullCodecString` remains a planning hint. Mediabunny 1.61.1's `Conversion` does not forward this field to its encoder, so it cannot guarantee the requested profile or bit depth. Encoder support probes check the requested string separately. The CPU planar/HDR resize and scene detection paths remain in place.
 
-HLS codec strings and resolution now come from the actual upstream output. Opus uses `Opus`. A fallback still repairs zero or missing `BANDWIDTH` values in multi-variant VOD output while preserving positive upstream values. Upstream may select CMAF for AVC/HEVC tracks carrying transformation metadata; enable only `mpegts` when TS output is required and the selected codecs fit TS.
+HLS codec strings and resolution now come from upstream's output metadata. Chromium's AVC encoder declarations can differ from the encoded SPS, including advertised levels; this gap is present on both the old and updated Mediabunny baselines and is not repaired here. Opus uses `Opus`. A fallback still repairs zero or missing `BANDWIDTH` values in multi-variant VOD output while preserving positive upstream values. Upstream may select CMAF for AVC/HEVC tracks carrying transformation metadata; enable only `mpegts` when TS output is required and the selected codecs fit TS.
 
 Browser checks can run without a display with `BROWSER_MC_TEST_BROWSER=chromium node test/electron-smoke.mjs` and `BROWSER_MC_TEST_BROWSER=chromium node test/hls-electron-smoke.mjs` from this package. `pnpm test:worker` uses synthetic frames to check rotation/crop/pixel aspect and conversion cancel/error/disposal in a Worker.
+
+`pnpm test:hls:codecs` runs a separate strict decoder-level compatibility assertion. It currently fails on the known upstream AVC declaration/SPS mismatch described above; the ordinary HLS smoke suite records these differences without claiming exact descriptor correctness.
