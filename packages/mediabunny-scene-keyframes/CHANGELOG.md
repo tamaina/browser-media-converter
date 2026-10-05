@@ -2,6 +2,7 @@
 
 ## 0.1.0
 
+- Include canonical repository metadata for npm provenance validation.
 - Update Mediabunny to 1.61.1; retain sequential sample iteration and scene detection behavior.
 
 ## 0.0.1
