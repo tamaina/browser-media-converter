@@ -396,7 +396,9 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
   const useNativeResizeTransform = resize
     ? await shouldUseNativeResizeTransform(options.track, options.video)
     : false;
-  const codec = options.video?.codec ?? await options.track.getCodec();
+  // Conversion selects the output codec when omitted; the input codec may not
+  // be supported by the output container. Defer codec-specific bounds to encoding.
+  const codec = options.video?.codec ?? null;
   const outputSize = resize
     ? { width: resize.width, height: resize.height }
     : {
@@ -962,7 +964,7 @@ class IntervalKeyFrameDetector {
 }
 
 function normalizeQuantizerOptions(quantizer: BrowserMovieQuantizerOptions | undefined, codec: string | null): NormalizedMovieQuantizer | null {
-  const maximum = codec === 'avc' || codec === 'hevc' ? 51 : codec === 'av1' ? 255 : 63;
+  const maximum = codec === null || codec === 'av1' ? 255 : codec === 'avc' || codec === 'hevc' ? 51 : 63;
   if (quantizer === undefined) return null;
   if (typeof quantizer === 'number') {
     return { all: validateQuantizer(quantizer, 'quantizer', maximum), split: false };

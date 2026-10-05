@@ -1,6 +1,7 @@
-import { patchHlsMasterPlaylistText } from './hls-bandwidth.js';
+import { estimateHlsFallbackBandwidth, patchHlsMasterPlaylistText } from './hls-bandwidth.js';
 import {
-  AppendOnlyStreamTarget,
+  StreamTarget,
+  type StreamTargetChunk,
   CmafOutputFormat,
   Conversion,
   HlsOutputFormat,
@@ -97,7 +98,16 @@ export async function* convertMovieToHls(options: MovieHlsOptions): AsyncGenerat
   let conversionError: unknown = null;
 
   const pathedTarget = new PathedTarget(rootPath, (request) => {
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    let nextPosition = 0;
+    const { readable, writable } = new TransformStream<StreamTargetChunk, Uint8Array>({
+      transform(chunk, controller) {
+        if (chunk.position !== nextPosition) {
+          throw new Error('HLS stream writes must be sequential.');
+        }
+        nextPosition += chunk.data.byteLength;
+        controller.enqueue(chunk.data);
+      },
+    });
     pending.push({
       path: request.path,
       mimeType: request.mimeType,
@@ -106,7 +116,9 @@ export async function* convertMovieToHls(options: MovieHlsOptions): AsyncGenerat
         : readable,
     });
     notify?.();
-    return new AppendOnlyStreamTarget(writable);
+    // StreamTarget emits public write events used by HLS to measure segment
+    // bandwidth. AppendOnlyStreamTarget in 1.61.1 does not forward those events.
+    return new StreamTarget(writable);
   });
 
   runHlsConversion(pathedTarget, options, masterPlaylistMetadata)
@@ -342,17 +354,7 @@ function estimateHlsVariantBandwidth(
   audioPlans: BrowserMovieAudioConversionPlan[],
   audioBitrate: BrowserMovieAudioOptions['bitrate'],
 ): number {
-  const video = typeof videoBitrate === 'number'
-    ? videoBitrate
-    : estimateVideoBitrate(resolution);
-  const audio = audioPlans.reduce((sum, plan) => {
-    if (plan.options.discard) return sum;
-    return sum + (typeof audioBitrate === 'number' ? audioBitrate : 128_000);
-  }, 0);
-  return Math.max(1, video + audio);
-}
-
-function estimateVideoBitrate(resolution: HlsMasterPlaylistVariantMetadata['resolution']): number {
-  if (!resolution) return 1_000_000;
-  return Math.max(150_000, Math.round(resolution.width * resolution.height * 6));
+  return estimateHlsFallbackBandwidth(videoBitrate, resolution, audioPlans
+    .filter(plan => !plan.options.discard)
+    .map(() => audioBitrate));
 }

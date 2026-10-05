@@ -55,7 +55,10 @@ test('quantizer boundaries follow the target codec for single and split options'
       }
     }
   }
-  await assert.rejects(videoPlan({}, 52), /from 0 to 51/);
+  // AVC input does not constrain an automatically selected VP9/AV1 output.
+  for (const value of [60, 255]) assert.equal(typeof (await videoPlan({}, value)).options.process, 'function');
+  await assert.rejects(videoPlan({}, 256), /from 0 to 255/);
+  await assert.rejects(videoPlan({ codec: 'avc' }, 60), /from 0 to 51/);
 });
 
 
@@ -69,4 +72,18 @@ test('HLS bandwidth fallback preserves actual codecs, resolution, audio groups a
   const missing = `#EXT-X-I-FRAME-STREAM-INF:AVERAGE-BANDWIDTH=120000,${attributes}`;
   assert.equal(patchHlsMasterPlaylistText(missing, [500000]), `${missing},BANDWIDTH=500000`);
   assert.equal(patchHlsMasterPlaylistText('#EXT-X-STREAM-INF:BANDWIDTH=0', []), '#EXT-X-STREAM-INF:BANDWIDTH=1');
+});
+
+
+test('opaque Quality rates retain a finite positive HLS heuristic without changing upstream bandwidth', async () => {
+  const { estimateHlsFallbackBandwidth, patchHlsMasterPlaylistText } = await import('../dist/hls-bandwidth.js');
+  const resolution = { width: 320, height: 180 };
+  const numeric = estimateHlsFallbackBandwidth(3_000_000, resolution, [192_000]);
+  assert.equal(numeric, 3_192_000);
+  const opaque = estimateHlsFallbackBandwidth(new Quality({ bitrate: 3_000_000 }), resolution, [new Quality({ bitrate: 192_000 })]);
+  assert.equal(opaque, 345_600 + 128_000);
+  assert.ok(Number.isFinite(opaque) && opaque > 0);
+  assert.equal(patchHlsMasterPlaylistText('#EXT-X-STREAM-INF:BANDWIDTH=0', [opaque]), `#EXT-X-STREAM-INF:BANDWIDTH=${opaque}`);
+  const positive = '#EXT-X-STREAM-INF:BANDWIDTH=3192000,CODECS="avc1.64001f,Opus"';
+  assert.equal(patchHlsMasterPlaylistText(positive, [opaque]), positive);
 });

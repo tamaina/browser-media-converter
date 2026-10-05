@@ -1,9 +1,12 @@
 # @browser-mc/browser-movie-converter
 
-## Unreleased
+## 1.4.0
 
 - Update Mediabunny to 1.61.1; preserve legacy bitrate options through Quality mapping and validate codec-specific quantizer ranges.
 - Remove planned CODECS/RESOLUTION rewriting; use upstream output codec metadata including HLS `Opus`. Retain a narrow fallback for zero/missing VOD BANDWIDTH and the geometry safeguard for custom planar processing.
+- When output codec is automatic, defer codec-specific quantizer bounds to encoding instead of applying input-codec bounds.
+- Use public StreamTarget write events so upstream HLS measures segment bandwidth, preserving sequential streaming and backpressure.
+- For zero/missing HLS bandwidth, `Quality` objects use a geometry/audio heuristic because their explicit rates are opaque; numeric legacy bitrate can still supply a requested-rate estimate. Positive upstream bandwidth remains unchanged.
 - Preserve the native geometry safeguard when an added rotation cancels input rotation.
 - Add quality/quantizer and synthetic Worker lifecycle/geometry regression tests. Document the upstream fullCodecString forwarding limitation.
 

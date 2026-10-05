@@ -54,6 +54,7 @@ const app = headless
   : await electron.launch({ args: [main, '--no-sandbox', '--disable-gpu'] });
 
 const page = headless ? await app.newPage() : await app.firstWindow();
+page.on('console', message => console.log(message.text()));
 await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
@@ -68,6 +69,7 @@ const result = await page.evaluate(async ({ port }) => {
     BufferTarget,
     BufferSource,
     CanvasSource,
+    Quality,
     Input,
     Mp4InputFormat,
     Mp4OutputFormat,
@@ -306,6 +308,38 @@ const result = await page.evaluate(async ({ port }) => {
     }
   }
 
+  const measuredModes = [];
+  for (const cmaf of [false, true]) {
+    for (const singleFilePerPlaylist of [false, true]) {
+      console.log('HLS measured mode', cmaf, singleFilePerPlaylist);
+      const measuredInput = new Input({ source: new BufferSource(input), formats: [new QuickTimeInputFormat()] });
+      try {
+        let master;
+        const reads = [];
+        for await (const asset of convertMovieToHls({
+          input: measuredInput, tracks: 'primary', sceneDetection: false,
+          singleFilePerPlaylist, segmentFormat: { mpegts: !cmaf, cmaf },
+          audio: cmaf ? { codec: 'opus', quality: new Quality({ bitrate: 96_000 }), numberOfChannels: 2, sampleRate: 48000 } : { discard: true },
+          variants: [160, 128].map(width => ({ video: { codec: 'avc', ...(cmaf ? { quality: new Quality({ bitrate: 300_000 }) } : { bitrate: 300_000 }) }, resize: { width } })),
+        })) {
+          // Single-file variants remain open concurrently until conversion ends.
+          // Drain each asset as it is yielded to preserve writer backpressure.
+          reads.push(readStream(asset.data).then(bytes => {
+            if (asset.path === 'master.m3u8') master = decodeMovieHlsText(bytes);
+          }));
+        }
+        await Promise.all(reads);
+        const bandwidths = [...master.matchAll(/(?:^|[:,])BANDWIDTH=(\d+)/gm)].map(match => Number(match[1]));
+        if (!bandwidths.length || bandwidths.some(value => !Number.isFinite(value) || value <= 0)) throw new Error('measured bandwidth must be positive');
+        // Requested-rate or opaque Quality geometry fallbacks are distinguishable
+        // from the upstream measurement for this fixture.
+        if (bandwidths.some(value => value === 300_000 || value === 396_000 || value === 278_000)) throw new Error('expected actual upstream bandwidth, not fallback');
+        console.log('HLS measured rates', JSON.stringify(bandwidths));
+        measuredModes.push({ cmaf, singleFilePerPlaylist, bandwidths, separateAudio: master.includes('#EXT-X-MEDIA:TYPE=AUDIO') });
+      } finally { measuredInput.dispose(); }
+    }
+  }
+
   const rotatedSource = await createRotatedSource();
   const rotatedInput = new Input({
     source: new BufferSource(rotatedSource),
@@ -376,6 +410,7 @@ const result = await page.evaluate(async ({ port }) => {
     noAudioFallbackError,
     normalAudioCodecs,
     opusMasterPlaylist,
+    measuredModes,
     rotatedSizes,
     rotatedAssets,
     assets,
@@ -627,3 +662,7 @@ console.log(JSON.stringify({
 
 await app.close();
 server.close();
+
+assert.equal(result.measuredModes.length, 4);
+assert.ok(result.measuredModes.filter(mode => mode.cmaf).every(mode => mode.separateAudio), 'measured modes retain separate audio');
+console.log(JSON.stringify({ measuredModes: result.measuredModes }));

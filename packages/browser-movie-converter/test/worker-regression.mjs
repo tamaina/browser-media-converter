@@ -29,7 +29,7 @@ try {
     worker.onerror = event => { clearTimeout(timeout); worker.terminate(); reject(new Error(event.message)); };
   }));
   assert.equal(result.error, undefined, result.error);
-  assert.deepEqual(result.results, ['metadata rotation', 'large metadata rotation', 'rotation then crop', 'cancel innate rotation', 'additional rotation', 'non-square pixels', 'cancel', 'error']);
+  assert.deepEqual(result.results, ['metadata rotation', 'large metadata rotation', 'rotation then crop', 'cancel innate rotation', 'additional rotation', 'automatic output codec quantizer', 'non-square pixels', 'cancel', 'error']);
   console.log(JSON.stringify({ browser: await browser.version(), worker: result.results }));
 } finally {
   await browser?.close();

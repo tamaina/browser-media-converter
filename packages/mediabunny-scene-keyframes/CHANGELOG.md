@@ -1,6 +1,6 @@
 # @browser-mc/mediabunny-scene-keyframes
 
-## Unreleased
+## 0.1.0
 
 - Update Mediabunny to 1.61.1; retain sequential sample iteration and scene detection behavior.
 

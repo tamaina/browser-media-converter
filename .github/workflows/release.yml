@@ -57,6 +57,7 @@ jobs:
             packages/webcodecs-avif
             packages/video-codec
             packages/browser-image-resizer-ex
+            packages/mediabunny-scene-keyframes
             packages/browser-movie-converter
           )
           mkdir -p .npm-pack

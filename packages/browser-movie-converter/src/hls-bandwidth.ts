@@ -23,3 +23,17 @@ function readPositiveBandwidth(attrs: string): number | null {
   const bandwidth = Number(value);
   return bandwidth > 0 ? bandwidth : null;
 }
+
+// Quality is opaque in Mediabunny's public API. Numeric legacy rates can inform
+// this heuristic; Quality objects use the geometry/audio estimates instead.
+export function estimateHlsFallbackBandwidth(
+  videoBitrate: unknown,
+  resolution: { width: number; height: number } | null,
+  audioBitrates: unknown[],
+): number {
+  const video = typeof videoBitrate === 'number'
+    ? videoBitrate
+    : resolution ? Math.max(150_000, Math.round(resolution.width * resolution.height * 6)) : 1_000_000;
+  const audio = audioBitrates.reduce<number>((sum, bitrate) => sum + (typeof bitrate === 'number' ? bitrate : 128_000), 0);
+  return Math.max(1, video + audio);
+}

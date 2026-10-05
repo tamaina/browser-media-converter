@@ -1,4 +1,4 @@
-import { BufferSource, BufferTarget, Conversion, Input, Mp4InputFormat, Mp4OutputFormat, Output, Quality, VideoSample, VideoSampleSink, VideoSampleSource } from 'mediabunny';
+import { BufferSource, BufferTarget, Conversion, Input, Mp4InputFormat, Mp4OutputFormat, Output, Quality, VideoSample, VideoSampleSink, VideoSampleSource, WebMOutputFormat } from 'mediabunny';
 import { buildMovieConversionOptions } from '../src/index.js';
 
 function check(value: unknown, message: string): asserts value {
@@ -77,6 +77,18 @@ async function run() {
       results.push(settings.name);
     } finally { input.dispose(); }
   }
+
+  const autoInput = new Input({ source: new BufferSource(bytes), formats: [new Mp4InputFormat()] });
+  try {
+    const target = new BufferTarget();
+    const output = new Output({ target, format: new (class extends WebMOutputFormat { override getSupportedVideoCodecs() { return ['vp9' as const]; } })() });
+    const plan = await buildMovieConversionOptions({ input: autoInput, output, sceneDetection: false, quantizer: 60, forceTranscode: true });
+    const conversion = await Conversion.init(plan.options);
+    check(conversion.isValid, 'automatic AVC to VP9 selection');
+    await conversion.execute();
+    check(target.buffer, 'automatic codec output');
+    results.push('automatic output codec quantizer');
+  } finally { autoInput.dispose(); }
 
   // Non-square display pixels must also reach the custom processor normalized.
   const aspectBytes = await fixture(0, true);

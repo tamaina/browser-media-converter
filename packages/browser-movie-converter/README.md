@@ -229,3 +229,5 @@ HLS codec strings and resolution now come from upstream's output metadata. Chrom
 Browser checks can run without a display with `BROWSER_MC_TEST_BROWSER=chromium node test/electron-smoke.mjs` and `BROWSER_MC_TEST_BROWSER=chromium node test/hls-electron-smoke.mjs` from this package. `pnpm test:worker` uses synthetic frames to check rotation/crop/pixel aspect and conversion cancel/error/disposal in a Worker.
 
 `pnpm test:hls:codecs` runs a separate strict decoder-level compatibility assertion. It currently fails on the known upstream AVC declaration/SPS mismatch described above; the ordinary HLS smoke suite records these differences without claiming exact descriptor correctness.
+
+For HLS VOD masters with zero or missing `BANDWIDTH`, the retained fallback is an estimate. Mediabunny's public `Quality` API does not expose explicit bitrate values, so `Quality` objects use geometry and audio estimates. A numeric legacy `bitrate` remains usable when a requested-rate fallback is needed. Positive upstream bandwidth values are preserved.
