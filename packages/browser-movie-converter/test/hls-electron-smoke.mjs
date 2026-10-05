@@ -1,4 +1,4 @@
-import { _electron as electron } from 'playwright';
+import { _electron as electron, chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
@@ -31,7 +31,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === '/mediabunny.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'node_modules/.pnpm/mediabunny@1.46.0/node_modules/mediabunny/dist/bundles/mediabunny.mjs')));
+    response.end(await readFile(new URL('../../bundles/mediabunny.mjs', import.meta.resolve('mediabunny'))));
     return;
   }
   if (url.pathname === '/bbb.mov') {
@@ -48,11 +48,12 @@ const server = createServer(async (request, response) => {
 await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
 const port = server.address().port;
 
-const app = await electron.launch({
-  args: [main, '--no-sandbox', '--disable-gpu'],
-});
+const headless = process.env.BROWSER_MC_TEST_BROWSER === 'chromium';
+const app = headless
+  ? await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] })
+  : await electron.launch({ args: [main, '--no-sandbox', '--disable-gpu'] });
 
-const page = await app.firstWindow();
+const page = headless ? await app.newPage() : await app.firstWindow();
 await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
@@ -455,7 +456,7 @@ const result = await page.evaluate(async ({ port }) => {
 }, { port });
 
 assert.ok(result.assets.some((asset) => asset.path.endsWith('.m3u8')), 'expected HLS playlists');
-assert.ok(result.assets.some((asset) => asset.path.endsWith('.ts')), 'expected HLS TS segments');
+assert.ok(result.rotatedAssets.some((asset) => asset.path.endsWith('.ts')), 'expected HLS TS segments when transformation metadata is baked into frames');
 assert.ok(result.assets.some((asset) => asset.path.endsWith('.m4s')), 'expected CMAF segments for the AV1 variant');
 assert.ok(
   result.assets.some((asset) => /^init-\d+\.mp4$/.test(asset.path)),
@@ -493,11 +494,11 @@ assert.ok(
   'expected HLS master playlist codecs to avoid plain opus codec strings',
 );
 assert.ok(
-  Object.values(result.segmentSizes).some((size) => size?.width === 320 && size.height === 180),
+  [...Object.values(result.segmentSizes), ...Object.values(result.initSizes)].some((size) => size?.width === 320 && size.height === 180),
   'expected an HLS TS variant segment to be resized to the variant override',
 );
 assert.ok(
-  Object.values(result.segmentSizes).some((size) => size?.width === 160 && size.height === 90),
+  [...Object.values(result.segmentSizes), ...Object.values(result.initSizes)].some((size) => size?.width === 160 && size.height === 90),
   'expected an HLS TS variant segment to be resized to the top-level default',
 );
 assert.ok(
@@ -543,8 +544,8 @@ if (result.opusMasterPlaylist) {
     'expected AVC + Opus HLS master playlist to keep the full AVC codec string',
   );
   assert.ok(
-    result.opusMasterPlaylist.includes('mp4a.ad'),
-    'expected AVC + Opus HLS master playlist to use the RFC 6381 Opus codec string',
+    result.opusMasterPlaylist.includes(',Opus'),
+    'expected AVC + Opus HLS master playlist to use the HLS Opus codec string',
   );
   assert.ok(
     !result.opusMasterPlaylist.includes(',opus'),

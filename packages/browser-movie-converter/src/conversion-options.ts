@@ -5,6 +5,7 @@ import {
   getFirstEncodableAudioCodec,
   Input,
   QUALITY_HIGH,
+  Quality,
   VideoSample,
   type AudioCodec,
   type ConversionAudioOptions,
@@ -16,7 +17,6 @@ import {
   type InputTrackQuery,
   type InputVideoTrack,
   type Output,
-  type Quality,
 } from 'mediabunny';
 import {
   planSceneKeyFrames,
@@ -55,7 +55,8 @@ export type BrowserMovieRawChromaSubsampling = 'preserve' | PlanarChromaSubsampl
 export type BrowserMovieVideoOptions = Omit<ConversionVideoOptions, 'process' | 'forceTranscode' | 'width' | 'height' | 'fit' | 'processedWidth' | 'processedHeight'> & {
   /**
    * Mediabunny accepts this in its encoder options, but its conversion option
-   * type does not currently expose it.
+   * type does not currently expose or forward it (including Mediabunny 1.61.1).
+   * This value is a planning hint; it does not guarantee the encoder profile.
    */
   fullCodecString?: string;
 };
@@ -395,6 +396,7 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
   const useNativeResizeTransform = resize
     ? await shouldUseNativeResizeTransform(options.track, options.video)
     : false;
+  const codec = options.video?.codec ?? await options.track.getCodec();
   const outputSize = resize
     ? { width: resize.width, height: resize.height }
     : {
@@ -405,6 +407,7 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
   return {
     options: makeVideoOptions({
       base: options.video,
+      codec,
       outputSize,
       resize,
       sourceCodecSettings,
@@ -423,7 +426,7 @@ export async function buildMovieVideoConversionOptions(options: BrowserMovieVide
 }
 
 export async function buildMovieAudioConversionOptions(options: BrowserMovieAudioConversionOptionsInput): Promise<BrowserMovieAudioConversionPlan> {
-  const base = omitAudioFallbackCodecs(options.audio);
+  const base = normalizeEncodingQuality(omitAudioFallbackCodecs(options.audio));
   if (base.discard) {
     return {
       options: base,
@@ -464,7 +467,7 @@ export async function buildMovieAudioConversionOptions(options: BrowserMovieAudi
   const resolvedCodec = await getFirstEncodableAudioCodec(fallbackCodecs, {
     numberOfChannels: target.numberOfChannels,
     sampleRate: target.sampleRate,
-    bitrate: target.bitrate,
+    ...normalizeEncodingQuality({ bitrate: target.bitrate }),
   });
 
   if (!resolvedCodec) {
@@ -553,7 +556,7 @@ export async function checkMovieAudioEncoderConfigSupport(
       supported: await canEncodeAudio(config.codec, {
         numberOfChannels: config.numberOfChannels,
         sampleRate: config.sampleRate,
-        bitrate: config.bitrate,
+        ...normalizeEncodingQuality({ bitrate: config.bitrate }),
       }),
       config,
       error: null,
@@ -574,7 +577,7 @@ export async function checkMovieAudioEncoderSupport(
   const encodableCodecs = await getEncodableAudioCodecs(codecs, {
     numberOfChannels: options.numberOfChannels,
     sampleRate: options.sampleRate,
-    bitrate: options.bitrate,
+    ...normalizeEncodingQuality({ bitrate: options.bitrate }),
   });
 
   return Promise.all(codecs.map(async (codec) => {
@@ -740,6 +743,7 @@ export async function getSelectedAudioTracks(input: Input, tracks: NonNullable<C
 
 function makeVideoOptions(options: {
   base?: BrowserMovieVideoOptions;
+  codec: string | null;
   outputSize: { width: number; height: number };
   resize: ResolvedMovieResize | null;
   sourceCodecSettings: SourceVideoCodecSettings;
@@ -749,7 +753,7 @@ function makeVideoOptions(options: {
   forceTranscode?: boolean;
   colorMetadata: BrowserMovieColorMetadataPolicy;
 }): ConversionVideoOptions {
-  const quantizer = normalizeQuantizerOptions(options.quantizer);
+  const quantizer = normalizeQuantizerOptions(options.quantizer, options.codec);
   const keyFrameInterval = options.base?.keyFrameInterval;
   const intervalKeyFrames = quantizer?.split && keyFrameInterval !== undefined
     ? new IntervalKeyFrameDetector(keyFrameInterval)
@@ -781,7 +785,7 @@ function makeVideoOptions(options: {
   });
 
   return {
-    ...base,
+    ...normalizeEncodingQuality(base),
     ...(fullCodecString ? { fullCodecString } : {}),
     ...(options.resize && options.useNativeResizeTransform
       ? { width: options.resize.width, height: options.resize.height, fit: 'fill' as const }
@@ -957,21 +961,22 @@ class IntervalKeyFrameDetector {
   }
 }
 
-function normalizeQuantizerOptions(quantizer: BrowserMovieQuantizerOptions | undefined): NormalizedMovieQuantizer | null {
+function normalizeQuantizerOptions(quantizer: BrowserMovieQuantizerOptions | undefined, codec: string | null): NormalizedMovieQuantizer | null {
+  const maximum = codec === 'avc' || codec === 'hevc' ? 51 : codec === 'av1' ? 255 : 63;
   if (quantizer === undefined) return null;
   if (typeof quantizer === 'number') {
-    return { all: validateQuantizer(quantizer, 'quantizer'), split: false };
+    return { all: validateQuantizer(quantizer, 'quantizer', maximum), split: false };
   }
   return {
-    keyFrame: quantizer.keyFrame === undefined ? undefined : validateQuantizer(quantizer.keyFrame, 'quantizer.keyFrame'),
-    deltaFrame: quantizer.deltaFrame === undefined ? undefined : validateQuantizer(quantizer.deltaFrame, 'quantizer.deltaFrame'),
+    keyFrame: quantizer.keyFrame === undefined ? undefined : validateQuantizer(quantizer.keyFrame, 'quantizer.keyFrame', maximum),
+    deltaFrame: quantizer.deltaFrame === undefined ? undefined : validateQuantizer(quantizer.deltaFrame, 'quantizer.deltaFrame', maximum),
     split: true,
   };
 }
 
-function validateQuantizer(value: number, name: string) {
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 63) {
-    throw new RangeError(`${name} must be an integer from 0 to 63.`);
+function validateQuantizer(value: number, name: string, maximum: number) {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > maximum) {
+    throw new RangeError(`${name} must be an integer from 0 to ${maximum}.`);
   }
   return value;
 }
@@ -980,6 +985,19 @@ function validatePositiveNumber(value: number, name: string) {
   if (!Number.isFinite(value) || value <= 0) {
     throw new RangeError(`${name} must be a positive finite number.`);
   }
+}
+
+// Keep legacy public bitrate options, but pass exactly one quality field upstream.
+function normalizeEncodingQuality<T extends { quality?: Quality; bitrate?: number | Quality }>(base: T | undefined): T {
+  const rest = { ...base } as T;
+  if (rest.quality !== undefined && rest.bitrate !== undefined) {
+    throw new TypeError('quality and bitrate cannot both be provided.');
+  }
+  if (rest.bitrate !== undefined) {
+    rest.quality = rest.bitrate instanceof Quality ? rest.bitrate : new Quality({ bitrate: rest.bitrate });
+    delete rest.bitrate;
+  }
+  return rest;
 }
 
 function omitKeyFrameInterval(
@@ -1009,7 +1027,7 @@ async function inspectAudioTrackEncodingTarget(
     sampleRate: options.process && options.processedSampleRate
       ? options.processedSampleRate
       : (options.sampleRate ?? await track.getSampleRate()),
-    bitrate: options.bitrate ?? QUALITY_HIGH,
+    bitrate: options.quality ?? options.bitrate ?? QUALITY_HIGH,
   };
 }
 

@@ -26,6 +26,7 @@ import {
   Mp4OutputFormat,
   Output,
   QuickTimeInputFormat,
+  Quality,
 } from 'mediabunny';
 import {
   buildMovieConversionOptions,
@@ -49,7 +50,7 @@ const plan = await buildMovieConversionOptions({
   },
   video: {
     codec: 'avc',
-    bitrate: { quality: 0.75 },
+    quality: new Quality(0.75),
   },
   resize: {
     width: 1280,
@@ -198,7 +199,7 @@ const plan = await buildMovieConversionOptions({
 });
 ```
 
-It accepts either a single integer or `{ keyFrame, deltaFrame }`. Lower values preserve more quality, and higher values compress more aggressively. Values must be integers from 0 to 63.
+It accepts either a single integer or `{ keyFrame, deltaFrame }`. Lower values preserve more quality, and higher values compress more aggressively. Values must be integers from 0 to 51 for AVC/HEVC, 0 to 63 for VP9, or 0 to 255 for AV1.
 
 When using `quantizer`, still set `video.bitrate` as a compatibility hint. Mediabunny uses bitrate, not quantizer values, when choosing the AVC/H.264 level for the generated codec string.
 
@@ -216,3 +217,13 @@ When split `quantizer` values are used with `keyFrameInterval`, the interval is 
 - Scene detection defaults to `sampleRate: 'all'`, so every decoded video sample is considered while conversion runs. Detected scene samples are marked immediately with Mediabunny `VideoSample` encode options to force key frames.
 - `colorMetadata: 'preserve'` copies the source sample's `VideoColorSpace` metadata to CPU-resized planar samples. Canvas-resized samples use the generated frame color space. `colorMetadata: 'canvas-sdr'` draws frames through an sRGB Canvas path and marks output samples as BT.709 SDR; it is a practical browser conversion path, not a dedicated HDR tone-mapping engine.
 - For browser tests with H.264/AAC material, use a browser build that has proprietary codec support, such as installed Chrome/Electron rather than Playwright's bundled Chromium.
+
+### Mediabunny 1.61 compatibility
+
+Legacy numeric `bitrate` and `bitrate: QUALITY_HIGH` options remain accepted. The planner maps them to Mediabunny `Quality` objects; do not supply both `quality` and `bitrate`.
+
+`fullCodecString` remains a planning hint. Mediabunny 1.61.1's `Conversion` does not forward this field to its encoder, so it cannot guarantee the requested profile or bit depth. Encoder support probes check the requested string separately. The CPU planar/HDR resize and scene detection paths remain in place.
+
+HLS codec strings and resolution now come from the actual upstream output. Opus uses `Opus`. A fallback still repairs zero or missing `BANDWIDTH` values in multi-variant VOD output while preserving positive upstream values. Upstream may select CMAF for AVC/HEVC tracks carrying transformation metadata; enable only `mpegts` when TS output is required and the selected codecs fit TS.
+
+Browser checks can run without a display with `BROWSER_MC_TEST_BROWSER=chromium node test/electron-smoke.mjs` and `BROWSER_MC_TEST_BROWSER=chromium node test/hls-electron-smoke.mjs` from this package. `pnpm test:worker` uses synthetic frames to check rotation/crop/pixel aspect and conversion cancel/error/disposal in a Worker.

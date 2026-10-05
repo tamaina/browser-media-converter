@@ -1,4 +1,4 @@
-import { _electron as electron } from 'playwright';
+import { _electron as electron, chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
@@ -31,7 +31,7 @@ const server = createServer(async (request, response) => {
   }
   if (url.pathname === '/mediabunny.js') {
     response.setHeader('content-type', 'text/javascript');
-    response.end(await readFile(resolve(root, 'node_modules/.pnpm/mediabunny@1.46.0/node_modules/mediabunny/dist/bundles/mediabunny.mjs')));
+    response.end(await readFile(new URL('../../bundles/mediabunny.mjs', import.meta.resolve('mediabunny'))));
     return;
   }
   if (url.pathname === '/bbb.mov') {
@@ -48,11 +48,12 @@ const server = createServer(async (request, response) => {
 await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
 const port = server.address().port;
 
-const app = await electron.launch({
-  args: [main, '--no-sandbox', '--disable-gpu'],
-});
+const headless = process.env.BROWSER_MC_TEST_BROWSER === 'chromium';
+const app = headless
+  ? await chromium.launch({ args: ['--no-sandbox', '--disable-gpu'] })
+  : await electron.launch({ args: [main, '--no-sandbox', '--disable-gpu'] });
 
-const page = await app.firstWindow();
+const page = headless ? await app.newPage() : await app.firstWindow();
 await page.goto(`http://127.0.0.1:${port}/`);
 
 const result = await page.evaluate(async ({ port }) => {
@@ -637,11 +638,11 @@ assert.deepEqual(
   'expected single quantizer to preserve Mediabunny keyFrameInterval',
 );
 assert.deepEqual(result.invalidQuantizerErrors, [
-  'quantizer must be an integer from 0 to 63.',
-  'quantizer must be an integer from 0 to 63.',
-  'quantizer must be an integer from 0 to 63.',
-  'quantizer must be an integer from 0 to 63.',
-  'quantizer.keyFrame must be an integer from 0 to 63.',
+  'quantizer must be an integer from 0 to 51.',
+  'quantizer must be an integer from 0 to 51.',
+  'quantizer must be an integer from 0 to 51.',
+  'quantizer must be an integer from 0 to 51.',
+  'quantizer.keyFrame must be an integer from 0 to 51.',
 ]);
 for (const timestamp of result.scenePlan.keyFrameTimestamps) {
   assert.ok(
