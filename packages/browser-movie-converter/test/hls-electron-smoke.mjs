@@ -442,6 +442,7 @@ const result = await page.evaluate(async ({ port }) => {
     return {
       width: await track.getDisplayWidth(),
       height: await track.getDisplayHeight(),
+      codecString: await track.getCodecParameterString(),
     };
   }
 
@@ -485,6 +486,24 @@ assert.ok(
   masterPlaylist.includes('RESOLUTION=160x90'),
   'expected HLS output to use top-level resize defaults',
 );
+const declaredCodecs = [...masterPlaylist.matchAll(/CODECS="([^"]+)"/g)].flatMap(match => match[1].split(','));
+for (const size of [...Object.values(result.segmentSizes), ...Object.values(result.initSizes)]) {
+  if (!size?.codecString) continue;
+  const actual = size.codecString;
+  const compatible = declaredCodecs.some(declared => {
+    if (actual.startsWith('avc1.') && declared.startsWith('avc1.')) {
+      // Chromium's config codec may advertise fewer constraints and a higher
+      // level than the actual SPS, both valid declarations for the stream.
+      const actualConstraints = parseInt(actual.slice(7, 9), 16);
+      const declaredConstraints = parseInt(declared.slice(7, 9), 16);
+      return actual.slice(0, 7) === declared.slice(0, 7)
+        && (actualConstraints & declaredConstraints) === declaredConstraints
+        && parseInt(actual.slice(9, 11), 16) <= parseInt(declared.slice(9, 11), 16);
+    }
+    return actual === declared;
+  });
+  assert.ok(compatible, `expected a compatible HLS declaration for actual codec ${actual}`);
+}
 assert.ok(
   !/BANDWIDTH=0(?:,|$)/.test(masterPlaylist),
   'expected HLS master playlist bandwidth values to be positive',

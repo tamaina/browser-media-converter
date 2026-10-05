@@ -851,7 +851,7 @@ async function shouldUseNativeResizeTransform(
 ) {
   const innateRotation = await track.getRotation();
   const totalRotation = normalizeRotation(innateRotation + (base?.rotate ?? 0));
-  if (totalRotation !== 0) return true;
+  if (totalRotation !== 0 || innateRotation !== 0) return true;
   if (base?.crop) return true;
 
   return (await track.getSquarePixelWidth()) !== (await track.getCodedWidth())

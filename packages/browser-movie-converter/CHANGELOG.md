@@ -4,6 +4,7 @@
 
 - Update Mediabunny to 1.61.1; preserve legacy bitrate options through Quality mapping and validate codec-specific quantizer ranges.
 - Remove planned CODECS/RESOLUTION rewriting; use upstream output codec metadata including HLS `Opus`. Retain a narrow fallback for zero/missing VOD BANDWIDTH and the geometry safeguard for custom planar processing.
+- Preserve the native geometry safeguard when an added rotation cancels input rotation.
 - Add quality/quantizer and synthetic Worker lifecycle/geometry regression tests. Document the upstream fullCodecString forwarding limitation.
 
 ## 1.3.0

@@ -31,6 +31,7 @@ async function run() {
   for (const settings of [
     { name: 'metadata rotation', video: { codec: 'avc' as const }, width: 32, height: 48, expected: [32, 48] },
     { name: 'rotation then crop', video: { codec: 'avc' as const, crop: { left: 0, top: 0, width: 64, height: 48 } }, width: 32, height: 24, expected: [32, 24] },
+    { name: 'cancel innate rotation', video: { codec: 'avc' as const, rotate: 270 as const }, width: 48, height: 32, expected: [48, 32] },
     { name: 'additional rotation', video: { codec: 'avc' as const, rotate: 90 as const }, width: 48, height: 32, expected: [48, 32] },
   ]) {
     const input = new Input({ source: new BufferSource(bytes), formats: [new Mp4InputFormat()] });
