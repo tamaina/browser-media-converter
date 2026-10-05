@@ -571,14 +571,10 @@ if (result.opusMasterPlaylist) {
     result.opusMasterPlaylist.includes('CODECS="avc1.'),
     'expected AVC + Opus HLS master playlist to keep the full AVC codec string',
   );
-  assert.ok(
-    result.opusMasterPlaylist.includes(',Opus'),
-    'expected AVC + Opus HLS master playlist to use the HLS Opus codec string',
-  );
-  assert.ok(
-    !result.opusMasterPlaylist.includes(',opus'),
-    'expected AVC + Opus HLS master playlist not to emit plain opus',
-  );
+  const opusCodecTokens = [...result.opusMasterPlaylist.matchAll(/CODECS="([^"]*)"/g)].flatMap(match => match[1].split(','));
+  assert.ok(opusCodecTokens.includes('Opus'), 'expected an exact HLS Opus codec token');
+  assert.ok(!opusCodecTokens.includes('opus'), 'expected no WebCodecs lowercase opus token in HLS');
+  assert.ok(!opusCodecTokens.includes('mp4a.ad'), 'expected no obsolete mp4a.ad Opus rewrite');
 }
 const rotatedMasterPlaylist = result.rotatedAssets.find((asset) => asset.path === 'master.m3u8')?.preview ?? '';
 assert.ok(

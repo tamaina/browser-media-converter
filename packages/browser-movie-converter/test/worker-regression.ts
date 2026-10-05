@@ -5,18 +5,18 @@ function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
-async function fixture(rotation: 0 | 90, aspect = false) {
+async function fixture(rotation: 0 | 90, aspect = false, width = 96, height = 64) {
   const target = new BufferTarget();
   const output = new Output({ target, format: new Mp4OutputFormat() });
   const source = new VideoSampleSource({ codec: 'avc', quality: new Quality({ bitrate: 400_000 }) });
   output.addVideoTrack(source, { rotation });
   await output.start();
-  const canvas = new OffscreenCanvas(96, 64);
+  const canvas = new OffscreenCanvas(width, height);
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, 48, 64);
-  ctx.fillStyle = '#0000ff'; ctx.fillRect(48, 0, 48, 64);
+  ctx.fillStyle = '#ff0000'; ctx.fillRect(0, 0, width / 2, height);
+  ctx.fillStyle = '#0000ff'; ctx.fillRect(width / 2, 0, width / 2, height);
   for (let n = 0; n < 4; n++) {
-    const frame = new VideoFrame(canvas, { timestamp: n * 100_000, duration: 100_000, ...(aspect ? { displayWidth: 192, displayHeight: 64 } : {}) });
+    const frame = new VideoFrame(canvas, { timestamp: n * 100_000, duration: 100_000, ...(aspect ? { displayWidth: width * 2, displayHeight: height } : {}) });
     const sample = new VideoSample(frame);
     try { await source.add(sample); } finally { sample.close(); }
   }
@@ -27,14 +27,16 @@ async function fixture(rotation: 0 | 90, aspect = false) {
 
 async function run() {
   const bytes = await fixture(90);
+  const largeBytes = await fixture(90, false, 1920, 1080);
   const results = [];
   for (const settings of [
     { name: 'metadata rotation', video: { codec: 'avc' as const }, width: 32, height: 48, expected: [32, 48] },
+    { name: 'large metadata rotation', video: { codec: 'avc' as const, bitrate: 3_000_000 }, width: 720, height: 1280, expected: [720, 1280] },
     { name: 'rotation then crop', video: { codec: 'avc' as const, crop: { left: 0, top: 0, width: 64, height: 48 } }, width: 32, height: 24, expected: [32, 24] },
     { name: 'cancel innate rotation', video: { codec: 'avc' as const, rotate: 270 as const }, width: 48, height: 32, expected: [48, 32] },
     { name: 'additional rotation', video: { codec: 'avc' as const, rotate: 90 as const }, width: 48, height: 32, expected: [48, 32] },
   ]) {
-    const input = new Input({ source: new BufferSource(bytes), formats: [new Mp4InputFormat()] });
+    const input = new Input({ source: new BufferSource(settings.name === 'large metadata rotation' ? largeBytes : bytes), formats: [new Mp4InputFormat()] });
     const target = new BufferTarget();
     const output = new Output({ target, format: new Mp4OutputFormat() });
     try {
