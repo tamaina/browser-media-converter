@@ -1,13 +1,20 @@
-# Experimental planar YUV → row-wise XYB → JPEG XL
+# Experimental planar YUV → XYB → JPEG XL
+
+The current version adds a **fused Highway SIMD SDR path**, retaining the prior
+row implementation for HDR/wide-gamut fallback and comparison. Start with
+[SIMD.md](SIMD.md) for current coverage, native CPU requirements, commands and
+measurements. The sections below document the retained row reference and its
+historical scalar measurements at commit `6b5620f`.
 
 Executable native proof, isolated from the production package. Rust validates and
 owns YUV planes; a small C++ bridge feeds reconstructed rows into a patched
-libjxl encoder. The libjxl patch changes three files, pinned to
+libjxl encoder. The libjxl patch is pinned to the following source revision; the current fused
+extension additionally changes `enc_xyb.h` and `enc_xyb.cc`:
 [v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc](https://github.com/libjxl/libjxl/tree/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc).
 The previous [float RGB reference prototype](../jxl-planar-hdr/README.md) and
 [direct BT.601 YCbCr prototype](../jxl-direct/README.md) remain unchanged.
 
-This is row-level fusion, **not a single fused SIMD kernel or RGB-free math**.
+The retained fallback is row-level fusion, **not a single fused SIMD kernel or RGB-free math**.
 It produces normal lossy XYB/VarDCT JXL at distance 1, effort 3. Source chroma
 subsampling is reconstructed before XYB and does not survive as subsampled
 YCbCr in the codestream. The advertised image sample type remains float32
@@ -82,7 +89,8 @@ the bridge fixes the accepted still-image configuration.
 
 Requires native Rust, g++/gcc, CMake, Git, patch, Python, Brotli and LCMS2 development
 libraries. A stock libjxl 0.11 runtime is used by the independent C++ decoder.
-One build job and scalar `-O1` libjxl reduce build memory pressure;
+The historical measurements below used scalar `-O1` libjxl. The current build
+uses x86-64-v3 AVX2; see SIMD.md. All builds use one job to reduce memory pressure;
 no SIMD speed claim follows from these measurements.
 
 ```sh
@@ -105,7 +113,10 @@ Emscripten/Wasm has not been built in this environment (no `emcc` or installed
 Rust Emscripten target). Reuse of libjxl Highway remains preferable to rewriting
 its SIMD core in Rust; this proof's Rust reconstruction is scalar.
 
-## Observations and limits
+## Historical scalar row observations and limits
+
+These observations belong to commit `6b5620f`, preserved in `observations.json`.
+Current fused results are in `simd-observations.json` and SIMD.md.
 
 Native tests: 4 methods, 252 format/profile/range/dimension fixtures, plus 2 HDR
 ramps and validation/ownership checks. Dimensions 1×1, 17×9 and 32×18 cover odd

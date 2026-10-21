@@ -12,7 +12,7 @@ class Input(C.Structure):
 class Config(C.Structure):
     _fields_=[(x,C.c_uint32) for x in ("width","height","primaries","transfer")]+[("intensity",C.c_float)]
 class Encoded(C.Structure):
-    _fields_=[("data",C.POINTER(C.c_uint8))]+[(x,C.c_size_t) for x in ("size","callbacks","peak_rgb_bytes")]+[("xyb_hash",C.c_uint64),("xyb_data",C.POINTER(C.c_float)),("xyb_count",C.c_size_t)]
+    _fields_=[("data",C.POINTER(C.c_uint8))]+[(x,C.c_size_t) for x in ("size","callbacks","peak_rgb_bytes")]+[("xyb_hash",C.c_uint64),("xyb_data",C.POINTER(C.c_float)),("xyb_count",C.c_size_t),("conversion_ms",C.c_double),("simd_lanes",C.c_size_t)]
 def library():
     lib=C.CDLL(str(ROOT/"build/target/release/libjxl_planar_xyb_proof.so"))
     lib.planar_create.argtypes=[C.POINTER(Input),C.POINTER(C.c_void_p),C.c_char_p,C.c_size_t]
@@ -55,7 +55,7 @@ def create(lib,inp):
     return handle
 def finish(lib,result,start):
     try:
-        return C.string_at(result.data,result.size),dict(size=result.size,callbacks=result.callbacks,peak_rgb_bytes=result.peak_rgb_bytes,xyb_hash=result.xyb_hash,xyb=list(result.xyb_data[:result.xyb_count]),encode_ms=round((time.perf_counter()-start)*1000,3))
+        return C.string_at(result.data,result.size),dict(size=result.size,callbacks=result.callbacks,peak_rgb_bytes=result.peak_rgb_bytes,conversion_ms=result.conversion_ms,simd_lanes=result.simd_lanes,xyb_hash=result.xyb_hash,xyb=list(result.xyb_data[:result.xyb_count]),encode_ms=round((time.perf_counter()-start)*1000,3))
     finally: lib.planar_free(C.byref(result))
 def encode(inp):
     lib=library(); start=time.perf_counter(); handle=create(lib,inp)

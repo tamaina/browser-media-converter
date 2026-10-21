@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <vector>
 struct Config { uint32_t width,height,primaries,transfer; float intensity; };
-struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; };
+struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
 struct Source {
   void* opaque; Fill fill; Encoded& result;
@@ -57,7 +57,7 @@ static void release(void* opaque,const void* p) noexcept {
   auto& s=*static_cast<Source*>(opaque); auto it=s.buffers.find(p);
   if(it!=s.buffers.end()) { s.live-=it->second.size()*sizeof(float); s.buffers.erase(it); }
 }
-extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float* rgb,
+extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
                                Encoded* result,char* error,size_t error_size) {
   if(!c || !result || (!fill && !rgb)) return 1;
   *result={}; result->xyb_hash=14695981039346656037ULL;
@@ -99,6 +99,11 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
       input.get_color_channel_data_at=get; input.release_buffer=release;
       input.experimental_fill_row=observed_reference?nullptr:row;
       input.experimental_observe_xyb=observe;
+      input.experimental_conversion_ms=&result->conversion_ms;
+      input.experimental_simd_lanes=&result->simd_lanes;
+      input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
+      if(input.experimental_yuv && c->primaries==1 && c->transfer==13)
+        input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
       if(source.failed) throw std::runtime_error("planar region conversion failed");
     }

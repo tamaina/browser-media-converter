@@ -52,6 +52,28 @@ pub struct Encoded {
     xyb_hash: u64,
     xyb_data: *mut f32,
     xyb_count: usize,
+    conversion_ms: f64,
+    simd_lanes: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KernelPlane {
+    data: *const u8,
+    size: usize,
+    stride: usize,
+    width: usize,
+    height: usize,
+}
+#[repr(C)]
+struct KernelYuv {
+    planes: [KernelPlane; 3],
+    width: u32,
+    height: u32,
+    depth: u32,
+    matrix: u32,
+    full_range: u32,
+    sx: u32,
+    sy: u32,
 }
 type Fill = unsafe extern "C" fn(*mut c_void, usize, usize, usize, usize, *mut f32, usize) -> i32;
 unsafe extern "C" {
@@ -60,6 +82,7 @@ unsafe extern "C" {
         opaque: *mut c_void,
         fill: Option<Fill>,
         rgb: *const f32,
+        yuv: *const KernelYuv,
         out: *mut Encoded,
         error: *mut c_char,
         n: usize,
@@ -433,11 +456,32 @@ pub unsafe extern "C" fn planar_encode(
     }
     // SAFETY: synchronous bridge borrows session until all callbacks complete.
     unsafe {
+        let s = &*session;
+        let yuv = KernelYuv {
+            planes: std::array::from_fn(|c| {
+                let p = &s.planes[c];
+                KernelPlane {
+                    data: p.bytes.as_ptr(),
+                    size: p.bytes.len(),
+                    stride: p.stride,
+                    width: p.width,
+                    height: p.height,
+                }
+            }),
+            width: s.config.width,
+            height: s.config.height,
+            depth: s.depth,
+            matrix: s.matrix,
+            full_range: u32::from(s.full),
+            sx: s.sx as u32,
+            sy: s.sy as u32,
+        };
         hdr_jxl_encode(
             &(*session).config,
             session.cast(),
             Some(fill),
             std::ptr::null(),
+            &yuv,
             out,
             error,
             n,
@@ -479,7 +523,18 @@ pub unsafe extern "C" fn rgb_encode(
     if validation != 0 {
         return validation;
     }
-    unsafe { hdr_jxl_encode(config, std::ptr::null_mut(), None, rgb, out, error, n) }
+    unsafe {
+        hdr_jxl_encode(
+            config,
+            std::ptr::null_mut(),
+            None,
+            rgb,
+            std::ptr::null(),
+            out,
+            error,
+            n,
+        )
+    }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_free(out: *mut Encoded) {

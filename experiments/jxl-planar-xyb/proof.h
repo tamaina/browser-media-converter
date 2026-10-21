@@ -14,7 +14,7 @@ typedef struct {
 // matrix=1 BT709,6 BT601,9 BT2020-NCL; primaries=1 BT709,11 P3,9 BT2020.
 // transfer=1 BT709,13 sRGB,16 PQ,18 HLG. See README for supported pairs.
 typedef struct { uint32_t width,height,primaries,transfer; float intensity; } PlanarRgbConfig;
-typedef struct { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; } PlanarEncoded;
+typedef struct { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; } PlanarEncoded;
 typedef struct PlanarSession PlanarSession;
 // All caller pointer/length pairs must be valid. create copies admitted samples;
 // the session owns them. One caller at a time per session; no concurrent destroy.

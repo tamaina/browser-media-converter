@@ -46,8 +46,12 @@ fn main() {
     println!("cargo:rustc-link-lib=static=hdr_bridge");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-arg={library}");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", PathBuf::from(&library).parent().unwrap().display());
+    println!(
+        "cargo:rustc-link-arg=-Wl,-rpath,{}",
+        PathBuf::from(&library).parent().unwrap().display()
+    );
     println!("cargo:rerun-if-changed=bridge.cc");
+    println!("cargo:rerun-if-changed={include}/jxl/encode.h");
     println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
     println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
 }
