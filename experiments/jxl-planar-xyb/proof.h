@@ -1,0 +1,29 @@
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+typedef struct { const uint8_t* data; size_t size,offset,stride,width,height; } PlanarPlane;
+typedef struct {
+  uint32_t width,height,format,depth,storage,matrix,primaries,transfer,full_range,centered,origin_x,origin_y;
+  float intensity;
+  PlanarPlane planes[3];
+} PlanarInput;
+// format=0 I420,1 I422,2 I444,3 NV12; storage=0 U8,1 U16LE low bits.
+// matrix=1 BT709,6 BT601,9 BT2020-NCL; primaries=1 BT709,11 P3,9 BT2020.
+// transfer=1 BT709,13 sRGB,16 PQ,18 HLG. See README for supported pairs.
+typedef struct { uint32_t width,height,primaries,transfer; float intensity; } PlanarRgbConfig;
+typedef struct { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; } PlanarEncoded;
+typedef struct PlanarSession PlanarSession;
+// All caller pointer/length pairs must be valid. create copies admitted samples;
+// the session owns them. One caller at a time per session; no concurrent destroy.
+int planar_create(const PlanarInput*,PlanarSession**,char* error,size_t error_size);
+void planar_destroy(PlanarSession*);
+int planar_region(PlanarSession*,size_t x,size_t y,size_t width,size_t height,float* rgb,size_t float_count);
+int planar_encode(PlanarSession*,PlanarEncoded*,char* error,size_t error_size);
+int rgb_encode(const PlanarRgbConfig*,const float* rgb,size_t float_count,PlanarEncoded*,char* error,size_t error_size);
+void planar_free(PlanarEncoded*);
+#ifdef __cplusplus
+}
+#endif

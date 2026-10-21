@@ -1,0 +1,88 @@
+diff --git a/lib/include/jxl/encode.h b/lib/include/jxl/encode.h
+index 633a98e..8434f8d 100644
+--- a/lib/include/jxl/encode.h
++++ b/lib/include/jxl/encode.h
+@@ -932,6 +932,15 @@ struct JxlChunkedFrameInputSource {
+    * `get_extra_channel_data_at`
+    */
+   void (*release_buffer)(void* opaque, const void* buf);
++
++  // EXPERIMENT ONLY: ABI extension, not an upstream API. Callbacks remain live
++  // through ProcessOutput. Three aligned planar nonlinear RGB rows are filled
++  // from the caller's YUV planes; the encoder transforms them immediately.
++  int (*experimental_fill_row)(void*, size_t x, size_t y, size_t width,
++                               float* r, float* g, float* b);
++  void (*experimental_observe_xyb)(void*, size_t y, size_t width,
++                                   const float* x, const float* l, const float* b);
++
+ };
+ 
+ /**
+diff --git a/lib/jxl/enc_frame.cc b/lib/jxl/enc_frame.cc
+index 66d1a5e..3b89df4 100644
+--- a/lib/jxl/enc_frame.cc
++++ b/lib/jxl/enc_frame.cc
+@@ -1508,7 +1508,12 @@ Status ComputeEncodingData(
+   ImageF* black = black_eci ? &extra_channels[black_idx] : nullptr;
+   bool has_interleaved_alpha = false;
+   JxlChunkedFrameInputSource input = frame_data.GetInputSource();
+-  if (!jpeg_data) {
++  JXL_ENSURE(!input.experimental_fill_row ||
++      (frame_header.color_transform == ColorTransform::kXYB &&
++       frame_info.ib_needs_color_transform && !jpeg_data &&
++       num_extra_channels == 0 && cparams.speed_tier > SpeedTier::kKitten));
++
++  if (!jpeg_data && !input.experimental_fill_row) {
+     JXL_RETURN_IF_ERROR(CopyColorChannels(input, patch_rect, frame_info,
+                                           metadata->m, pool, &color, alpha,
+                                           &has_interleaved_alpha));
+@@ -1532,8 +1537,33 @@ Status ComputeEncodingData(
+                                              patch_rect.ysize()));
+         linear = &linear_storage;
+       }
++      if (input.experimental_fill_row) {
++        // Bounded row scratch. The full color allocation holds only final XYB;
++        // no full nonlinear/linear RGB image is constructed by this path.
++        JXL_ENSURE(!black && !linear && num_extra_channels == 0);
++        JXL_ASSIGN_OR_RETURN(Image3F row,
++                             Image3F::Create(memory_manager, color.xsize(), 1));
++        for (size_t y = 0; y < color.ysize(); ++y) {
++          JXL_ENSURE(input.experimental_fill_row(input.opaque, patch_rect.x0(),
++              patch_rect.y0() + y, color.xsize(), row.PlaneRow(0, 0),
++              row.PlaneRow(1, 0), row.PlaneRow(2, 0)) == 0);
++          JXL_RETURN_IF_ERROR(ToXYB(c_enc, metadata->m.IntensityTarget(), nullptr,
++                                    nullptr, &row, cms, nullptr));
++          for (size_t c = 0; c < 3; ++c) {
++            std::copy_n(row.PlaneRow(c, 0), color.xsize(), color.PlaneRow(c, y));
++          }
++        }
++      } else {
+       JXL_RETURN_IF_ERROR(ToXYB(c_enc, metadata->m.IntensityTarget(), black,
+                                 pool, &color, cms, linear));
++      }
++      if (input.experimental_observe_xyb) {
++        for (size_t y = 0; y < color.ysize(); ++y) {
++          input.experimental_observe_xyb(input.opaque, patch_rect.y0() + y,
++              color.xsize(), color.PlaneRow(0, y), color.PlaneRow(1, y),
++              color.PlaneRow(2, y));
++        }
++      }
+     } else {
+       // Nothing to do.
+       // RGB or YCbCr: forward YCbCr is not implemented, this is only used when
+diff --git a/lib/jxl/encode_internal.h b/lib/jxl/encode_internal.h
+index 16ddd32..7f30189 100644
+--- a/lib/jxl/encode_internal.h
++++ b/lib/jxl/encode_internal.h
+@@ -242,6 +242,11 @@ class JxlEncoderChunkedFrameAdapter {
+   }
+ 
+   bool CopyBuffers() {
++    // Experimental synchronous borrowed source; caller retains its owner until
++    // ProcessOutput completes. Avoid the normal full-frame RGB input copy.
++    if (has_input_source_ && (input_source_.experimental_fill_row ||
++                              input_source_.experimental_observe_xyb)) return true;
++
+     if (has_input_source_) {
+       JxlPixelFormat format{4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
+       input_source_.get_color_channels_pixel_format(input_source_.opaque,

@@ -1,0 +1,71 @@
+{
+  "libjxl_revision": "794a5dcf0d54f9f0b20d288a12e87afb91d20dfc",
+  "build": "native x86_64 scalar -O1 single job",
+  "distance": 1,
+  "effort": 3,
+  "tests": [
+    {
+      "cases": 252,
+      "xyb_max_absolute_error": 0.0,
+      "xyb_bit_hash_equal": true,
+      "codestream_identical": true,
+      "max_decoder_difference": 0.384024977684021,
+      "max_lossy_code_error": 0.526245966553688,
+      "peak_test_rgb_scratch_bytes": 768,
+      "decoder_error_by_profile": {
+        "709-srgb": 8.690357208251953e-05,
+        "601-709": 2.7418136596679688e-06,
+        "p3": 8.654594421386719e-05,
+        "pq": 0.384024977684021,
+        "hlg": 1.3113021850585938e-06
+      }
+    },
+    {
+      "hdr_neutral_observations": {
+        "pq": {
+          "max_nits_error": 14.4070703219204
+        },
+        "hlg": {
+          "max_scene_error": 0.0016837494575264733
+        }
+      }
+    }
+  ],
+  "benchmark": {
+    "width": 513,
+    "height": 257,
+    "format": "I420P12",
+    "profile": "BT2020 PQ",
+    "output_bytes": 80462,
+    "callbacks": 257,
+    "tracked_rgb_scratch_bytes": 12312,
+    "cms_scratch_tracked": false,
+    "cli_ms": [
+      268.375,
+      266.275,
+      266.472
+    ],
+    "max_rss_kib": [
+      27996,
+      27744,
+      27996
+    ],
+    "comparison_planar_ms": [
+      265.387,
+      267.157,
+      266.715
+    ],
+    "comparison_rgb_ms": [
+      64.903,
+      63.953,
+      64.632
+    ],
+    "comparison_bytes_identical": true
+  },
+  "limitations": [
+    "row RGB scratch remains; not a single fused SIMD kernel",
+    "full YUV ownership and XYB/codec frame storage remain",
+    "decoder PQ gamut/output policies differ; no production HDR correctness signoff",
+    "scalar native only; no browser/Wasm execution"
+  ]
+}
