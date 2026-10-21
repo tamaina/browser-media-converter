@@ -31,7 +31,7 @@
     "@browser-mc/mediabunny-scene-keyframes": "workspace:^",
     "@browser-mc/video-codec": "workspace:^",
     "@browser-mc/webcodecs-color": "workspace:^",
-    "mediabunny": "^1.61.1"
+    "mediabunny": "^1.62.0"
   },
   "files": [
     "dist",
