@@ -76,8 +76,9 @@ importers:
       '@browser-mc/webcodecs-color':
         specifier: workspace:^
         version: link:../webcodecs-color
+    devDependencies:
       mediabunny:
-        specifier: ^1.62.0
+        specifier: 1.62.0
         version: 1.62.0
 
   packages/exif-transplant:
@@ -96,9 +97,9 @@ importers:
         version: link:../binary
 
   packages/mediabunny-scene-keyframes:
-    dependencies:
+    devDependencies:
       mediabunny:
-        specifier: ^1.62.0
+        specifier: 1.62.0
         version: 1.62.0
 
   packages/video-codec: {}
