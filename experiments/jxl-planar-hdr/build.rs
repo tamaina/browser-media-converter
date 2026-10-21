@@ -1,0 +1,50 @@
+use std::{env, path::PathBuf, process::Command};
+fn main() {
+    let target = env::var("TARGET").unwrap();
+    let host = env::var("HOST").unwrap();
+    assert_eq!(
+        target, host,
+        "This native proof does not configure a C++ Wasm toolchain; use a matching Emscripten build before cross-linking."
+    );
+    let include =
+        env::var("JXL_INCLUDE").expect("set JXL_INCLUDE to matching libjxl development headers");
+    let library =
+        env::var("JXL_LIBRARY").unwrap_or("/usr/lib/x86_64-linux-gnu/libjxl.so.0.11".into());
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    assert!(
+        Command::new(env::var("CXX").unwrap_or("/usr/bin/g++".into()))
+            .args([
+                "-std=c++17",
+                "-O2",
+                "-fPIC",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-I",
+                &include,
+                "-c",
+                "bridge.cc",
+                "-o"
+            ])
+            .arg(out.join("bridge.o"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("/usr/bin/ar")
+            .arg("crs")
+            .arg(out.join("libhdr_bridge.a"))
+            .arg(out.join("bridge.o"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=hdr_bridge");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
+    println!("cargo:rustc-link-arg={library}");
+    println!("cargo:rerun-if-changed=bridge.cc");
+    println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
+    println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
+}
