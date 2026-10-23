@@ -42,6 +42,7 @@ pub struct Config {
     primaries: u32,
     transfer: u32,
     intensity: f32,
+    depth: u32,
 }
 #[repr(C)]
 pub struct Encoded {
@@ -116,6 +117,7 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(message.into()) }
 }
 fn check_config(c: &Config) -> Result<(), String> {
+    need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
     #[cfg(target_arch = "wasm32")]
     need(c.primaries == 1 && c.transfer == 13, "WASM requires BT.709 primaries and sRGB transfer (SDR only)")?;
     need(
@@ -153,10 +155,9 @@ impl Session {
             primaries: i.primaries,
             transfer: i.transfer,
             intensity: i.intensity,
+            depth: i.depth,
         };
         check_config(&config)?;
-        #[cfg(target_arch = "wasm32")]
-        need(i.depth == 8 && i.storage == 0, "WASM requires 8-bit U8 planes")?;
         need(
             i.format <= 3 && matches!(i.depth, 8 | 10 | 12),
             "unsupported format/depth",
@@ -586,7 +587,23 @@ pub extern "C" fn planar_instrumentation(enabled: i32) {
 /// In-place U8 rounding for the timed RGB comparison path. Caller owns count floats.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_quantize_rgb(rgb: *mut f32, count: usize) {
+    unsafe { planar_quantize_rgb_depth(rgb, count, 8); }
+}
+
+/// Source-depth rounding for RGB comparison; does not affect the fused kernel.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn planar_quantize_rgb_depth(rgb: *mut f32, count: usize, depth: u32) {
+    assert!(matches!(depth, 8 | 10 | 12));
+    let maximum = ((1u32 << depth) - 1) as f32;
     for v in unsafe { slice::from_raw_parts_mut(rgb, count) } {
-        *v = (*v * 255.0 + 0.5).floor() / 255.0;
+        *v = (*v * maximum + 0.5).floor() / maximum;
     }
+}
+
+/// Output signalling only; the owned source depth and normalization stay intact.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn planar_set_bit_depth(session: *mut Session, depth: u32) -> i32 {
+    if session.is_null() || !matches!(depth, 0 | 8 | 10 | 12) { return 1; }
+    unsafe { (*session).config.depth = depth; }
+    0
 }

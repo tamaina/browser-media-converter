@@ -21,7 +21,7 @@ for fmt,profile in [("I420","709-srgb"),("I420P12","709-srgb"),("I420P12","pq"),
         start=time.perf_counter();handle=create(lib,inp)
         preparation_ms=(time.perf_counter()-start)*1000
         floats=(C.c_float*len(rgb))(*rgb)
-        config=Config(inp.width,inp.height,inp.primaries,inp.transfer,inp.intensity)
+        config=Config(inp.width,inp.height,inp.primaries,inp.transfer,inp.intensity,inp.depth)
         results={mode:[] for mode in ("fused_auto","previous_row","prepared_rgb")}
         try:
             # One warmup per mode, then five balanced-order repetitions.

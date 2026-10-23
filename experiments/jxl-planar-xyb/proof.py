@@ -10,7 +10,7 @@ class Plane(C.Structure):
 class Input(C.Structure):
     _fields_=[(x,C.c_uint32) for x in ("width","height","format","depth","storage","matrix","primaries","transfer","full_range","centered","origin_x","origin_y")]+[("intensity",C.c_float),("planes",Plane*3)]
 class Config(C.Structure):
-    _fields_=[(x,C.c_uint32) for x in ("width","height","primaries","transfer")]+[("intensity",C.c_float)]
+    _fields_=[(x,C.c_uint32) for x in ("width","height","primaries","transfer")]+[("intensity",C.c_float),("depth",C.c_uint32)]
 class Encoded(C.Structure):
     _fields_=[("data",C.POINTER(C.c_uint8))]+[(x,C.c_size_t) for x in ("size","callbacks","peak_rgb_bytes")]+[("xyb_hash",C.c_uint64),("xyb_data",C.POINTER(C.c_float)),("xyb_count",C.c_size_t),("conversion_ms",C.c_double),("simd_lanes",C.c_size_t)]
 def library():
@@ -21,6 +21,7 @@ def library():
     lib.planar_destroy.argtypes=[C.c_void_p]
     lib.planar_free.argtypes=[C.POINTER(Encoded)]
     lib.rgb_encode.argtypes=[C.POINTER(Config),C.POINTER(C.c_float),C.c_size_t,C.POINTER(Encoded),C.c_char_p,C.c_size_t]
+    lib.planar_set_bit_depth.argtypes=[C.c_void_p,C.c_uint32]
     return lib
 def integer(x,maximum=2**32-1):
     if type(x) is not int or not 0<=x<=maximum: raise ValueError("unsigned integer out of ABI range")
@@ -65,7 +66,7 @@ def encode(inp):
         return finish(lib,result,start)
     finally: lib.planar_destroy(handle)
 def encode_rgb(inp,rgb):
-    lib=library(); cfg=Config(inp.width,inp.height,inp.primaries,inp.transfer,inp.intensity)
+    lib=library(); cfg=Config(inp.width,inp.height,inp.primaries,inp.transfer,inp.intensity,inp.depth)
     data=(C.c_float*len(rgb))(*rgb);result=Encoded();error=C.create_string_buffer(512);start=time.perf_counter()
     if lib.rgb_encode(C.byref(cfg),data,len(data),C.byref(result),error,len(error)): raise ValueError(error.value.decode())
     return finish(lib,result,start)

@@ -9,8 +9,8 @@ export async function createEncoder(options = {}) {
   function config(i, o) {
     if (!integer(i.width, 1, 8192) || !integer(i.height, 1, 8192) || i.width*i.height > 4194304) fail('dimension limit: 4 megapixels');
     for (const [k,v] of Object.entries(i)) {
-      if (['bitDepth','depth'].includes(k) && v !== 8) fail('SDR API requires 8-bit input');
-      if (k === 'storage' && v !== 'u8') fail('storage must be u8');
+      if (['bitDepth','depth'].includes(k) && ![8,10,12].includes(v)) fail('source depth must be 8/10/12');
+      if (k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
       if (k === 'primaries' && v !== 'bt709') fail('primaries must be bt709');
       if (k === 'transfer' && v !== 'srgb') fail('transfer must be srgb');
       if (k === 'chromaSiting' && v !== 'center') fail('chromaSiting must be center');
@@ -26,7 +26,13 @@ export async function createEncoder(options = {}) {
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
-    const format=rgb ? 2 : formats.indexOf(i.format);
+    const match=/^(I420|I422|I444)(?:P(10|12))?$/.exec(i.format??'');
+    const sourceDepth=rgb?(i.depth??i.bitDepth??8):(match?Number(match[2]??8):8);
+    if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
+    const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
+    if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
+    const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb?0:sourceDepth):bitDepth;
+    const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format);
     const matrix=rgb ? 1 : ({bt709:1,bt601:6})[i.matrix];
     if (format<0 || !matrix || (!rgb && typeof i.fullRange !== 'boolean')) fail('explicit format, bt601/bt709 matrix and boolean fullRange required');
     const pointers=[];
@@ -36,7 +42,7 @@ export async function createEncoder(options = {}) {
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
-      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort);
+      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort,sourceDepth,outputDepth);
       let status;
       if (rgb) {
         if (!(i.data instanceof Float32Array) || i.data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array');
@@ -47,7 +53,7 @@ export async function createEncoder(options = {}) {
         const layouts=i.planes.map((p,c)=> {
           const w=c?Math.ceil(i.width/(format===2?1:2)):i.width;
           const h=c?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
-          const row=w*(format===3&&c?2:1);
+          const row=w*(format===3&&c?2:1)*(sourceDepth===8?1:2);
           if (!(p.data instanceof Uint8Array) || !integer(p.offset??0,0,p.data.length) || !integer(p.stride,row,67108864)) fail('plane data/offset/stride');
           const span=(h-1)*p.stride+row;
           if ((p.offset??0)+span>p.data.length) fail('plane bounds');

@@ -1,9 +1,13 @@
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 3 {
+    if args.len() != 3 && args.len() != 4 {
         return Err("usage: oracle input.jxl output.f32le".into());
     }
     let mut image = jxl_oxide::JxlImage::builder().open(&args[1])?;
+    if args.get(3).is_some_and(|s| s == "--depth") {
+        println!("{} {:?}", image.image_header().metadata.bit_depth.bits_per_sample(), image.image_header().metadata.bit_depth);
+        return Ok(());
+    }
     let cicp = image.rendered_cicp().ok_or("missing rendered CICP")?;
     let jxl_oxide::color::ColourEncoding::Enum(original) = &image.image_header().metadata.colour_encoding else { return Err("ICC unsupported".into()); };
     image.request_color_encoding(original.clone());

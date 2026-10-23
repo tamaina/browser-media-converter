@@ -11,12 +11,76 @@ from proof import ROOT,library,load,encode,encode_rgb
 import validation as prior
 
 class XYBTests(unittest.TestCase):
+    def test_high_depth_low_bits(self):
+        import struct
+        from proof import create
+        os.environ['JXL_EXPERIMENT_CAPTURE_XYB']='1'
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_CAPTURE_XYB',None))
+        count=0;maximum_error=0
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            for depth in [10,12]:
+                for fmt in ['I420','I422','I444']:
+                    for full in [False,True]:
+                        m,_=fixture(base,fmt+f'P{depth}',33,3,'709-srgb',full)
+                        maximum=(1<<depth)-1;scale=1<<(depth-8)
+                        for c,p in enumerate(m['planes']):
+                            data=bytearray((base/p['path']).read_bytes())
+                            for y in range(p['height']):
+                                for x in range(p['width']):
+                                    value=round(maximum*.25)+y*33+x if c==0 else 1<<(depth-1)
+                                    struct.pack_into('<H',data,p['offsetBytes']+y*p['strideBytes']+x*2,value)
+                            (base/p['path']).write_bytes(data)
+                        inp,keep=load(m,base);rgb=[]
+                        for y in range(3):
+                            for x in range(33):
+                                value=round(maximum*.25)+y*33+x
+                                rgb.extend([value/maximum if full else (value-16*scale)/(219*scale)]*3)
+                        _,a=encode(inp)
+                        os.environ['JXL_EXPERIMENT_OBSERVE_REFERENCE']='1'
+                        try:_,b=encode_rgb(inp,rgb)
+                        finally:os.environ.pop('JXL_EXPERIMENT_OBSERVE_REFERENCE',None)
+                        error=max(abs(x-y) for x,y in zip(a['xyb'],b['xyb']))
+                        maximum_error=max(maximum_error,error);self.assertLess(error,3e-6);count+=1
+        print(json.dumps({'high_depth_low_bit_cases':count,'xyb_max_error':maximum_error}))
+
+    def test_output_depth_matrix(self):
+        from proof import Config,Encoded,create
+        lib=library();count=0
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            def check(data,expected):
+                (base/'depth.jxl').write_bytes(data)
+                meta=subprocess.check_output([ROOT/'build/oracle/debug/jxl-planar-xyb-oracle',base/'depth.jxl','unused','--depth'],text=True)
+                self.assertEqual(int(meta.split()[0]),expected)
+                self.assertIn('FloatSample' if expected==32 else 'IntegerSample',meta)
+            for source in [8,10,12]:
+                m,rgb=fixture(base,'I420'+('' if source==8 else f'P{source}'),17,9,'709-srgb',False)
+                inp,keep=load(m,base)
+                for requested in ['preserve',0,8,10,12]:
+                    h=create(lib,inp);out=Encoded();err=C.create_string_buffer(512)
+                    try:
+                        self.assertNotEqual(lib.planar_set_bit_depth(h,9),0)
+                        if requested!='preserve':self.assertEqual(lib.planar_set_bit_depth(h,requested),0)
+                        self.assertEqual(lib.planar_encode(h,C.byref(out),err,512),0,err.value)
+                        check(C.string_at(out.data,out.size),source if requested=='preserve' else requested or 32);count+=1
+                    finally:lib.planar_free(C.byref(out));lib.planar_destroy(h)
+            for requested in [0,8,10,12]:
+                cfg=Config(1,1,1,13,255,requested);out=Encoded();err=C.create_string_buffer(512);rgb=(C.c_float*3)(.3,.5,.7)
+                self.assertEqual(lib.rgb_encode(C.byref(cfg),rgb,3,C.byref(out),err,512),0,err.value)
+                try:check(C.string_at(out.data,out.size),requested or 32);count+=1
+                finally:lib.planar_free(C.byref(out))
+            cfg=Config(1,1,1,13,255,9);out=Encoded()
+            self.assertNotEqual(lib.rgb_encode(C.byref(cfg),rgb,3,C.byref(out),err,512),0)
+            self.assertNotEqual(lib.planar_set_bit_depth(None,9),0)
+        print(json.dumps({'native_depth_matrix_cases':count}))
+
     def test_validation_options(self):
         from proof import Input, Encoded
         lib=library()
         lib.planar_create_profile.argtypes=[C.POINTER(Input),C.POINTER(C.c_void_p),C.c_uint32,C.POINTER(C.c_double),C.c_char_p,C.c_size_t]
         with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
-            for fmt in ['I420','I422','I444','NV12']:
+            for fmt in ['I420','I422','I444','NV12','I420P10','I422P10','I444P10','I420P12','I422P12','I444P12']:
                 for full in [False,True]:
                     m,_=fixture(Path(tmp),fmt,17,9,'709-srgb',full)
                     inp,keep=load(m,Path(tmp))
@@ -24,7 +88,14 @@ class XYBTests(unittest.TestCase):
                         if invalid:
                             # Saturated U/V clips by default, rejects only in strict mode.
                             for c in range(1,2 if fmt=='NV12' else 3):
-                                C.memset(inp.planes[c].data,255,inp.planes[c].size)
+                                p=inp.planes[c]
+                                if inp.depth==8:C.memset(p.data,255,p.size)
+                                else:
+                                    import struct
+                                    for y in range(p.height):
+                                        for x in range(p.width):
+                                            value=struct.pack('<H',(1<<inp.depth)-1)
+                                            C.memmove(C.addressof(p.data.contents)+p.offset+y*p.stride+x*2,value,2)
                         for option in [0,1,2]:
                             handle=C.c_void_p();err=C.create_string_buffer(512);times=(C.c_double*3)()
                             status=lib.planar_create_profile(C.byref(inp),C.byref(handle),option,times,err,512)

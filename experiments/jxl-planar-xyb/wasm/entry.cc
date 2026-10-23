@@ -10,13 +10,14 @@ float wasm_distance=1;
 int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
+static int output_depth=8;
 extern "C" {
 void w_options(int observe,int option) {planar_instrumentation(observe);validation=option;}
 double w_time(int i){return times[i];}
-void w_init(int w,int h,int format,int matrix,int full,float distance,int effort) {
+void w_init(int w,int h,int format,int matrix,int full,float distance,int effort,int depth,int out_depth) {
   planar_free(&output); input={}; error[0]=0;
   input.width=w;input.height=h;input.format=format;input.matrix=matrix;
-  input.depth=8;input.primaries=1;input.transfer=13;input.intensity=255;
+  input.depth=depth;input.storage=depth==8?0:1;output_depth=out_depth;input.primaries=1;input.transfer=13;input.intensity=255;
   input.full_range=full;input.centered=1;wasm_distance=distance;wasm_effort=effort;
 }
 void w_plane(int c,const uint8_t* p,size_t size,size_t offset,size_t stride) {
@@ -30,6 +31,7 @@ int w_encode(int mode) {
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
   int status=planar_create_profile(&input,&session,mode==1 && validation==0?2:validation,times,error,sizeof(error));
+  if(!status) status=planar_set_bit_depth(session,output_depth);
   times[5]=times[2];
   times[2]=planar_clock_ms()-start;
   float* rgb=nullptr;
@@ -38,13 +40,13 @@ int w_encode(int mode) {
     size_t count=size_t(input.width)*input.height*3;
     rgb=static_cast<float*>(std::malloc(count*sizeof(float)));
     status=!rgb || planar_region(session,0,0,input.width,input.height,rgb,count);
-    if(!status) planar_quantize_rgb(rgb,count);
+    if(!status) planar_quantize_rgb_depth(rgb,count,input.depth);
     times[3]=planar_clock_ms()-start;
   }
   start=planar_clock_ms();
   if(!status) {
     if(mode==1) {
-      PlanarRgbConfig c{input.width,input.height,1,13,255};
+      PlanarRgbConfig c{input.width,input.height,1,13,255,uint32_t(output_depth)};
       status=rgb_encode(&c,rgb,size_t(input.width)*input.height*3,&output,error,sizeof(error));
     } else status=planar_encode(session,&output,error,sizeof(error));
   }
@@ -52,7 +54,7 @@ int w_encode(int mode) {
   std::free(rgb);planar_destroy(session);return status;
 }
 int w_rgb(const float* p,size_t count) {
-  PlanarRgbConfig c{input.width,input.height,1,13,255};
+  PlanarRgbConfig c{input.width,input.height,1,13,255,uint32_t(output_depth)};
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
   int status=rgb_encode(&c,p,count,&output,error,sizeof(error));

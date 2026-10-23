@@ -21,7 +21,7 @@ extern "C" double planar_clock_ms() {
 #include <memory>
 #include <stdexcept>
 #include <vector>
-struct Config { uint32_t width,height,primaries,transfer; float intensity; };
+struct Config { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; };
 struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
 struct Source {
@@ -84,8 +84,8 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
-    info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=32;
-    info.exponent_bits_per_sample=8; info.num_color_channels=3;
+    info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
+    info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=3;
     info.uses_original_profile=JXL_FALSE; info.intensity_target=c->intensity;
     check(JxlEncoderSetBasicInfo(enc.get(),&info));
     JxlColorEncoding color; JxlColorEncodingSetToSRGB(&color,JXL_FALSE);
