@@ -23,8 +23,8 @@ export async function createEncoder(options = {}) {
   function run(i,o,rgb) {
     const start=performance.now();
     const {distance,effort}=config(i,o);
-    if(o.validation!==undefined && !["strict","certificate"].includes(o.validation))fail("unknown validation");
-    m._w_options(+(o.observe??false),+(o.validation==="certificate"));
+    if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
+    m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
     const format=rgb ? 2 : formats.indexOf(i.format);
     const matrix=rgb ? 1 : ({bt709:1,bt601:6})[i.matrix];

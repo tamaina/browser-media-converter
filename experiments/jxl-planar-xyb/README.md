@@ -51,8 +51,10 @@ ownership, full-frame final XYB, codec working allocations, and output buffering
 The row implementation retains one packed RGB row, three aligned planar RGB/XYB
 scratch rows and libjxl CMS's row-sized input/output buffers. It still interleaves,
 transforms and deinterleaves within a row, then copies that XYB row. This is not
-zero-copy or bounded-memory frame streaming. An initial Rust validation pass also
-reconstructs each pixel to reject unsupported values before encoding.
+zero-copy or bounded-memory frame streaming. For BT.709 primaries/sRGB transfer, Round 3 removes the initial RGB range
+scan and clips nonlinear RGB in the fused kernel and scalar reconstruction.
+Other native profiles and explicit strict mode retain range rejection. See
+[WASM.md](WASM.md) for the current clipping contract and measurements.
 
 `peak_rgb_bytes` tracks packed reconstruction + the three planar row payloads
 (24 × width), excluding alignment, CMS scratch and encoder allocations. The
@@ -82,7 +84,8 @@ libjxl behavior, not a new HLG implementation.
 Odd dimensions, padded strides and odd byte offsets are supported. Origin must
 be (0,0). Reject unknown/cosited chroma, unknown metadata, BT.2020 constant
 luminance, P010/MSB packing, alpha, ICC, arbitrary intensity targets, depth above
-12 and converted nonlinear RGB outside [0,1]. No silent clipping, SDR tone map
+12. Converted nonlinear RGB outside [0,1] is clipped for BT.709/sRGB by
+default; explicit strict mode and other native profiles reject it. No tone map
 or byte truncation. Bounds: 8192 per axis, 4 megapixels, 64 MiB validated source
 spans. No mastering-display/MaxCLL preservation yet. The patched row path rejects
 non-XYB, extra channels and slow effort tiers requiring a full linear RGB image;

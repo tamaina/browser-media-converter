@@ -102,6 +102,7 @@ struct Plane {
 }
 pub struct Session {
     nominal_preflight: bool,
+    strict: bool,
     config: Config,
     depth: u32,
     storage: u32,
@@ -251,6 +252,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
+            strict: option == 1 || config.primaries != 1 || config.transfer != 13,
             config,
             depth: i.depth,
             storage: i.storage,
@@ -264,7 +266,7 @@ impl Session {
         let check_start = unsafe { planar_clock_ms() };
         // Admit all stored samples and converted RGB before the codec emits bytes.
         let max = (1u32 << i.depth) - 1;
-        for c in 0..3 {
+        for c in 0..if i.depth == 8 { 0 } else { 3 } {
             let p = &session.planes[c];
             for y in 0..p.height {
                 for x in 0..p.width {
@@ -276,31 +278,13 @@ impl Session {
             }
         }
         timings[2] = unsafe { planar_clock_ms() } - check_start;
-        if option != 2 && !(option == 1 && session.range_certificate()) {
+        if option != 2 && session.strict {
             for y in 0..h {
                 for x in 0..w { session.pixel(x, y)?; }
             }
         }
         timings[1] = unsafe { planar_clock_ms() } - check_start;
         Ok(session)
-    }
-    // A sufficient, conservative certificate: interpolation is a convex
-    // combination of stored chroma samples. Margins cover f64 roundoff.
-    // If inconclusive, use the original exact per-pixel admission check.
-    fn range_certificate(&self) -> bool {
-        if self.depth != 8 || self.storage != 0 { return false; }
-        let ranges: Vec<(f64,f64)> = self.planes.iter().map(|p| {
-            (*p.bytes.iter().min().unwrap() as f64, *p.bytes.iter().max().unwrap() as f64)
-        }).collect();
-        let (kr,kb) = match self.matrix { 1 => (0.2126,0.0722), 6 => (0.299,0.114), _ => (0.2627,0.0593) };
-        let kg = 1.0-kr-kb;
-        let (offset,yd,cd) = if self.full { (0.0,255.0,255.0) } else { (16.0,219.0,224.0) };
-        let (yl,yh)=((ranges[0].0-offset)/yd,(ranges[0].1-offset)/yd);
-        let (ul,uh)=((ranges[1].0-128.0)/cd,(ranges[1].1-128.0)/cd);
-        let (vl,vh)=((ranges[2].0-128.0)/cd,(ranges[2].1-128.0)/cd);
-        let a=2.0*(1.0-kr); let b=2.0*(1.0-kb);
-        [(yl+a*vl,yh+a*vh),(yl-b*kb/kg*uh-a*kr/kg*vh,yh-b*kb/kg*ul-a*kr/kg*vl),(yl+b*ul,yh+b*uh)]
-            .iter().all(|&(lo,hi)| lo > 1e-12 && hi < 1.0-1e-12)
     }
     fn sample(&self, c: usize, x: usize, y: usize) -> u32 {
         let p = &self.planes[c];
@@ -344,13 +328,14 @@ impl Session {
         let r = yy + 2.0 * (1.0 - kr) * cr;
         let b = yy + 2.0 * (1.0 - kb) * cb;
         let g = (yy - kr * r - kb * b) / (1.0 - kr - kb);
-        need(
+        if self.strict { need(
             [r, g, b]
                 .iter()
                 .all(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0),
-            "converted RGB outside nominal [0,1]; proof rejects instead of clipping/tone-mapping",
+            "converted RGB outside nominal [0,1]; strict mode rejects",
         )?;
-        Ok([r as f32, g as f32, b as f32])
+        }
+        Ok([r.clamp(0.0,1.0) as f32, g.clamp(0.0,1.0) as f32, b.clamp(0.0,1.0) as f32])
     }
     fn region(
         &self,
@@ -411,8 +396,8 @@ pub unsafe extern "C" fn planar_create(
 ) -> i32 {
     unsafe { planar_create_profile(input, out, 0, std::ptr::null_mut(), error, n) }
 }
-/// Experimental option 1 enables a conservative certificate with strict fallback.
-/// Option 2 is RGB-conversion-only: region checks every reconstructed pixel;
+/// Option 0 clips SDR BT.709/sRGB; option 1 explicitly rejects out-of-range RGB.
+/// Option 2 is RGB-conversion-only: region clips SDR reconstructed pixels;
 /// planar_encode refuses this session. No unvalidated fused encode is possible.
 /// timings points to three doubles: metadata/layout/copy, total preflight,
 /// then the stored-sample-only subset of preflight.
@@ -596,4 +581,12 @@ pub unsafe extern "C" fn planar_free(out: *mut Encoded) {
 #[unsafe(no_mangle)]
 pub extern "C" fn planar_instrumentation(enabled: i32) {
     unsafe { bridge_instrumentation(enabled); }
+}
+
+/// In-place U8 rounding for the timed RGB comparison path. Caller owns count floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn planar_quantize_rgb(rgb: *mut f32, count: usize) {
+    for v in unsafe { slice::from_raw_parts_mut(rgb, count) } {
+        *v = (*v * 255.0 + 0.5).floor() / 255.0;
+    }
 }

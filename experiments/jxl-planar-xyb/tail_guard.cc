@@ -16,14 +16,17 @@ struct Guard {
 int main() {
   try {
     size_t cases=0;
+    setenv("JXL_EXPERIMENT_CAPTURE_XYB","1",1);
+    setenv("JXL_EXPERIMENT_OBSERVE_REFERENCE","1",1);
     for(uint32_t depth:{8u,10u,12u}) for(uint32_t sx:{1u,2u}) for(uint32_t sy:{1u,2u}) {
-      for(uint32_t width=1;width<=33;++width) {
+      for(bool clipped:{false,true}) for(uint32_t width=1;width<=33;++width) {
         const uint32_t height=3;
         const size_t bytes=depth==8?1:2,cw=(width+sx-1)/sx,ch=(height+sy-1)/sy;
         Guard y(width*height*bytes),u(cw*ch*bytes),v(cw*ch*bytes);
         const uint32_t value=1u<<(depth-1);
         for(auto* g:{&y,&u,&v}) for(size_t i=0;i<g->size;i+=bytes) {
-          g->data[i]=uint8_t(value);if(bytes==2) g->data[i+1]=uint8_t(value>>8);
+          const uint32_t sample=!clipped?value:g!=&y?(1u<<depth)-1:(i/bytes/width==0?0:i/bytes/width==1?value:(1u<<depth)-1);
+          g->data[i]=uint8_t(sample);if(bytes==2) g->data[i+1]=uint8_t(sample>>8);
         }
         JxlExperimentalYuv raw{{{y.data,y.size,width*bytes,width,height},
                                 {u.data,u.size,cw*bytes,cw,ch},
@@ -32,7 +35,20 @@ int main() {
         auto unused=[](void*,size_t,size_t,size_t,size_t,float*,size_t)->int{return 1;};
         if(hdr_jxl_encode(&config,nullptr,unused,nullptr,&raw,&out,error,sizeof(error))) throw std::runtime_error(error);
         if(out.simd_lanes!=4 || out.callbacks || out.peak_rgb_bytes || !out.size) throw std::runtime_error("fused path not used");
-        hdr_jxl_free(&out);++cases;
+        const double maximum=(1u<<depth)-1;
+        const double chroma=clipped?(maximum-value)/maximum:0;
+        std::vector<float> rgb(width*height*3);
+        for(size_t i=0;i<width*height;++i) {
+          const double luma=!clipped?value/maximum:i/width==0?0:i/width==1?value/maximum:1;
+          const double red=luma+2*(1-.2126)*chroma, blue=luma+2*(1-.0722)*chroma;
+          const double green=(luma-.2126*red-.0722*blue)/(1-.2126-.0722);
+          rgb[3*i]=std::clamp(red,0.,1.);rgb[3*i+1]=std::clamp(green,0.,1.);rgb[3*i+2]=std::clamp(blue,0.,1.);
+        }
+        Encoded reference{};
+        if(hdr_jxl_encode(&config,nullptr,nullptr,rgb.data(),nullptr,&reference,error,sizeof(error)))throw std::runtime_error(error);
+        if(out.xyb_count!=reference.xyb_count || !out.xyb_count)throw std::runtime_error("missing XYB capture");
+        for(size_t i=0;i<out.xyb_count;++i)if(std::abs(out.xyb_data[i]-reference.xyb_data[i])>3e-6f)throw std::runtime_error("clipped scalar/SIMD mismatch");
+        hdr_jxl_free(&reference);hdr_jxl_free(&out);++cases;
       }
     }
     std::printf("%zu 4-lane Highway guard-page tail encodes passed\n",cases);

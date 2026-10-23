@@ -29,7 +29,7 @@ int w_encode(int mode) {
   PlanarSession* session=nullptr;
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
-  int status=planar_create_profile(&input,&session,mode==1?2:validation,times,error,sizeof(error));
+  int status=planar_create_profile(&input,&session,mode==1 && validation==0?2:validation,times,error,sizeof(error));
   times[5]=times[2];
   times[2]=planar_clock_ms()-start;
   float* rgb=nullptr;
@@ -38,6 +38,7 @@ int w_encode(int mode) {
     size_t count=size_t(input.width)*input.height*3;
     rgb=static_cast<float*>(std::malloc(count*sizeof(float)));
     status=!rgb || planar_region(session,0,0,input.width,input.height,rgb,count);
+    if(!status) planar_quantize_rgb(rgb,count);
     times[3]=planar_clock_ms()-start;
   }
   start=planar_clock_ms();

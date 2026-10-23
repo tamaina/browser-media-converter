@@ -192,8 +192,8 @@ index 796855c..6e86d85 100644
 +                         Set(d,1.f/(1.f-kr-kb)));
 +      // The existing transfer approximation and opsin kernel are reused.
 +      // Final XYB may write padding lanes, which Image3F reserves for SIMD.
-+      LinearRGBToXYB(LinearFromSRGB(r), LinearFromSRGB(g),
-+                     LinearFromSRGB(blue), absorb,
++      LinearRGBToXYB(LinearFromSRGB(Min(one, Max(Zero(d), r))), LinearFromSRGB(Min(one, Max(Zero(d), g))),
++                     LinearFromSRGB(Min(one, Max(Zero(d), blue))), absorb,
 +                     out->PlaneRow(0,y)+x, out->PlaneRow(1,y)+x,
 +                     out->PlaneRow(2,y)+x);
 +    }

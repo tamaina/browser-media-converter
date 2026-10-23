@@ -54,7 +54,7 @@ def fixture(base,fmt="I420P10",w=17,h=9,profile="pq",full=False,neutral=False,ma
             cb=(chroma(uu,x,y)-center)/(maximum if full else 224*s)
             cr=(chroma(vv,x,y)-center)/(maximum if full else 224*s)
             red=luma+2*(1-kr)*cr;blue=luma+2*(1-kb)*cb;green=(luma-kr*red-kb*blue)/(1-kr-kb)
-            rgb.extend(f32(c) for c in (red,green,blue))
+            rgb.extend(f32(max(0,min(1,c)) if profile=="709-srgb" else c) for c in (red,green,blue))
     return m,rgb
 def pq_nits(v):
     m1=2610/16384;m2=2523/32;c1=3424/4096;c2=2413/128;c3=2392/128

@@ -22,17 +22,28 @@ class XYBTests(unittest.TestCase):
                     inp,keep=load(m,Path(tmp))
                     for invalid in [False,True]:
                         if invalid:
-                            # Saturated U/V must fail reconstructed RGB admission.
+                            # Saturated U/V clips by default, rejects only in strict mode.
                             for c in range(1,2 if fmt=='NV12' else 3):
                                 C.memset(inp.planes[c].data,255,inp.planes[c].size)
                         for option in [0,1,2]:
                             handle=C.c_void_p();err=C.create_string_buffer(512);times=(C.c_double*3)()
                             status=lib.planar_create_profile(C.byref(inp),C.byref(handle),option,times,err,512)
-                            self.assertEqual(bool(status),invalid and option!=2)
+                            self.assertEqual(bool(status),invalid and option==1)
                             if not status:
                                 try:
                                     rgb=(C.c_float*(17*9*3))()
-                                    self.assertEqual(bool(lib.planar_region(handle,0,0,17,9,rgb,len(rgb))),invalid)
+                                    self.assertEqual(lib.planar_region(handle,0,0,17,9,rgb,len(rgb)),0)
+                                    self.assertTrue(all(0<=v<=1 for v in rgb))
+                                    if invalid:self.assertTrue(any(v in (0,1) for v in rgb))
+                                    if invalid and option==0:
+                                        import os
+                                        os.environ["JXL_EXPERIMENT_CAPTURE_XYB"]="1"
+                                        os.environ["JXL_EXPERIMENT_OBSERVE_REFERENCE"]="1"
+                                        try:
+                                            _,a=encode(inp);_,b=encode_rgb(inp,list(rgb))
+                                            self.assertLess(max(abs(x-y) for x,y in zip(a["xyb"],b["xyb"])),3e-6)
+                                        finally:
+                                            os.environ.pop("JXL_EXPERIMENT_CAPTURE_XYB",None);os.environ.pop("JXL_EXPERIMENT_OBSERVE_REFERENCE",None)
                                     if option==2:
                                         out=Encoded()
                                         self.assertNotEqual(lib.planar_encode(handle,C.byref(out),err,512),0)

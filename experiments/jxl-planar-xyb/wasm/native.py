@@ -22,6 +22,7 @@ if sys.argv[1]=='reference':
     cases=json.loads((work/'inputs.json').read_text());results=[]
     lib=proof.library()
     lib.planar_instrumentation.argtypes=[C.c_int]
+    lib.planar_quantize_rgb.argtypes=[C.POINTER(C.c_float),C.c_size_t]
     lib.planar_create_profile.argtypes=[C.POINTER(proof.Input),C.POINTER(C.c_void_p),C.c_uint32,C.POINTER(C.c_double),C.c_char_p,C.c_size_t]
     probe_results=[]
     for case in json.loads((work/'probes.json').read_text()):
@@ -29,8 +30,9 @@ if sys.argv[1]=='reference':
         for option in (0,1):
             handle=C.c_void_p();err=C.create_string_buffer(512);split=(C.c_double*3)()
             status=lib.planar_create_profile(C.byref(inp),C.byref(handle),option,split,err,512)
-            outcomes['strict' if option==0 else 'certificate']={'rejected':bool(status),'error':err.value.decode()}
+            outcomes['clip' if option==0 else 'strict']={'rejected':bool(status),'error':err.value.decode()}
             lib.planar_destroy(handle)
+        assert not outcomes['clip']['rejected'] and outcomes['strict']['rejected'],outcomes
         probe_results.append({'name':case['name'],**outcomes})
     for a in json.loads((work/'range-analysis.json').read_text()):
         if not a['dimensionAdmissible']:
@@ -45,23 +47,25 @@ if sys.argv[1]=='reference':
         pixels=(C.c_float*(inp.width*inp.height*3))()
         assert lib.planar_region(handle,0,0,inp.width,inp.height,pixels,len(pixels))==0
         lib.planar_destroy(handle)
+        lib.planar_quantize_rgb(pixels,len(pixels))
         (work/(case['name']+'.rgb')).write_bytes(bytes(pixels))
         modes={};cfg=proof.Config(inp.width,inp.height,1,13,255)
-        for mode in (('fused','rgb','rgbE2e','certificate') if case.get('benchmark') else ('fused','rgb')):
+        for mode in (('fused','rgb','rgbE2e') if case.get('benchmark') else ('fused','rgb')):
             samples=[]
             for run in range(6 if case.get('benchmark') else 1):
                 out=proof.Encoded();err=C.create_string_buffer(512);handle=C.c_void_p();split=(C.c_double*3)()
                 start=time.perf_counter();create_ms=conversion_ms=0
                 if mode!='rgb':
-                    assert lib.planar_create_profile(C.byref(inp),C.byref(handle),(2 if mode=='rgbE2e' else int(mode=='certificate')),split,err,512)==0,err.value
+                    assert lib.planar_create_profile(C.byref(inp),C.byref(handle),(2 if mode=='rgbE2e' else 0),split,err,512)==0,err.value
                     create_ms=(time.perf_counter()-start)*1000
                 try:
                     if mode=='rgbE2e':
                         t=time.perf_counter();converted=(C.c_float*len(pixels))()
                         assert lib.planar_region(handle,0,0,inp.width,inp.height,converted,len(pixels))==0
+                        lib.planar_quantize_rgb(converted,len(converted))
                         conversion_ms=(time.perf_counter()-t)*1000
                     t=time.perf_counter()
-                    if mode in ('fused','certificate'):status=lib.planar_encode(handle,C.byref(out),err,512)
+                    if mode=='fused':status=lib.planar_encode(handle,C.byref(out),err,512)
                     else:status=lib.rgb_encode(C.byref(cfg),converted if mode=='rgbE2e' else pixels,len(pixels),C.byref(out),err,512)
                     assert status==0,err.value
                     encode_ms=(time.perf_counter()-t)*1000
@@ -73,7 +77,7 @@ if sys.argv[1]=='reference':
             if mode in ('fused','rgb'):
                 (work/(case['name']+('.native.jxl' if mode=='fused' else '.native-rgb.jxl'))).write_bytes(data)
             else:
-                expected=(work/(case['name']+('.native.jxl' if mode=='certificate' else '.native-rgb.jxl'))).read_bytes()
+                expected=(work/(case['name']+'.native-rgb.jxl')).read_bytes()
                 assert data==expected,mode
             modes[mode]={'median':{k:statistics.median(x[k] for x in samples) for k in sample} if samples else sample,'samples':samples,'size':len(data),'observe':not case.get('benchmark',False)}
         results.append({'name':case['name'],'native':modes})
@@ -87,18 +91,26 @@ elif sys.argv[1]=='verify':
     def compare(a,b):
         assert len(a)==len(b)
         mse=sum((x-y)**2 for x,y in zip(a,b))/len(a)
-        return {'psnr':-10*math.log10(mse) if mse else None,'maxError':max(abs(x-y) for x,y in zip(a,b))}
+        return {'psnr':-10*math.log10(mse) if mse else None,'maxError':max(abs(x-y) for x,y in zip(a,b)), 'maxAbsDiff8bit':255*max(abs(x-y) for x,y in zip(a,b))}
     results=json.loads((work/'browser.json').read_text())
     for r in results:
         name=r['name'];src=(work/(name+'.rgb')).read_bytes();source=(C.c_float*(len(src)//4)).from_buffer_copy(src)
         native=decode(work/(name+'.native.jxl'),r['width'],r['height'])
+        native_rgb=decode(work/(name+'.native-rgb.jxl'),r['width'],r['height'])
         r['nativeQualityVsSource']=compare(native,source)
         for mode in ('fused','rgb'):
             path=work/(name+'.'+mode+'.jxl');decoded=decode(path,r['width'],r['height'])
             r[mode]['qualityVsSource']=compare(decoded,source)
-            r[mode]['qualityVsNative']=compare(decoded,native)
+            r[mode]['qualityVsNative']=compare(decoded,native if mode=='fused' else native_rgb)
             r[mode]['byteIdenticalToNativeSamePath']=path.read_bytes()==(work/(name+('.native.jxl' if mode=='fused' else '.native-rgb.jxl'))).read_bytes()
             r[mode]['byteIdenticalToNative']=path.read_bytes()==(work/(name+'.native.jxl')).read_bytes()
             assert r[mode]['qualityVsSource']['psnr'] is None or r[mode]['qualityVsSource']['psnr']>25,r
-            assert r[mode]['qualityVsNative']['maxError']<0.03,r
+            agreement=r[mode]['qualityVsNative']
+            if r.get('benchmark'):
+                # Real non-inset lossy outputs can cross codec decisions on tiny
+                # native/WASM floating-point differences. Keep both limits explicit.
+                assert agreement['maxError']<0.05 and (agreement['psnr'] is None or agreement['psnr']>70),r
+            else:assert agreement['maxError']<0.03,r
+            if mode=='fused':fused_decoded=decoded
+            else:r['agreementFusedVsRgb']=compare(fused_decoded,decoded)
     (work/'verified.json').write_text(json.dumps(results,indent=2)+'\n')

@@ -1,5 +1,6 @@
 // Diagnostic only: raw compact U8 I420, centered chroma, full-range BT.709.
-// Same f64 reconstruction as Rust pixel(); never clips or feeds the encoder.
+// Same f64 reconstruction as Rust pixel(), before its final clamp.
+// Never clips or feeds the encoder.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>

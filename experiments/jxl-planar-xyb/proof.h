@@ -20,9 +20,10 @@ typedef struct PlanarSession PlanarSession;
 // the session owns them. One caller at a time per session; no concurrent destroy.
 int planar_create(const PlanarInput*,PlanarSession**,char* error,size_t error_size);
 void planar_instrumentation(int enabled);
+void planar_quantize_rgb(float* rgb,size_t count);
 double planar_clock_ms();
 // timings: three doubles: copy/layout, total preflight, stored-sample subset.
-// option 0 strict; 1 certificate + fallback; 2 checked RGB conversion only.
+// option 0 SDR clipping; 1 strict rejection; 2 RGB conversion only (SDR clipping).
 int planar_create_profile(const PlanarInput*,PlanarSession**,uint32_t option,double* timings,char* error,size_t error_size);
 void planar_destroy(PlanarSession*);
 int planar_region(PlanarSession*,size_t x,size_t y,size_t width,size_t height,float* rgb,size_t float_count);

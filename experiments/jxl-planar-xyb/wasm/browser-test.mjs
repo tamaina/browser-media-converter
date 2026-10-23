@@ -16,7 +16,7 @@ if(benchmark) {
   console.log('Preparing real-content range probes (serial ffmpeg + f64 scanner)...');
   execFileSync('g++',['-std=c++17','-O2',path.join(root,'wasm/range-scan.cc'),'-o',path.join(work,'range-scan')],{stdio:'inherit'});
   for(const [name,file,nw,nh] of [['fujioka','fujioka.jpg',4272,2856],['bbb','bbb.mov',1280,720]]) {
-    for(const [w,h] of [[513,257],[nw,nh]])for(const inset of [false,true]) {
+    for(const [w,h] of [[513,257],[nw,nh]])for(const inset of [false]) {
       // Above-limit native-size fujioka: analyze untouched, no encode/inset claim.
       if(w*h>4194304 && inset)continue;
       const label=`${name}-${w}x${h}-${inset?'inset':'untouched'}`;
@@ -26,7 +26,7 @@ if(benchmark) {
       execFileSync('/usr/bin/ffmpeg',['-v','error','-threads','1',...(name==='bbb'?['-ss','10']:[]),'-i',path.join(repo,file),'-frames:v','1','-vf',filter,'-filter_threads','1','-threads','1','-f','rawvideo','-y',out],{stdio:'inherit'});
       const analysis=JSON.parse(execFileSync(path.join(work,'range-scan'),[out,String(w),String(h)],{encoding:'utf8'}));
       rangeAnalysis.push({name:label,width:w,height:h,inset,...analysis,dimensionAdmissible:w*h<=4194304});
-      if(w*h<=4194304)real.push({name:label,width:w,height:h,url:'/build/browser/'+label+'.yuv',rejectionProbe:!inset});
+      if(w*h<=4194304)real.push({name:label,width:w,height:h,url:'/build/browser/'+label+'.yuv',rejectionProbe:false});
     }
   }
 }
@@ -76,8 +76,8 @@ try {
     return cases;
   },{benchmark,real});
   await browser.close();browser=null;
-  const probes=fixtures.filter(f=>f.rejectionProbe);
-  const admitted=fixtures.filter(f=>!f.rejectionProbe);
+  const probes=fixtures.filter(f=>f.benchmark && f.name!=='synthetic');
+  const admitted=fixtures;
   await writeFile(path.join(work,'inputs.json'),JSON.stringify(admitted));
   await writeFile(path.join(work,'probes.json'),JSON.stringify(probes));
   await writeFile(path.join(work,'range-analysis.json'),JSON.stringify(rangeAnalysis));
@@ -92,17 +92,22 @@ try {
     const unpack=data=>Uint8Array.from(atob(data),c=>c.charCodeAt(0));
     const {createEncoder}=await import('/wasm/api.mjs');const encoder=await createEncoder();
     const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
-    const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))},{...base,planes:base.planes.map((p,c)=>({...p,data:c?new Uint8Array(p.data.length).fill(255):p.data}))}];
-    for(const i of invalid) for(const validation of ['strict','certificate']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
+    const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
+    for(const i of invalid) for(const validation of ['clip','strict']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
+    const saturated={...base,planes:base.planes.map((p,c)=>({...p,data:c?new Uint8Array(p.data.length).fill(255):p.data}))};
+    encoder.encodePlanarYuv(saturated);encoder.encodePlanarYuv(saturated,{rgbViaPlanar:true});
+    for(const rgbViaPlanar of [false,true]) {let rejected=false;try{encoder.encodePlanarYuv(saturated,{validation:'strict',rgbViaPlanar});}catch{rejected=true;}if(!rejected)throw Error('strict accepted saturated input');}
+    let certificateRejected=false;try{encoder.encodePlanarYuv(base,{validation:'certificate'});}catch{certificateRejected=true;}if(!certificateRejected)throw Error('retired certificate accepted');
     let rgbRejected=false;try{encoder.encodeRgb({width:1,height:1,data:new Float32Array([NaN,0,0])});}catch{rgbRejected=true;}if(!rgbRejected)throw Error('invalid RGB accepted');
     const probeResults=[];
     for(const f of probes) {
       const input={...f,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
       const outcomes={};
-      for(const validation of ['strict','certificate']) {
+      for(const validation of ['clip','strict']) {
         try {encoder.encodePlanarYuv(input,{validation});outcomes[validation]={rejected:false};}
         catch(e) {outcomes[validation]={rejected:true,error:String(e)};}
       }
+      if(outcomes.clip.rejected || !outcomes.strict.rejected)throw Error('clip/strict probe mismatch');
       probeResults.push({name:f.name,...outcomes});
     }
     // Exercise observer toggle on the same fixture and require identical bytes.
@@ -114,11 +119,11 @@ try {
       const input={...f,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
       const rgb=new Float32Array(await (await fetch(`${origin}/build/browser/${f.name}.rgb`)).arrayBuffer());
       const result={name:f.name,width:f.width,height:f.height,format:f.format,matrix:f.matrix,fullRange:f.fullRange,benchmark:f.benchmark};
-      for(const mode of (f.benchmark?['fused','rgb','rgbE2e','certificate']:['fused','rgb','certificate'])) {
+      for(const mode of (f.benchmark?['fused','rgb','rgbE2e']:['fused','rgb'])) {
         const times=[],samples=[];let bytes;let peakHeap=0,firstHeap;
         for(let run=0;run<(f.benchmark?6:1);run++) {
           const start=performance.now();
-          const options={observe:!f.benchmark,validation:mode==='certificate'?'certificate':'strict',rgbViaPlanar:mode==='rgbE2e'};
+          const options={observe:!f.benchmark,validation:'clip',rgbViaPlanar:mode==='rgbE2e'};
           bytes=mode==='rgb'?encoder.encodeRgb({width:f.width,height:f.height,data:rgb},options):encoder.encodePlanarYuv(input,options);
           const elapsed=performance.now()-start;
           if(run){times.push(elapsed);samples.push(encoder.stats);}
@@ -127,9 +132,9 @@ try {
         const sorted=[...times].sort((a,b)=>a-b);
         const median=Object.fromEntries(['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'].map(k=>[k,samples.length?[...samples].map(s=>s[k]).sort((a,b)=>a-b)[Math.floor(samples.length/2)]:encoder.stats[k]]));
         result[mode]={median,samples:f.benchmark?samples.map(s=>Object.fromEntries(Object.keys(median).map(k=>[k,s[k]]))):[],samplesMs:times,medianMs:times.length?sorted[Math.floor(sorted.length/2)]:null,size:bytes.length,bytes:[...bytes],...encoder.stats,heapBefore:firstHeap,peakHeap};
-        if(['fused','certificate'].includes(mode) && (encoder.stats.simdLanes!==4 || !encoder.stats.target.includes('WASM')))throw Error(`SIMD target: ${JSON.stringify(encoder.stats)}`);
+        if(mode==='fused' && (encoder.stats.simdLanes!==4 || !encoder.stats.target.includes('WASM')))throw Error(`SIMD target: ${JSON.stringify(encoder.stats)}`);
       }
-      for(const [mode,reference] of (f.benchmark?[['certificate','fused'],['rgbE2e','rgb']]:[['certificate','fused']])) {
+      for(const [mode,reference] of (f.benchmark?[['rgbE2e','rgb']]:[])) {
         if(result[mode].bytes.length!==result[reference].bytes.length || result[mode].bytes.some((v,i)=>v!==result[reference].bytes[i]))throw Error(`${mode} changes output`);
         result[mode].byteIdenticalToBaseline=true;delete result[mode].bytes;
       }
@@ -145,7 +150,7 @@ try {
   python('verify');
   const verified=JSON.parse(await readFile(path.join(work,'verified.json')));
   const native=JSON.parse(await readFile(path.join(work,'native.json')));
-  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},measurement:{warmups:1,timedRuns:5,order:['fused','rgb','rgbE2e','certificate'],instrumentation:'off for every benchmark mode; on for test fused/certificate',clock:'emscripten_get_now inside WASM; performance.now including JS marshaling/free for total',rgbE2e:'same VideoFrame.copyTo planes -> owned Rust session -> checked planar_region -> float RGB encode; no redundant RGB preflight during create',copyMs:'Rust metadata/layout checks plus owned plane copy; excludes JS-to-WASM copy',sampleCheckMs:'stored sample depth check only; subset of preflightMs',preflightMs:'stored sample depth check plus RGB admission (or certificate/fallback); RGB E2E defers RGB admission to conversion',nativeTotal:'same boundaries excluding JS-to-WASM and output-to-JS copies; includes output copy/free and session destroy'},fixturePreparation:{realSize:'513x257 plus native-size bbb 1280x720; native-size fujioka range analysis only',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:'val*0.8+25',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,rangeAnalysis,rejectionProbes:probeResults,nativeRejectionProbes:JSON.parse(await readFile(path.join(work,'native-probes.json'))),caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(root,'build/wasm/sizes.json'))),cases:verified.map((r,i)=>{if(r.benchmark)return {...r,native:native[i].native};const compact={...r,native:{fused:{size:native[i].native.fused.size},rgb:{size:native[i].native.rgb.size}}};for(const mode of ['fused','rgb','certificate'])compact[mode]=Object.fromEntries(Object.entries(r[mode]).filter(([k])=>['size','simdLanes','target','qualityVsSource','qualityVsNative','byteIdenticalToNativeSamePath','byteIdenticalToNative','byteIdenticalToBaseline'].includes(k)));return compact;})};
+  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},measurement:{warmups:1,timedRuns:5,order:['fused','rgb','rgbE2e'],instrumentation:'off for every benchmark mode; on for test fused',clock:'emscripten_get_now inside WASM; performance.now including JS marshaling/free for total',rgbE2e:'same VideoFrame.copyTo planes -> owned Rust session -> clipped planar_region -> round to U8 scale -> float RGB encode; no RGB preflight during create',copyMs:'Rust metadata/layout checks plus owned plane copy; excludes JS-to-WASM copy',sampleCheckMs:'stored sample depth check only; subset of preflightMs',preflightMs:'stored sample depth check (U8 needs no scan); default clips inside conversion/kernel',nativeTotal:'same boundaries excluding JS-to-WASM and output-to-JS copies; includes output copy/free and session destroy'},fixturePreparation:{realSize:'513x257 plus native-size bbb 1280x720; native-size fujioka range analysis only',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:null,reference:'clamp reconstructed nonlinear RGB to [0,1], round to nearest U8, divide by 255; decoded floats are not clipped',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,rangeAnalysis,rejectionProbes:probeResults,nativeRejectionProbes:JSON.parse(await readFile(path.join(work,'native-probes.json'))),caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(root,'build/wasm/sizes.json'))),cases:verified.map((r,i)=>{if(r.benchmark)return {...r,native:native[i].native};const compact={...r,native:{fused:{size:native[i].native.fused.size},rgb:{size:native[i].native.rgb.size}}};for(const mode of ['fused','rgb'])compact[mode]=Object.fromEntries(Object.entries(r[mode]).filter(([k])=>['size','simdLanes','target','qualityVsSource','qualityVsNative','byteIdenticalToNativeSamePath','byteIdenticalToNative','byteIdenticalToBaseline'].includes(k)));return compact;})};
   await writeFile(path.join(root,benchmark?'wasm-observations.json':'build/browser/test-observations.json'),JSON.stringify({...observations,cases:undefined},null,2).slice(0,-2)+',\n  \"cases\": [\n'+observations.cases.map(c=>'    '+JSON.stringify(c)).join(',\n')+'\n  ]\n}\n');
   console.log(`PASS: ${verified.length} VideoFrame fixtures, fused + RGB, independent jxl-oxide decode, native comparison.`);
   for(const r of observations.cases.filter(r=>r.benchmark))console.log(JSON.stringify(r));
