@@ -1,5 +1,17 @@
 # @browser-mc/browser-movie-converter
 
+## 2.0.0
+
+### Breaking Changes
+
+- Mediabunny is now a required peer dependency (`mediabunny: ^1.62.0`) instead of a regular dependency, so the application and these helpers share one Mediabunny copy (separate copies fail runtime `instanceof` checks for `Input`, `Quality`, and related objects).
+  - Migration: install `mediabunny@^1.62` alongside this package, e.g. `pnpm add @browser-mc/browser-movie-converter 'mediabunny@^1.62.0'`.
+
+### Changes
+
+- Update Mediabunny to 1.62.0.
+- Depend on `@browser-mc/mediabunny-scene-keyframes` 0.2.0, which also requires the shared Mediabunny peer.
+
 ## 1.4.0
 
 - Update Mediabunny to 1.61.1; preserve legacy bitrate options through Quality mapping and validate codec-specific quantizer ranges.
