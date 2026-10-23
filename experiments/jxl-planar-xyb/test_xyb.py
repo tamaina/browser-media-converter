@@ -10,6 +10,9 @@ from fixtures import fixture,read_floats
 from proof import ROOT,library,load,encode,encode_rgb
 import validation as prior
 
+# Keep inherited validation fixtures and cleanup inside this experiment.
+tempfile.tempdir = str(ROOT / 'build/tmp')
+
 class XYBTests(unittest.TestCase):
     def test_high_depth_low_bits(self):
         import struct
@@ -43,6 +46,28 @@ class XYBTests(unittest.TestCase):
                         error=max(abs(x-y) for x,y in zip(a['xyb'],b['xyb']))
                         maximum_error=max(maximum_error,error);self.assertLess(error,3e-6);count+=1
         print(json.dumps({'high_depth_low_bit_cases':count,'xyb_max_error':maximum_error}))
+
+    def test_compact_depth_validation(self):
+        from proof import create
+        lib=library()
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            for depth in (10,12):
+                for fmt in ('I420','I422','I444'):
+                    m,_=fixture(base,fmt+f'P{depth}',33,3,'709-srgb',True)
+                    inp,keep=load(m,base)
+                    for c,p in enumerate(inp.planes):
+                        for x,y in ((0,0),(p.width//2,p.height//2),(p.width-1,p.height-1)):
+                            at=p.offset+y*p.stride+x*2
+                            lo,hi=p.data[at],p.data[at+1]
+                            # Largest legal value must survive owned row copy.
+                            p.data[at]=255;p.data[at+1]=(1<<(depth-8))-1
+                            handle=create(lib,inp);lib.planar_destroy(handle)
+                            # First illegal high bit, including non-vector tails.
+                            p.data[at]=0;p.data[at+1]=1<<(depth-8)
+                            with self.assertRaisesRegex(ValueError,'sample exceeds'):
+                                create(lib,inp)
+                            p.data[at]=lo;p.data[at+1]=hi
 
     def test_output_depth_matrix(self):
         from proof import Config,Encoded,create

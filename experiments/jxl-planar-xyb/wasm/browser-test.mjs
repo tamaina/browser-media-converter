@@ -9,6 +9,7 @@ import os from 'node:os';
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
 const work=path.join(root,'build/browser');await mkdir(work,{recursive:true});
 const benchmark=process.argv.includes('--benchmark');
+const observationsSampleKeys=['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'];
 const python=mode=>execFileSync('python3',[path.join(root,'wasm/native.py'),mode],{stdio:'inherit',env:{...process.env,LD_LIBRARY_PATH:path.join(root,'build/native/lib')},maxBuffer:16*1024*1024});
 const repo=path.resolve(root,'../..');
 const real=[],rangeAnalysis=[];
@@ -124,10 +125,18 @@ try {
     let certificateRejected=false;try{encoder.encodePlanarYuv(base,{validation:'certificate'});}catch{certificateRejected=true;}if(!certificateRejected)throw Error('retired certificate accepted');
     let rgbRejected=false;try{encoder.encodeRgb({width:1,height:1,data:new Float32Array([NaN,0,0])});}catch{rgbRejected=true;}if(!rgbRejected)throw Error('invalid RGB accepted');
     for(const depth of [10,12]) {
-      const f=fixtures.find(f=>f.format===`I420P${depth}`);if(!f)continue;
+      const f=fixtures.find(f=>f.format===`I420P${depth}` && f.width===17);if(!f)continue;
       const input={...f,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
-      const plane=input.planes[0];plane.data[plane.offset]=255;plane.data[plane.offset+1]=255;
-      let rejected=false;try {encoder.encodePlanarYuv(input);}catch {rejected=true;}if(!rejected)throw Error('high bits accepted');
+      for(const [c,plane] of input.planes.entries()) {
+        const w=c?Math.ceil(f.width/2):f.width,h=c?Math.ceil(f.height/2):f.height;
+        for(const [x,y] of [[0,0],[Math.floor(w/2),Math.floor(h/2)],[w-1,h-1]]) {
+          const at=plane.offset+y*plane.stride+x*2,lo=plane.data[at],hi=plane.data[at+1];
+          plane.data[at]=0;plane.data[at+1]=1<<(depth-8); // first invalid value, including tail
+          let rejected=false;try {encoder.encodePlanarYuv(input);}catch {rejected=true;}
+          plane.data[at]=lo;plane.data[at+1]=hi;
+          if(!rejected)throw Error('high bits accepted at plane '+c+' offset '+at);
+        }
+      }
     }
     const probeResults=[];
     for(const f of probes) {
@@ -213,6 +222,10 @@ try {
       // Retain every raw timing value without repeating field names per sample.
       for(const modes of [compact,compact.native])for(const mode of ['fused','rgb','rgbE2e'])
         modes[mode].samples=modes[mode].samples.map(s=>['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'].map(k=>s[k]));
+      // Medians and raw sample arrays already retain these measurements.
+      for(const mode of ['fused','rgb','rgbE2e']) {
+        for(const key of [...observationsSampleKeys,'samplesMs','medianMs'])delete compact[mode][key];
+      }
       return compact;
     }
     const compact={...r,native:{fused:{size:native[i].native.fused.size},rgb:{size:native[i].native.rgb.size}}};

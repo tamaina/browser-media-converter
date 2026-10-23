@@ -6,6 +6,9 @@
 #include <emscripten/emscripten.h>
 #endif
 static bool instrumentation=true;
+// Experiment-only capture switch, used by the separate Chrome diagnostic runner.
+static bool diagnostics=false;
+extern "C" void bridge_diagnostics(int enabled) { diagnostics=enabled!=0; }
 extern "C" void bridge_instrumentation(int enabled) { instrumentation=enabled!=0; }
 extern "C" double planar_clock_ms() {
 #ifdef __EMSCRIPTEN__
@@ -62,7 +65,7 @@ static int row(void* opaque,size_t x,size_t y,size_t w,float* r,float* g,float* 
 static void observe(void* opaque,size_t,size_t w,const float* x,const float* y,const float* b) {
   auto& source=*static_cast<Source*>(opaque);
   auto& hash=source.result.xyb_hash;
-  if(std::getenv("JXL_EXPERIMENT_CAPTURE_XYB")) {
+  if(diagnostics || std::getenv("JXL_EXPERIMENT_CAPTURE_XYB")) {
     for(auto* p:{x,y,b}) source.captured.insert(source.captured.end(),p,p+w);
   }
   for(auto* p:{x,y,b}) for(size_t i=0;i<w;++i) {
@@ -101,7 +104,7 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     check(JxlEncoderSetFrameDistance(settings,1.0f));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
 #endif
-    bool observed_reference=rgb && std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE");
+    bool observed_reference=rgb && (diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));
     struct RGB { const float* p;size_t width; } reference{rgb,c->width};
     if(observed_reference) {
       source.opaque=&reference;

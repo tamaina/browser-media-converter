@@ -1,4 +1,4 @@
-# SDR planar YUV in WebAssembly — Round 4
+# SDR planar YUV in WebAssembly — Round 5
 
 This experiment links the owned Rust planar session and `bridge.cc` to patched
 libjxl v0.11.1 (794a5dcf0d54f9f0b20d288a12e87afb91d20dfc), with Highway
@@ -274,3 +274,244 @@ cancellation, SIMD-less fallback, WASM HDR/P3, alpha/ICC, production integration
 commits or changesets are included. BT.709 video transfer conversion remains
 external. The supported formats and float32/integer matrix are verified on the
 reported Chrome version; construction support can differ in other browsers.
+
+
+## Round 5 — local differences and create regression
+
+The four requested non-inset I420/I420P10 inputs were encoded in Chrome with the
+same distance **1**, effort **3**, source-depth header and source-depth-rounded
+RGB reference as the benchmark. No SIMD/scalar reconstruction bug was found.
+The large fused/RGB differences are predominantly a consequence of deliberately
+rounding the comparison RGB input before lossy VarDCT encoding. The source
+reconstruction, clipping order, matrix/range, chroma phase and guarded tails
+remain unchanged in this round.
+
+### Local decoded differences
+
+All errors below use **255 × absolute float difference**, even for P10. A pixel
+exceeds a threshold if **any channel** exceeds it; fractions in tables are
+percentages of pixels. Decodes are independent original-encoding **jxl-oxide
+float** outputs, without clipping or integer rounding. Reference reconstruction
+is independently repeated in Python/f64 with centered interpolation, matrix,
+clipping, conversion to f32, then source-depth rounding; it is asserted exactly
+equal to the Rust-generated benchmark reference. Metrics use all channels before
+PNG display conversion. PNG display alone clamps to [0,1] and rounds to U8.
+
+| Input | Comparison | Max levels | >8 % | >16 % | >32 % |
+| --- | --- | ---: | ---: | ---: | ---: |
+| fujioka 513×257 U8 | fused / RGB | 42.075 | 0.071298 | 0.002275 | 0.001517 |
+| fujioka 513×257 U8 | fused / ref | 53.342 | 3.492844 | 0.144113 | 0.008343 |
+| fujioka 513×257 U8 | RGB / ref | 58.681 | 3.501187 | 0.135011 | 0.013653 |
+| bbb 513×257 U8 | fused / RGB | 48.005 | 0.760765 | 0.072056 | 0.001517 |
+| bbb 513×257 U8 | fused / ref | 101.071 | 10.697734 | 1.081606 | 0.073573 |
+| bbb 513×257 U8 | RGB / ref | 76.920 | 10.552104 | 1.089191 | 0.071298 |
+| bbb 1280×720 U8 | fused / RGB | 64.222 | 0.585178 | 0.055122 | 0.006185 |
+| bbb 1280×720 U8 | fused / ref | 113.545 | 9.249240 | 0.905599 | 0.076714 |
+| bbb 1280×720 U8 | RGB / ref | 115.889 | 9.244032 | 0.909397 | 0.076389 |
+| bbb 1280×720 P10 | fused / RGB | 44.973 | 0.150608 | 0.011827 | 0.000977 |
+| bbb 1280×720 P10 | fused / ref | 126.606 | 9.833333 | 0.995551 | 0.079427 |
+| bbb 1280×720 P10 | RGB / ref | 126.606 | 9.810113 | 0.994141 | 0.078668 |
+
+OOR means **unclipped reconstruction** has a channel strictly outside [0,1].
+D8 is a square/Chebyshev radius-8 dilation (17×17 max filter), clipped at image
+edges. It includes OOR itself. `!OOR` and `!D8` are the respective complements.
+Small excursions count too; this is an input-domain mask, not a decoded overshoot
+mask. The U8 and P10 fixture pipelines differ as documented above; their masks
+are not a controlled bit-depth comparison.
+
+| Input | OOR % | D8 % |
+| --- | ---: | ---: |
+| fujioka 513×257 U8 | 0.1168 | 6.2454 |
+| bbb 513×257 U8 | 1.7612 | 39.6015 |
+| bbb 1280×720 U8 | 1.5744 | 28.4861 |
+| bbb 1280×720 P10 | 31.8347 | 50.5136 |
+
+Conditional cells are **mean / RMS / >8 %** of max-channel error. Full conditional
+maxima and >16/>32 fractions are in `build/diff-viz/stats.json`.
+
+| Input | Comparison | OOR | !OOR | D8 | !D8 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| fujioka 513×257 U8 | fused / RGB | 1.192 / 1.916 / 0.6494 | 0.779 / 1.266 / 0.0706 | 1.134 / 1.808 / 0.2550 | 0.756 / 1.223 / 0.0591 |
+| fujioka 513×257 U8 | fused / ref | 6.257 / 7.957 / 23.3766 | 2.851 / 3.680 / 3.4696 | 4.844 / 5.802 / 12.3148 | 2.722 / 3.502 / 2.9052 |
+| fujioka 513×257 U8 | RGB / ref | 6.258 / 8.211 / 23.3766 | 2.842 / 3.685 / 3.4779 | 4.848 / 5.877 / 12.5577 | 2.712 / 3.499 / 2.8979 |
+| bbb 513×257 U8 | fused / RGB | 0.780 / 1.260 / 0.1723 | 1.043 / 1.868 / 0.7713 | 0.805 / 1.423 / 0.2681 | 1.192 / 2.097 / 1.0838 |
+| bbb 513×257 U8 | fused / ref | 2.290 / 3.298 / 3.5314 | 3.927 / 5.332 / 10.8262 | 2.602 / 4.013 / 5.5467 | 4.749 / 6.000 / 14.0751 |
+| bbb 513×257 U8 | RGB / ref | 2.238 / 3.279 / 3.2300 | 3.910 / 5.317 / 10.6834 | 2.584 / 4.004 / 5.4969 | 4.731 / 5.982 / 13.8666 |
+| bbb 1280×720 U8 | fused / RGB | 1.012 / 1.456 / 0.1447 | 0.928 / 1.745 / 0.5922 | 0.936 / 1.741 / 0.5199 | 0.927 / 1.741 / 0.6112 |
+| bbb 1280×720 U8 | fused / ref | 2.395 / 3.853 / 5.8236 | 3.497 / 4.994 / 9.3040 | 3.549 / 5.282 / 10.6777 | 3.452 / 4.852 / 8.6802 |
+| bbb 1280×720 U8 | RGB / ref | 2.327 / 3.833 / 5.6237 | 3.482 / 4.993 / 9.3019 | 3.538 / 5.287 / 10.6743 | 3.434 / 4.848 / 8.6743 |
+| bbb 1280×720 P10 | fused / RGB | 0.216 / 0.466 / 0.0065 | 0.345 / 1.022 / 0.2179 | 0.281 / 0.791 / 0.1194 | 0.327 / 0.969 / 0.1824 |
+| bbb 1280×720 P10 | fused / ref | 0.836 / 1.417 / 0.5845 | 4.746 / 6.075 / 14.1527 | 2.656 / 4.545 / 8.0804 | 4.364 / 5.572 / 11.6226 |
+| bbb 1280×720 P10 | RGB / ref | 0.806 / 1.406 / 0.5811 | 4.745 / 6.074 / 14.1203 | 2.637 / 4.543 / 8.0772 | 4.362 / 5.570 / 11.5790 |
+
+To characterize location, compare **mean squared max-channel error** (energy)
+near the 8×8 lattice (`x mod 8 ∈ {0,7}` OR `y mod 8 ∈ {0,7}`) versus elsewhere.
+This is a grid proxy, not a parsed map of adaptive VarDCT transform partitions.
+Strong chroma means the top decile of max absolute backward horizontal/vertical
+Cb/Cr gradients after centered upsampling (ties included); compare with the
+remaining pixels. Saturated means a reference channel <0.02 or >0.98.
+Ratios >1 indicate greater conditional energy, not causality.
+
+| Input | Comparison | Grid / elsewhere | Strong chroma / other | Saturated / other |
+| --- | --- | ---: | ---: | ---: |
+| fujioka 513×257 U8 | fused / RGB | 1.513 | 2.315 | 2.035 |
+| fujioka 513×257 U8 | fused / ref | 1.214 | 3.649 | 2.977 |
+| fujioka 513×257 U8 | RGB / ref | 1.225 | 3.679 | 3.039 |
+| bbb 513×257 U8 | fused / RGB | 1.637 | 1.840 | 0.178 |
+| bbb 513×257 U8 | fused / ref | 1.404 | 2.473 | 0.081 |
+| bbb 513×257 U8 | RGB / ref | 1.411 | 2.495 | 0.080 |
+| bbb 1280×720 U8 | fused / RGB | 1.577 | 2.063 | 0.152 |
+| bbb 1280×720 U8 | fused / ref | 1.408 | 3.140 | 0.075 |
+| bbb 1280×720 U8 | RGB / ref | 1.412 | 3.159 | 0.073 |
+| bbb 1280×720 P10 | fused / RGB | 1.670 | 2.088 | 0.217 |
+| bbb 1280×720 P10 | fused / ref | 1.403 | 3.325 | 0.079 |
+| bbb 1280×720 P10 | RGB / ref | 1.398 | 3.332 | 0.078 |
+
+Visual inspection: fujioka's largest fused/RGB discrepancy is around the blue
+vending-machine/sign detail at (343,187); the other selected regions include the
+red vehicle and thin shop/sign edges. bbb 720p peaks are small pink flowers and
+thin grass/chroma detail at (296,704), (1056,683), (103,560). P10/reference peaks
+are also flowers in grass, e.g. (1056,687). These are interior image regions,
+not odd-width tails. Both RGB and fused have similarly large source errors.
+Chroma-edge energy enrichment and the weaker 8×8-grid enrichment are consistent
+with block codec decisions. OOR does not explain the peaks by itself: bbb has
+lower reference error inside OOR than outside, while fujioka shows the reverse.
+The large P10 OOR mask includes much of the bright sky, rather than the flower
+regions with the largest source errors. Saturation is not a universal predictor.
+
+### Attribution: actual encoder inputs and lower distance
+
+`wasm/diff-viz.mjs` captures the **actual pre-encoder XYB planes** using the
+existing observer, once for fused, once for rounded scalar RGB, and once for
+**unrounded** scalar RGB from the same owned YUV. It enables the RGB chunked
+observer only for diagnostics. Assertions require the captured distance-1 fused
+and rounded-RGB codestreams to be byte-identical to the normal benchmark streams,
+so the observation route has not changed the comparison.
+
+| Input | XYB fused/unrounded max | XYB fused/unrounded mean | XYB fused/rounded max | XYB fused/rounded mean |
+| --- | ---: | ---: | ---: | ---: |
+| fujioka 513×257 U8 | 4.76837158e-07 | 3.31872698e-08 | 0.00177761912 | 0.000369602349 |
+| bbb 513×257 U8 | 5.36441803e-07 | 5.04189437e-08 | 0.00171461701 | 0.000343008753 |
+| bbb 1280×720 U8 | 5.36441803e-07 | 5.09271096e-08 | 0.00171214342 | 0.000342776213 |
+| bbb 1280×720 P10 | 4.76837158e-07 | 2.65492854e-08 | 0.000435709953 | 8.39099375e-05 |
+
+These XYB values are in the encoder's native XYB units, not RGB levels. The
+unrounded comparison isolates SIMD/f32 versus scalar/f64 reconstruction and
+conversion arithmetic; all four pass max XYB error <3e-6. Source-depth rounding
+makes the input difference much larger. It is unnecessary to posit a clipping,
+chroma-siting, matrix, range, or tail error to explain the decoded differences.
+
+Cells below give **decoded max levels / >8 % / PSNR dB** versus fused. `∞` means
+identical decoded floats (JSON uses null). Distance 0.1 uses effort 3 and the same
+source-depth header; it is still lossy, not a lossless test.
+
+| Input | d1 rounded RGB | d0.1 rounded RGB | d1 unrounded RGB | d0.1 unrounded RGB |
+| --- | ---: | ---: | ---: | ---: |
+| fujioka 513×257 U8 | 42.075 / 0.071298 / 48.448 | 9.758 / 0.002275 / 54.313 | 0.000 / 0.000000 / ∞ | 0.460 / 0.000000 / 93.359 |
+| bbb 513×257 U8 | 48.005 / 0.760765 / 45.918 | 11.791 / 0.018204 / 51.657 | 0.000 / 0.000000 / ∞ | 0.542 / 0.000000 / 91.434 |
+| bbb 1280×720 U8 | 64.222 / 0.585178 / 46.571 | 25.011 / 0.021267 / 52.115 | 1.656 / 0.000000 / 87.176 | 2.934 / 0.000000 / 84.888 |
+| bbb 1280×720 P10 | 44.973 / 0.150608 / 52.461 | 12.436 / 0.000760 / 57.675 | 3.114 / 0.000000 / 86.601 | 1.689 / 0.000000 / 88.438 |
+
+Removing rounding makes the distance-1 small fixtures pixel-identical and leaves
+only 1.656/3.114-level maxima for U8/P10 720p, with no >8 pixels. Lowering distance
+reduces the rounded-path maxima and threshold fractions markedly, although
+isolated differences remain (e.g. U8 720p max 25.011 at distance 0.1). This supports
+input rounding changing lossy quantization/adaptive encoder decisions. Tiny
+floating-point differences can also cross those decisions; the experiment does
+not identify which individual VarDCT decision changed. No kernel correction was
+made, and no perceptual acceptability claim follows from these metrics.
+
+### PNGs and reproduction
+
+All 24 PNGs are ignored outputs in `build/diff-viz/`. Heatmaps use a fixed
+**0..64-level** max-channel scale: black → red → yellow → white; 64+ saturates.
+Each heatmap includes a legend. Each crop image contains the three separated
+worst regions for that comparison, with **48×48, nearest-neighbor ×8** crops,
+columns **fused | rounded RGB | reference**, origin and peak coordinates labeled.
+Masks use white for OOR and black otherwise. The reference PNG is display-only.
+
+| Input | Fused/RGB crops | Fused/ref crops | Fused/RGB heat | Fused/ref heat | OOR mask | Reference |
+| --- | --- | --- | --- | --- | --- | --- |
+| fujioka 513×257 U8 | [fusedRgb-crops](build/diff-viz/fujioka-513x257-untouched-fusedRgb-crops.png) | [fusedRef-crops](build/diff-viz/fujioka-513x257-untouched-fusedRef-crops.png) | [fusedRgb-heat](build/diff-viz/fujioka-513x257-untouched-fusedRgb-heat.png) | [fusedRef-heat](build/diff-viz/fujioka-513x257-untouched-fusedRef-heat.png) | [oor-mask](build/diff-viz/fujioka-513x257-untouched-oor-mask.png) | [reference](build/diff-viz/fujioka-513x257-untouched-reference.png) |
+| bbb 513×257 U8 | [fusedRgb-crops](build/diff-viz/bbb-513x257-untouched-fusedRgb-crops.png) | [fusedRef-crops](build/diff-viz/bbb-513x257-untouched-fusedRef-crops.png) | [fusedRgb-heat](build/diff-viz/bbb-513x257-untouched-fusedRgb-heat.png) | [fusedRef-heat](build/diff-viz/bbb-513x257-untouched-fusedRef-heat.png) | [oor-mask](build/diff-viz/bbb-513x257-untouched-oor-mask.png) | [reference](build/diff-viz/bbb-513x257-untouched-reference.png) |
+| bbb 1280×720 U8 | [fusedRgb-crops](build/diff-viz/bbb-1280x720-untouched-fusedRgb-crops.png) | [fusedRef-crops](build/diff-viz/bbb-1280x720-untouched-fusedRef-crops.png) | [fusedRgb-heat](build/diff-viz/bbb-1280x720-untouched-fusedRgb-heat.png) | [fusedRef-heat](build/diff-viz/bbb-1280x720-untouched-fusedRef-heat.png) | [oor-mask](build/diff-viz/bbb-1280x720-untouched-oor-mask.png) | [reference](build/diff-viz/bbb-1280x720-untouched-reference.png) |
+| bbb 1280×720 P10 | [fusedRgb-crops](build/diff-viz/bbb-1280x720-10bit-fusedRgb-crops.png) | [fusedRef-crops](build/diff-viz/bbb-1280x720-10bit-fusedRef-crops.png) | [fusedRgb-heat](build/diff-viz/bbb-1280x720-10bit-fusedRgb-heat.png) | [fusedRef-heat](build/diff-viz/bbb-1280x720-10bit-fusedRef-heat.png) | [oor-mask](build/diff-viz/bbb-1280x720-10bit-oor-mask.png) | [reference](build/diff-viz/bbb-1280x720-10bit-reference.png) |
+
+`build/diff-viz/inputs.json` retains exact Chrome copyTo source planes/layouts;
+`*-unclipped.rgb` retains reconstructed float source RGB; `*-d{1,0.1}-*.jxl`,
+`*.f32` and `*-d1-*.xyb` retain codestreams, independent decodes, and actual XYB.
+`stats.json` includes per-mask statistics and top-region coordinates/attributes.
+No generated image, codestream or decoded array is tracked.
+
+After the serial benchmark, with numpy/Pillow available:
+
+```sh
+node experiments/jxl-planar-xyb/wasm/diff-viz.mjs
+python3 experiments/jxl-planar-xyb/wasm/diff-viz.py
+# --reuse-decodes reuses only decodes at least as new as their codestreams.
+```
+
+On this host pip was absent; numpy/Pillow were installed under ignored
+`build/python` using get-pip with `TMPDIR=build/tmp`, `--no-cache-dir` and
+`--target build/python`, then invoked with `PYTHONPATH=build/python`.
+The analysis runner appends compact summaries to `wasm-observations.json` and
+asserts its byte size <100,000; full statistics stay in ignored build outputs.
+
+### Create regression: cause, fix and measurements
+
+`git diff ebdc562..ec68673` shows the Round 4 removal of the WASM-only fixed-U8
+admission guard. The likely compiler-level mechanism is the loss of constant-folding of
+source depth/byte width in the existing per-sample `extend_from_slice(&source[offset..offset+bytes])` copy.
+The generic variable-size append/capacity/bounds work then ran once per sample.
+The measured regression is in Rust `copyMs`, **excluding JS upload**; U8
+`sampleCheckMs` is zero. Storage remains U8; there was no U8→U16 widening.
+Output-depth option selection and JS marshaling do not account for this cost.
+
+Planar inputs now copy one contiguous row at a time; NV12 still deinterleaves
+into compact U/V. High-depth validation now OR-reduces high bytes of the compact
+U16LE samples, then checks against the 10/12-bit high-byte maximum once. The low
+byte is always legal. This avoids per-pixel coordinate/sample dispatch and
+branches and remains correct for unaligned source offsets/strides and tails.
+No sample is masked or silently clamped. Validation still occurs before encode.
+The public JS API is unchanged; only experiment diagnostic C exports were added.
+
+Same-host fresh runs: before `2026-10-23T20:39:44.427Z`, after `2026-10-23T20:43:57.739Z`.
+One warmup, five samples, distance 1, effort 3,
+observer off, fixed mode order. Component medians may not sum. Cells are
+**copy / sample check / create / encode / JS-inclusive total**, in ms. Zero means
+below the observed Chrome timing resolution (roughly 0.1 ms), not zero work.
+
+| Input | Before fused | After fused |
+| --- | ---: | ---: |
+| synthetic | 1.30 / 0.00 / 1.30 / 8.00 / 9.40 | 0.00 / 0.00 / 0.00 / 10.10 / 10.20 |
+| fujioka-513x257-untouched | 1.30 / 0.00 / 1.30 / 10.60 / 11.90 | 0.00 / 0.00 / 0.00 / 13.20 / 13.30 |
+| bbb-513x257-untouched | 1.60 / 0.00 / 1.60 / 12.80 / 14.50 | 0.00 / 0.00 / 0.00 / 10.60 / 10.70 |
+| bbb-1280x720-untouched | 10.50 / 0.00 / 10.50 / 69.10 / 79.70 | 0.20 / 0.00 / 0.20 / 74.20 / 74.60 |
+| bbb-513x257-10bit | 1.40 / 1.60 / 3.00 / 12.10 / 15.40 | 0.00 / 0.00 / 0.00 / 13.20 / 13.40 |
+| bbb-1280x720-10bit | 10.40 / 11.00 / 21.40 / 68.50 / 90.40 | 0.40 / 0.50 / 0.80 / 73.90 / 75.00 |
+
+The U8 720p create regression is resolved beyond the Round 3 3.8-ms baseline:
+**10.50 → 0.20 ms**. P10 720p sample check is **11.00 → 0.50 ms**, and create is
+**21.40 → 0.80 ms**. Encode timing fluctuates between runs; these data establish
+a creation/validation improvement, not a controlled codec-speed improvement.
+`build/round5-before.json` and the committed `createRegression` summary retain
+the same-host before/after measurements, distinct from historical Round 4.
+
+### Final serial checks
+
+The serial WASM build and native refresh passed. Browser correctness passed
+**81/81**; final `--benchmark` passed **87/87**, including native agreement,
+independent float decode, integer depth verification and retained-precision
+checks. All six high-depth VideoFrame formats were supported. The diagnostic
+capture matched all eight normal benchmark codestreams. Python checks passed
+**9/9 methods** in 21.851 s, including new compact-depth validation cases: maximum legal
+values and the first illegal high bit at first/middle/last samples of every
+plane, 10/12 bits, I420/I422/I444 (54 legal + 54 rejection checks). Browser checks
+also reject first/middle/last high-bit errors on each I420P10/P12 plane. Existing
+ownership, padding, unaligned layout, strict/clip and precision coverage remains.
+The separate final tail-guard rebuild/run passed **4,752/4,752** four-lane encodes.
+
+No build/test/browser/benchmark overlapped another heavy process. All builds
+used one job. Changes are confined to this experiment; no commits, changesets,
+or package changes were made. Raw logs are `build/round5-{wasm,native,test,
+benchmark,capture,diff,python,tail}.log`.

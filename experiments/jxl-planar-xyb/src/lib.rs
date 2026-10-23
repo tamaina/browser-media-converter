@@ -236,9 +236,15 @@ impl Session {
             let component = if i.format == 3 && c == 2 { 1 } else { 0 };
             let mut data = Vec::with_capacity(p.width * p.height * bytes);
             for y in 0..p.height {
-                for x in 0..p.width {
-                    let offset = p.offset + y * p.stride + x * source_step + component;
-                    data.extend_from_slice(&source[offset..offset + bytes]);
+                let row = p.offset + y * p.stride;
+                if source_step == bytes {
+                    // A single memcpy per planar row; do not append a runtime-
+                    // sized slice for every sample (especially expensive in WASM).
+                    data.extend_from_slice(&source[row..row + p.width * bytes]);
+                } else {
+                    // NV12 is U8 only; deinterleave into compact owned U/V.
+                    data.extend(source[row..row + p.width * 2]
+                        .iter().skip(component).step_by(2).copied());
                 }
             }
             planes.push(Plane {
@@ -266,17 +272,16 @@ impl Session {
         timings[0] = unsafe { planar_clock_ms() } - start;
         let check_start = unsafe { planar_clock_ms() };
         // Admit all stored samples and converted RGB before the codec emits bytes.
-        let max = (1u32 << i.depth) - 1;
-        for c in 0..if i.depth == 8 { 0 } else { 3 } {
-            let p = &session.planes[c];
-            for y in 0..p.height {
-                for x in 0..p.width {
-                    need(
-                        session.sample(c, x, y) <= max,
-                        "sample exceeds declared depth (MSB-aligned/P010 storage is unsupported)",
-                    )?;
-                }
+        if i.depth > 8 {
+            // Low byte is always valid for 10/12-bit LSB storage. OR-reduce
+            // high bytes over compact planes: no coordinate arithmetic, sample
+            // dispatch, or early-exit branch per sample; LLVM can vectorize it.
+            let mut high = 0u8;
+            for p in &session.planes {
+                for sample in p.bytes.chunks_exact(2) { high |= sample[1]; }
             }
+            need(u32::from(high) <= ((1u32 << i.depth) - 1) >> 8,
+                 "sample exceeds declared depth (MSB-aligned/P010 storage is unsupported)")?;
         }
         timings[2] = unsafe { planar_clock_ms() } - check_start;
         if option != 2 && session.strict {
