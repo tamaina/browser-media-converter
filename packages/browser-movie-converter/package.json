@@ -30,8 +30,7 @@
   "dependencies": {
     "@browser-mc/mediabunny-scene-keyframes": "workspace:^",
     "@browser-mc/video-codec": "workspace:^",
-    "@browser-mc/webcodecs-color": "workspace:^",
-    "mediabunny": "^1.61.1"
+    "@browser-mc/webcodecs-color": "workspace:^"
   },
   "files": [
     "dist",
@@ -39,5 +38,11 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.62.0"
+  },
+  "devDependencies": {
+    "mediabunny": "1.62.0"
   }
 }

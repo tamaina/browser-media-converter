@@ -24,14 +24,17 @@
     "test:package": "node test/detection-unit.mjs",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs"
   },
-  "dependencies": {
-    "mediabunny": "^1.61.1"
-  },
   "files": [
     "dist",
     "README.md"
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "peerDependencies": {
+    "mediabunny": "^1.62.0"
+  },
+  "devDependencies": {
+    "mediabunny": "1.62.0"
   }
 }

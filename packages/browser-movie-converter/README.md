@@ -12,8 +12,16 @@ Browser movie conversion package using Mediabunny for demux/mux/encode orchestra
 ## Install
 
 ```sh
-pnpm add @browser-mc/browser-movie-converter mediabunny
+pnpm add @browser-mc/browser-movie-converter 'mediabunny@^1.62.0'
 ```
+
+Mediabunny is a required peer dependency. Use one shared Mediabunny installation
+(version 1.62.0 or a compatible newer 1.x release) in your application and these
+helpers. Their APIs exchange Mediabunny objects, and separate copies can fail
+runtime `instanceof` checks even when their versions match. Keep Mediabunny external
+if you bundle these helpers separately, and resolve it to the application's copy.
+Install it explicitly even if your package manager can install peers automatically;
+incompatible versions are unsupported.
 
 ## Build Mediabunny conversion options
 
