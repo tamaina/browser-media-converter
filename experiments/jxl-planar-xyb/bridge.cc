@@ -145,7 +145,7 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
       input.experimental_conversion_ms=instrumentation?&result->conversion_ms:nullptr;
       input.experimental_simd_lanes=&result->simd_lanes;
       input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
-      if(input.experimental_yuv && c->primaries==1 && c->transfer==13)
+      if(input.experimental_yuv && c->primaries==1 && (c->transfer==13 || c->transfer==1))
         input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
       if(source.failed) throw std::runtime_error("planar region conversion failed");

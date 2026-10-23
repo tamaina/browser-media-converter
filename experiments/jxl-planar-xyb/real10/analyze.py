@@ -1,6 +1,6 @@
 """Serial bounded-memory source-depth/range analysis. Run after fetch.py.
 Raw source OOR uses assumed BT.709 limited range with MPEG-2 left chroma.
-Prepared-file OOR uses sRGB transfer with centered chroma (the API contract).
+API-file OOR uses the same BT.709 / left samples directly.
 No clipping/rounding in this analysis; tiny excursions count.
 """
 import json
@@ -25,7 +25,7 @@ def scan(p,w,h,left):
     return dict(oorFraction=count/(w*h),unclippedMin=minimum,unclippedMax=maximum,yMin=int(yy.min()),yMax=int(yy.max()),lsb2=np.bincount((yy&3).ravel(),minlength=4).tolist())
 results=[]
 for f in json.loads((OUT/'manifest.json').read_text()):
-    r=dict(name=f['name'],source=scan(OUT/f['sourceFile'],f['width'],f['height'],True),prepared=scan(OUT/Path(f['url']).name,f['width'],f['height'],False))
+    r=dict(name=f['name'],source=scan(OUT/f['sourceFile'],f['width'],f['height'],True),prepared=scan(OUT/Path(f['url']).name,f['width'],f['height'],True))
     if f['width']==2560:
         # Verify all three planes of the unscaled native crop against source samples.
         raw=np.fromfile(OUT/'raw'/'Netflix_Boat_f150.y4m',dtype='<u2',offset=50)

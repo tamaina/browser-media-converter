@@ -35,7 +35,7 @@ uses this ABI.
 
 At `ComputeEncodingData`, the new path bypasses `CopyColorChannels`. Each row is:
 
-1. Reconstructed from the Rust-owned compact YUV planes, with centered bilinear
+1. Reconstructed from the Rust-owned compact YUV planes, with explicit left/center/topleft bilinear
    chroma interpolation and edge replication. Full/limited range and the source
    NCL matrix produce nonlinear RGB values in float32 (f64 intermediate math).
 2. Passed through the existing libjxl `ToXYB`. Its standard sRGB fast path or
@@ -72,8 +72,8 @@ and [the reference descriptor documentation](../jxl-planar-hdr/README.md).
 
 | Storage / format | Profiles | Matrix / range / chroma |
 | --- | --- | --- |
-| U8 I420/I422/I444, NV12 | BT.709 primaries + sRGB or BT.709 transfer; P3-D65 + sRGB transfer | BT.601 or BT.709 NCL; full/limited; centered |
-| LE U16 low 10/12 meaningful bits, I420/I422/I444 | Above SDR profiles; BT.2020 + PQ or HLG | BT.601/709 for SDR/P3; BT.2020 NCL for PQ/HLG; full/limited; centered |
+| U8 I420/I422/I444, NV12 | BT.709 primaries + sRGB or BT.709 transfer; P3-D65 + sRGB transfer | BT.601 or BT.709 NCL; full/limited; left/center/topleft |
+| LE U16 low 10/12 meaningful bits, I420/I422/I444 | Above SDR profiles; BT.2020 + PQ or HLG | BT.601/709 for SDR/P3; BT.2020 NCL for PQ/HLG; full/limited; left/center/topleft |
 
 Explicit PQ intensity=10000 nits, HLG=1000 nominal nits, SDR=255 nits. All admitted
 profiles use D65; arbitrary whitepoints are not accepted. Primaries, transfer and
@@ -166,3 +166,7 @@ Relevant pinned libjxl implementation:
 [encoder boundary](https://github.com/libjxl/libjxl/blob/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc/lib/jxl/enc_frame.cc#L1494),
 [ToXYB](https://github.com/libjxl/libjxl/blob/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc/lib/jxl/enc_xyb.cc#L226),
 [CMS row buffers](https://github.com/libjxl/libjxl/blob/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc/lib/jxl/enc_image_bundle.cc#L20).
+
+Round 7 WASM accepts WebCodecs sRGB/BT.709/SMPTE170M transfers and defaults to
+left chroma siting. See [WASM.md](WASM.md) for the current API, display-transfer
+caveats, and measured results; older rounds below retain historical context.

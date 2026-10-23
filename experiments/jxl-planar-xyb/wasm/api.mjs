@@ -12,8 +12,8 @@ export async function createEncoder(options = {}) {
       if (['bitDepth','depth'].includes(k) && ![8,10,12].includes(v)) fail('source depth must be 8/10/12');
       if (k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
       if (k === 'primaries' && v !== 'bt709') fail('primaries must be bt709');
-      if (k === 'transfer' && v !== 'srgb') fail('transfer must be srgb');
-      if (k === 'chromaSiting' && v !== 'center') fail('chromaSiting must be center');
+      if (k === 'transfer' && !['srgb','iec61966-2-1','bt709','smpte170m'].includes(v)) fail('unsupported SDR transfer');
+      if (k === 'chromaSiting' && !['left','center','topleft'].includes(v)) fail('chromaSiting must be left/center/topleft');
       if (['alpha','icc','origin','color','colorSpace'].includes(k)) fail(`unsupported ${k}`);
     }
     const distance = o.distance ?? 1, effort = o.effort ?? 3;
@@ -33,7 +33,7 @@ export async function createEncoder(options = {}) {
     if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
     const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb?0:sourceDepth):bitDepth;
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format);
-    const matrix=rgb ? 1 : ({bt709:1,bt601:6})[i.matrix];
+    const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6})[i.matrix];
     if (format<0 || !matrix || (!rgb && typeof i.fullRange !== 'boolean')) fail('explicit format, bt601/bt709 matrix and boolean fullRange required');
     const pointers=[];
     const before=m.HEAPU8.buffer.byteLength;
@@ -42,7 +42,7 @@ export async function createEncoder(options = {}) {
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
-      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort,sourceDepth,outputDepth);
+      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort,sourceDepth,outputDepth,({srgb:13,'iec61966-2-1':13,bt709:1,smpte170m:1})[i.transfer??'iec61966-2-1'],({left:0,center:1,topleft:2})[i.chromaSiting??'left']);
       let status;
       if (rgb) {
         if (!(i.data instanceof Float32Array) || i.data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array');

@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parent
 class Plane(C.Structure):
     _fields_=[("data",C.POINTER(C.c_uint8))]+[(x,C.c_size_t) for x in ("size","offset","stride","width","height")]
 class Input(C.Structure):
-    _fields_=[(x,C.c_uint32) for x in ("width","height","format","depth","storage","matrix","primaries","transfer","full_range","centered","origin_x","origin_y")]+[("intensity",C.c_float),("planes",Plane*3)]
+    _fields_=[(x,C.c_uint32) for x in ("width","height","format","depth","storage","matrix","primaries","transfer","full_range","siting","origin_x","origin_y")]+[("intensity",C.c_float),("planes",Plane*3)]
 class Config(C.Structure):
     _fields_=[(x,C.c_uint32) for x in ("width","height","primaries","transfer")]+[("intensity",C.c_float),("depth",C.c_uint32)]
 class Encoded(C.Structure):
@@ -30,7 +30,7 @@ def load(m,base):
     if set(m)!={"width","height","format","bitDepth","storage","origin","color","planes"}: raise ValueError("explicit input fields required; ICC/alpha unsupported")
     c=m["color"]
     if set(c)!={"primaries","transfer","matrix","fullRange","chromaSiting","intensityTargetNits"}: raise ValueError("explicit complete color metadata required")
-    if type(c["fullRange"]) is not bool or c["chromaSiting"]!="center": raise ValueError("explicit boolean range and centered chroma required")
+    if type(c["fullRange"]) is not bool or c["chromaSiting"] not in ("left","center","topleft"): raise ValueError("explicit boolean range and valid chroma siting required")
     formats={"NV12":(3,8)}
     for index,name in enumerate(("I420","I422","I444")):
         for depth in (8,10,12): formats[name+("" if depth==8 else f"P{depth}")]=(index,depth)
@@ -41,7 +41,7 @@ def load(m,base):
     i=Input(integer(m["width"]),integer(m["height"]),fmt,depth,{"u8":0,"u16le-lsb":1}[m["storage"]],
             {"bt709":1,"smpte170m":6,"bt470bg":6,"bt2020-ncl":9}[c["matrix"]],
             {"bt709":1,"smpte432":11,"bt2020":9}[c["primaries"]],
-            {"bt709":1,"iec61966-2-1":13,"pq":16,"hlg":18}[c["transfer"]],int(c["fullRange"]),1,
+            {"bt709":1,"smpte170m":1,"srgb":13,"iec61966-2-1":13,"pq":16,"hlg":18}[c["transfer"]],int(c["fullRange"]),{"left":0,"center":1,"topleft":2}[c["chromaSiting"]],
             integer(m["origin"]["x"]),integer(m["origin"]["y"]),c["intensityTargetNits"])
     if len(m["planes"])!=(2 if fmt==3 else 3): raise ValueError("plane count")
     keep=[]

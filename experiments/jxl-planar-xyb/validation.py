@@ -23,7 +23,7 @@ class ValidationCases(unittest.TestCase):
                 def reject(change):
                     inp=Input.from_buffer_copy(original);change(inp)
                     with self.assertRaises(ValueError):encode(inp)
-                for field,value in (("depth",8),("depth",16),("storage",0),("matrix",10),("matrix",1),("transfer",13),("primaries",11),("intensity",255),("intensity",float("nan")),("full_range",2),("centered",0),("origin_x",1),("origin_y",2),("width",0),("width",2**32-1)):
+                for field,value in (("depth",8),("depth",16),("storage",0),("matrix",10),("matrix",1),("transfer",13),("primaries",11),("intensity",255),("intensity",float("nan")),("full_range",2),("siting",3),("origin_x",1),("origin_y",2),("width",0),("width",2**32-1)):
                     reject(lambda x:setattr(x,field,value))
                 for index in range(3):
                     for field,value in (("size",1),("offset",2**64-1),("stride",0),("stride",2**64-1),("width",1),("height",1)):

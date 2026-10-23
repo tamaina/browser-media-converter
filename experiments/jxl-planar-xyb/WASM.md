@@ -1,4 +1,4 @@
-# SDR planar YUV in WebAssembly — Round 6
+# SDR planar YUV in WebAssembly — Round 7
 
 This experiment links the owned Rust planar session and `bridge.cc` to patched
 libjxl v0.11.1 (794a5dcf0d54f9f0b20d288a12e87afb91d20dfc), with Highway
@@ -16,18 +16,19 @@ The source format determines source depth; optional input depth/storage metadata
 must agree. The owned copy retains both bytes of every 10/12-bit sample.
 
 Fused conversion has no integer RGB intermediate and no 8-bit quantization.
-Centered chroma interpolation, matrix, transfer linearization and XYB use float.
+Explicit chroma interpolation, matrix, transfer linearization and XYB use float.
 Full-range luma divides by `2^bits-1`; chroma subtracts `2^(bits-1)` and divides
 by `2^bits-1`. Limited-range luma uses `(Y-16*s)/(219*s)` and chroma uses
 `(C-128*s)/(224*s)`, where `s=2^(bits-8)`. Reconstructed nonlinear RGB channels
-are independently clamped to [0,1] **after** the matrix and **before** sRGB
-linearization. Green uses the original unclamped red/blue matrix results.
+are independently clamped to [0,1] **after** the matrix and **before**
+the selected transfer linearization. Green uses the original unclamped red/blue matrix results.
 Rust scalar reconstruction and the SIMD kernel share these semantics.
 
 ```js
 const encoder = await createEncoder();
 const input = {
   width, height, format: 'I420P10', matrix: 'bt709', fullRange: false,
+  primaries: 'bt709', transfer: 'bt709', chromaSiting: 'left',
   planes: [
     {data: yBytes, offset: 0, stride: yStrideBytes},
     {data: uBytes, offset: 0, stride: uStrideBytes},
@@ -38,8 +39,8 @@ encoder.encodePlanarYuv(input); // default bitDepth: 'preserve' -> 10-bit header
 encoder.encodePlanarYuv(input, {bitDepth: 8});
 encoder.encodePlanarYuv(input, {bitDepth: 'float32'});
 encoder.encodePlanarYuv(input, {rgbViaPlanar: true}); // source-depth RGB baseline
-encoder.encodeRgb({width, height, data: packedFloatRgb}); // float32 header default
-encoder.encodeRgb({width, height, data: packedFloatRgb}, {bitDepth: 12});
+encoder.encodeRgb({width, height, transfer: 'bt709', data: packedFloatRgb}); // float32 header default
+encoder.encodeRgb({width, height, transfer: 'bt709', data: packedFloatRgb}, {bitDepth: 12});
 ```
 
 `encodePlanarYuv` option `bitDepth?: 'preserve' | 8 | 10 | 12 | 'float32'`
@@ -56,11 +57,36 @@ not promise integer-exact reconstruction. The `'preserve'` convention mirrors
 Native `PlanarRgbConfig.depth` / `planar_set_bit_depth` use 0 for float32 and
 8/10/12 for integer headers; a new planar session defaults to its source depth.
 
-The WASM API remains explicit SDR: BT.601/BT.709 NCL matrix, BT.709 primaries,
-sRGB transfer, D65, centered chroma, explicit full/limited range. BT.709 video
-transfer must first be converted to sRGB, as in Round 3. PQ/HLG/P3/BT.2020 and
-unknown metadata reject; no transfer inference or tone mapping occurs. Historical
-native profile tests still exercise the older non-fused HDR/P3 reference paths.
+The WASM API remains SDR: BT.709 primaries only (D65), matrix `bt709` or
+BT.601 (`smpte170m` / `bt470bg`, with legacy `bt601` alias), explicit boolean
+`fullRange`. Input fields `transfer?: 'iec61966-2-1' | 'srgb' | 'bt709' |
+'smpte170m'` and `chromaSiting?: 'left' | 'center' | 'topleft'` sit alongside
+`matrix`, `primaries` and `fullRange`. Omitted transfer retains sRGB; omitted
+primaries retains BT.709. `srgb` aliases WebCodecs `iec61966-2-1`.
+`bt709` and `smpte170m` share inverse BT.709 OETF and JXL TF 709 (CICP 1);
+sRGB signals CICP 13. `encodeRgb` also accepts this transfer field, so prepared
+nonlinear RGB can use the matching encoding. PQ/HLG/P3/BT.2020 and unknown or
+null metadata reject; no tone mapping occurs. Historical native-only tests
+retain their older HDR/P3 reference profiles.
+
+**Default siting changes from center to left.** Left is horizontally co-sited,
+vertically centered for 4:2:0 (usual MPEG-2/H.264/HEVC interpretation); center
+is centered on both axes (JPEG/MPEG-1); topleft is co-sited on both axes (4:2:0
+type 2). For a subsampled axis with luma index p and factor s, centered chroma
+coordinate is `(p+.5)/s-.5`, co-sited is `p/s`. Clamp that coordinate to the
+available chroma range, then interpolate linearly in each axis. I422 has only
+horizontal subsampling; I444 ignores siting. Edges replicate, including odd
+sizes. The old centered fixtures now request `chromaSiting: 'center'` explicitly.
+VideoColorSpace has no chroma-location member: callers must supply siting from
+codec/container knowledge, never infer it from `frame.colorSpace`.
+
+```js
+const color = frame.colorSpace.toJSON();
+// After copyTo, provide per-plane Uint8Array, offset, and byte stride:
+encoder.encodePlanarYuv({width, height, format: frame.format,
+  ...color, chromaSiting: 'left', planes});
+```
+
 `validation: 'clip'` is default; `'strict'` scans and rejects reconstructed RGB
 outside [0,1]. The retired certificate option rejects. `encodeRgb` requires
 finite nominal-range packed Float32Array RGB. Distance is (0,25], effort 1..3.
@@ -271,8 +297,7 @@ not clamp decoded output. Signalling integer depth does not make XYB lossless.
 
 Growing memory retains its high-water capacity. No workers/pthreads, streaming,
 cancellation, SIMD-less fallback, WASM HDR/P3, alpha/ICC, production integration,
-commits or changesets are included. BT.709 video transfer conversion remains
-external. The supported formats and float32/integer matrix are verified on the
+commits or changesets are included. BT.709 video transfer is supported directly as of Round 7. The supported formats and float32/integer matrix are verified on the
 reported Chrome version; construction support can differ in other browsers.
 
 
@@ -549,7 +574,7 @@ intermediate. Raw files cannot describe their pixel format/tags: raw byte counts
 independently probed for dimensions / `yuv420p10le` before extracting their raw
 payload; color metadata is in ignored `manifest.json`.
 
-**The current API accepts sRGB transfer / centered chroma only.** A separate
+**Round 6 API (historical) accepted sRGB transfer / centered chroma only.** A separate
 10-bit zscale pass converts BT.709 transfer → sRGB and left → center, retaining
 BT.709 matrix/primaries and limited range. Only these prepared planes enter
 VideoFrame/copyTo and both native/WASM pipelines. They must not be mistaken for
@@ -722,3 +747,146 @@ identity and decode freshness checks. `--reuse-decodes` additionally reuses the
 other diagnostic decodes when newer than their corresponding codestream.
 
 Final checks: serial WASM/native rebuilds succeeded; default browser **81/81**, real10 benchmark **91/91**, native `test_xyb.py` **9/9** (22.164 s), tail-guard **4,752/4,752**. The regenerated source/API raw files are SHA-256 byte-identical to the final benchmark inputs; native crop sample equality and independent source/API y4m ffprobe checks passed. Final observations: **93084 bytes**. No media outputs are versioned.
+
+
+## Round 7 — decoded video transfer and chroma location
+
+### Transfer definition and display implications
+
+The fused SIMD kernel reuses libjxl v0.11.1's `TF_709::DisplayFromEncoded`:
+`E/4.5` below 0.081, otherwise `((E+0.099)/1.099)^(1/0.45)` after matrix/clipping.
+See [libjxl transfer functions](https://github.com/libjxl/libjxl/blob/v0.11.1/lib/jxl/cms/transfer_functions-inl.h).
+The source nonlinear values are tagged with `JXL_TRANSFER_FUNCTION_709`, so
+jxl-oxide's original-encoding float decode reapplies the matching OETF. This
+round-trip deliberately does **not** substitute BT.1886 (reference-display
+gamma 2.4, with black-level compensation) for the inverse camera OETF.
+The scalar RGB route retains nonlinear RGB. The patched BT.709/D65 RGB
+`ToXYB` path now uses `TF_709` directly as well; guard tests compare its
+pre-encoder XYB against fused. Other native reference profiles retain CMS.
+
+Chromium's [ColorSpace::GetTransferFunction source](https://chromium.googlesource.com/chromium/src/+/main/ui/gfx/color_space.cc)
+was retrieved during this round. Its BT709/SMPTE170M cases share the sRGB
+transfer function; the nearby comment discusses gamma 2.4, common displays and
+player compatibility. The [header](https://chromium.googlesource.com/chromium/src/+/main/ui/gfx/color_space.h)
+also documents a macOS overlay-specific BT709_APPLE gamma 1.961 path. Thus a
+normal Chrome video rendering path often treats 709 nonlinear samples as sRGB,
+rather than applying inverse OETF or a universal BT.1886 display transform.
+This is source evidence, not a measurement of every OS/GPU/overlay combination.
+
+The locally installed jxl-oxide 0.11.0 `jxl-color/src/tf/bt709.rs` applies
+`4.5*L` / `1.099*L^0.45-.099` when outputting original 709-encoded pixels.
+A color-managed JXL viewer honoring that TF will interpret midtones differently
+from Chrome's sRGB video treatment: e.g. code .5 corresponds to roughly .260
+linear with inverse 709 versus .214 for sRGB (.189 for ideal gamma 2.4).
+Consequently the 709-TF JXL can appear lighter in midtones than that video path.
+Actual browser JXL support, ICC/CICP precedence, CMS, display profile and overlay
+behavior vary; no screenshot equivalence is claimed. This round verifies
+original-domain float values, not display matching. A deliberate display-match
+conversion belongs in an explicit separate policy.
+
+### Direct Netflix preparation
+
+`real10/fetch.py` now feeds `.bt709-left.yuv` directly. It retains the same
+10-bit crops and spline36 resize as Round 6's **source-domain** fixtures:
+`zscale=...:transferin=709:transfer=709:chromalin=left:chromal=left:dither=none`.
+There is no transfer/siting conversion pass or U8 intermediate. Old local
+sRGB/center derivatives can remain ignored but are unused. The unscaled crop
+still verifies sample-exact against original Y/U/V; source y4m pixel format,
+raw sizes, source extraction and license restrictions remain as documented above.
+
+### Canonical BT.709 RGB reference
+
+The first direct-content benchmark exposed a real reference-path discrepancy:
+Aerial's native/WASM prepared-RGB decode PSNR was 63.136179 dB, below the
+existing 70 dB same-path agreement gate (fused was 84.675921 dB). Capturing
+actual pre-encoder XYB for the same rounded RGB showed native/WASM max
+7.6651573e-5, mean 1.5914477e-5; WASM fused versus unrounded scalar RGB max was
+1.8683076e-4, above the 3e-6 kernel/reference tolerance. The generic BT.709
+RGB route traversed different CMS implementations (native LCMS / WASM skcms),
+whereas fused used the required libjxl `TF_709` directly. This was not explained
+solely by source-depth rounding or post-encoder partition choices.
+
+The experiment's BT.709/D65 RGB `ToXYB` path now applies `TF_709` directly,
+then the existing opsin transform, including optional linear-output storage.
+This avoids the generic ICC/CMS approximations for this admitted RGB profile;
+sRGB, other primaries and native HDR profiles retain their existing paths.
+Prepared RGB, RGB E2E, row fallback and fused therefore use the requested
+normative transfer. Existing numeric/quality gates were retained. Timings below
+are measured after rebuilding this fix; they are not timings of stock libjxl's
+generic BT.709 RGB CMS path.
+
+### Round 7 measurements
+
+Run: 2026-10-23T23:30:00.906Z; Intel(R) Core(TM) i7-10510U CPU @ 1.80GHz; Chrome 156.0.8078.47, Node v24.18.0. Distance 1 / effort 3, one warmup + five samples per mode, fixed fused / prepared RGB / RGB E2E order, serial. Codec builds are as described above. The RGB baseline rounds to source depth; fused retains float precision. No thermal control or randomized timing trial.
+
+WASM medians in ms, **create / encode / JS-inclusive total**. RGB E2E total includes scalar conversion and its full RGB allocation. Prepared RGB excludes creation/conversion.
+
+| Direct BT.709/left input | Fused | RGB E2E | Prepared RGB |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 0.80 / 82.80 / 83.90 | 0.80 / 67.20 / 158.70 | 0.00 / 69.20 / 71.00 |
+| pierseaside-f300-1280x720 | 0.80 / 79.00 / 80.20 | 0.80 / 67.80 / 162.50 | 0.00 / 68.30 / 69.80 |
+| boat-f150-1280x720 | 0.80 / 78.00 / 79.40 | 0.80 / 72.40 / 164.40 | 0.00 / 72.80 / 74.30 |
+| boat-f150-2560x1440 | 3.90 / 287.50 / 293.60 | 4.50 / 242.60 / 608.00 | 0.00 / 244.20 / 249.50 |
+
+Native medians in ms, **create / encode / total** (same modes, excluding JS marshaling).
+
+| Input | Fused | RGB E2E | Prepared RGB |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 1.36 / 93.86 / 95.31 | 1.42 / 77.45 / 164.30 | 0.00 / 76.63 / 76.66 |
+| pierseaside-f300-1280x720 | 1.46 / 89.68 / 91.01 | 1.33 / 74.35 / 159.70 | 0.00 / 74.27 / 74.30 |
+| boat-f150-1280x720 | 1.24 / 92.86 / 94.33 | 1.25 / 82.26 / 166.12 | 0.00 / 83.02 / 83.06 |
+| boat-f150-2560x1440 | 5.73 / 371.69 / 377.09 | 5.43 / 316.23 / 667.98 | 0.00 / 326.77 / 326.84 |
+
+Original-encoding jxl-oxide float decode: all real streams report **BT.709 primaries, TF 709 (CICP 1), RGB matrix, full-range RGB output and 10-bit integer depth**. Source quality uses clipped nonlinear reconstruction rounded to 10-bit; decoded floats remain unclipped. This checks the input nonlinear domain, with no extra transfer conversion. Prepared RGB and RGB E2E codestreams are byte-identical in native and WASM.
+
+| Input | Fused bytes / PSNR dB | RGB bytes / PSNR dB | Fused/RGB PSNR dB |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 205,109 / 38.560254 | 205,130 / 38.562020 | 53.834663 |
+| pierseaside-f300-1280x720 | 151,260 / 40.055104 | 151,305 / 40.057870 | 55.703822 |
+| boat-f150-1280x720 | 293,947 / 38.045929 | 293,842 / 38.049225 | 53.399251 |
+| boat-f150-2560x1440 | 667,504 / 39.559444 | 667,533 / 39.558549 | 55.317939 |
+
+Fused/RGB agreement: max and thresholds use **255-scaled** float errors, even for 10-bit. A pixel counts if any channel exceeds the threshold.
+
+| Input | Max | >8 % | >16 % | >32 % |
+| --- | ---: | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 18.788990 | 0.060221 | 0.001519 | 0.000000 |
+| pierseaside-f300-1280x720 | 25.272550 | 0.021593 | 0.003472 | 0.000000 |
+| boat-f150-1280x720 | 20.932647 | 0.027561 | 0.002279 | 0.000000 |
+| boat-f150-2560x1440 | 29.098305 | 0.015652 | 0.000461 | 0.000000 |
+
+Distance **0.01**, effort 3; both outputs signal 10-bit. Against unrounded clipped nonlinear float reconstruction, errors in **1/1023 units**. The U8 control rounds RGB to 1/255 before encoding. Maxima include lossy ringing/overshoot; all four fused whole-frame means are lower than the U8 controls.
+
+| Input | Fused mean / max | U8 mean / max | Top-center fused mean / max | Top-center U8 mean / max |
+| --- | ---: | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 0.390904 / 13.669297 | 1.041413 / 12.401730 | 0.255584 / 3.570850 | 0.952361 / 4.637739 |
+| pierseaside-f300-1280x720 | 0.322077 / 19.722961 | 0.997209 / 18.847246 | 0.282196 / 3.768899 | 0.964039 / 4.849751 |
+| boat-f150-1280x720 | 0.385298 / 11.683442 | 1.011446 / 11.241491 | 0.304199 / 3.819021 | 0.990238 / 4.931276 |
+| boat-f150-2560x1440 | 0.336391 / 14.306431 | 1.001424 / 12.895365 | 0.263997 / 3.350302 | 0.974943 / 5.210178 |
+
+The top-center ROI retains the Round 6 definition. OOR is before clipping, fraction of pixels with any nonlinear channel outside [0,1], including tiny excursions.
+
+| Input | Round 6 source OOR % | Round 7 direct/API OOR % |
+| --- | ---: | ---: |
+| aerial-f600-1280x720 | 4.833116 | 4.833116 |
+| pierseaside-f300-1280x720 | 0.407335 | 0.407335 |
+| boat-f150-1280x720 | 5.114366 | 5.114366 |
+| boat-f150-2560x1440 | 1.788954 | 1.788954 |
+
+All four source-domain rates match to the reported six decimals (and current source/API scans match exactly); the scaled planes and native crop retain Round 6 source samples. Round 6’s larger prepared sRGB/center rates are a different preprocessing domain and are not the direct-input rates.
+
+### VideoDecoder sanity and serial checks
+
+The Playwright harness generates one 160×90 keyframe from repo-owned `bbb.mov` at 10 s for each VP9 depth, under ignored `build/browser/`. ffmpeg uses one thread; IVF is minimally demuxed in JS. Decoder configuration explicitly supplies the same BT.709/limited metadata as the ffmpeg stream and requests software decoding. Output metadata is recorded from the actual decoded VideoFrame. `copyTo` planes are encoded directly with that colorSpace and explicit left siting. Their bytes match ffmpeg decode exactly; Python independently reconstructs f64 nonlinear RGB from those bytes before the JXL decode comparison. This is real VideoDecoder output, separate from synthetic VideoFrame construction.
+
+| Codec | Chrome format | Actual colorSpace | Max code difference vs ffmpeg |
+| --- | ---: | ---: | ---: |
+| vp09.00.10.08 | I420 | {'fullRange': False, 'matrix': 'bt709', 'primaries': 'bt709', 'transfer': 'bt709'} | 0 |
+| vp09.02.10.10 | I420P10 | {'fullRange': False, 'matrix': 'bt709', 'primaries': 'bt709', 'transfer': 'bt709'} | 0 |
+
+Both 8-bit and VP9 profile 2 10-bit are supported on this host. No HEVC test was needed. These are software-path results, not GPU/overlay coverage. Generated clips are not versioned.
+
+Final serial commands: WASM build PASS; native build PASS; default browser **138/138**; `--benchmark --real10` **148/148**. Browser additions include the complete 3-transfer × 3-siting × 6-format matrix (54 cases), BT.709 precision gradient, and two decoded VP9 fixtures. Six formats include NV12 for every siting, beyond the left-only minimum. The independent Python/f64 reference checks every native `planar_region` reconstruction within 1e-7 before supplying the RGB baseline. Aliases, default-left on a nonconstant fixture, I422 vertical independence and I444 siting independence are also asserted.
+
+
+Native `test_xyb.py` **10/10** (20.715 s; 252 transfer × siting cases, max XYB error 2.384e-7) and the rebuilt tail-guard **28,512/28,512** four-lane Highway guard-page tail encodes passed, run serially after the benchmark. Final observations: **66,939 bytes**.

@@ -18,7 +18,7 @@ PROFILES={
 def f32(value): return struct.unpack("<f",struct.pack("<f",value))[0]
 def read_floats(path):
     data=path.read_bytes(); return struct.unpack(f"<{len(data)//4}f",data)
-def fixture(base,fmt="I420P10",w=17,h=9,profile="pq",full=False,neutral=False,matrix=None):
+def fixture(base,fmt="I420P10",w=17,h=9,profile="pq",full=False,neutral=False,matrix=None,siting="center",transfer=None):
     depth=8 if fmt=="NV12" or "P" not in fmt else int(fmt.split("P")[1])
     sx=1 if fmt.startswith("I444") else 2;sy=2 if fmt.startswith("I420") or fmt=="NV12" else 1
     cw=(w+sx-1)//sx;ch=(h+sy-1)//sy;s=2**(depth-8);maximum=2**depth-1;center=2**(depth-1)
@@ -39,12 +39,14 @@ def fixture(base,fmt="I420P10",w=17,h=9,profile="pq",full=False,neutral=False,ma
     color=dict(PROFILES[profile],fullRange=full,chromaSiting="center")
     if matrix is not None:color["matrix"]=matrix
     m=dict(width=w,height=h,format=fmt,bitDepth=depth,storage="u8" if bps==1 else "u16le-lsb",origin=dict(x=0,y=0),color=color,planes=planes)
+    color["chromaSiting"]=siting
+    if transfer is not None: color["transfer"]=transfer
     # Independent analytic centered 2x interpolation, then the documented inverse matrix.
     def chroma(p,x,y):
         cx=x if sx==1 else x//2;cy=y if sy==1 else y//2
-        nx=cx if sx==1 else max(0,min(cw-1,cx+(1 if x%2 else -1)))
-        ny=cy if sy==1 else max(0,min(ch-1,cy+(1 if y%2 else -1)))
-        wx=1 if sx==1 else .75;wy=1 if sy==1 else .75
+        nx=cx if sx==1 else max(0,min(cw-1,cx+(1 if x%2 or siting!="center" else -1)))
+        ny=cy if sy==1 else max(0,min(ch-1,cy+(1 if y%2 or siting=="topleft" else -1)))
+        wx=1 if sx==1 else (.75 if siting=="center" else (1 if x%2==0 else .5));wy=1 if sy==1 else ((1 if y%2==0 else .5) if siting=="topleft" else .75)
         return wy*(wx*p[cy][cx]+(1-wx)*p[cy][nx])+(1-wy)*(wx*p[ny][cx]+(1-wx)*p[ny][nx])
     kr,kb={"bt709":(.2126,.0722),"smpte170m":(.299,.114),"bt2020-ncl":(.2627,.0593)}[color["matrix"]]
     rgb=[]

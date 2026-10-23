@@ -105,9 +105,10 @@ class XYBTests(unittest.TestCase):
         lib=library()
         lib.planar_create_profile.argtypes=[C.POINTER(Input),C.POINTER(C.c_void_p),C.c_uint32,C.POINTER(C.c_double),C.c_char_p,C.c_size_t]
         with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
-            for fmt in ['I420','I422','I444','NV12','I420P10','I422P10','I444P10','I420P12','I422P12','I444P12']:
+            from itertools import product
+            for fmt,transfer in product(['I420','I422','I444','NV12','I420P10','I422P10','I444P10','I420P12','I422P12','I444P12'],['iec61966-2-1','bt709','smpte170m']):
                 for full in [False,True]:
-                    m,_=fixture(Path(tmp),fmt,17,9,'709-srgb',full)
+                    m,_=fixture(Path(tmp),fmt,17,9,'709-srgb',full,transfer=transfer)
                     inp,keep=load(m,Path(tmp))
                     for invalid in [False,True]:
                         if invalid:
@@ -165,7 +166,7 @@ class XYBTests(unittest.TestCase):
                             reference,_=encode_rgb(inp,rgb)
                             self.assertEqual(previous,reference,(fmt,profile,w,h,full,"row vs RGB codestream"))
                             changed+=fused!=reference
-                            is_fused=profile=="709-srgb"
+                            is_fused=profile in ("709-srgb","601-709")
                             fused_count+=is_fused
                             os.environ["JXL_EXPERIMENT_OBSERVE_REFERENCE"]="1"
                             try: observed,refstats=encode_rgb(inp,rgb)
@@ -223,9 +224,10 @@ class XYBTests(unittest.TestCase):
             # Every gray level at 8 and 12 bits exercises EOTF thresholds,
             # black and peak; data still traverses the real encoder boundary.
             import struct
-            for depth in [8,12]:
+            from itertools import product
+            for depth,transfer in product([8,12],['iec61966-2-1','bt709']):
                 w=1<<depth;fmt="I444" if depth==8 else "I444P12"
-                m,_=fixture(base,fmt,w,1,"709-srgb",True)
+                m,_=fixture(base,fmt,w,1,"709-srgb",True,transfer=transfer)
                 for c,p in enumerate(m["planes"]):
                     raw=bytearray((base/p["path"]).read_bytes())
                     values=list(range(w)) if c==0 else [1<<(depth-1)]*w
@@ -240,6 +242,32 @@ class XYBTests(unittest.TestCase):
                 maximum=max(maximum,error);self.assertLess(error,3e-6)
                 count+=1
         print(json.dumps(dict(extra_fused_cases=count,max_xyb_error=maximum)))
+    def test_transfer_siting_combinations(self):
+        from proof import create
+        lib=library();count=0;maximum=0.
+        os.environ['JXL_EXPERIMENT_CAPTURE_XYB']='1'
+        os.environ['JXL_EXPERIMENT_OBSERVE_REFERENCE']='1'
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_CAPTURE_XYB',None))
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_OBSERVE_REFERENCE',None))
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            for transfer in ['iec61966-2-1','bt709','smpte170m']:
+                for siting in ['left','center','topleft']:
+                    for fmt in ['I420','I422','I444','NV12','I420P10','I422P10','I444P12']:
+                        for w,h in [(1,1),(7,3),(17,9),(33,3)]:
+                            m,ref=fixture(base,fmt,w,h,'709-srgb',False,siting=siting,transfer=transfer)
+                            inp,keep=load(m,base);handle=create(lib,inp)
+                            try:
+                                pixels=(C.c_float*len(ref))()
+                                self.assertEqual(lib.planar_region(handle,0,0,w,h,pixels,len(ref)),0)
+                                self.assertLess(max(abs(a-b) for a,b in zip(pixels,ref)),1e-7)
+                            finally:lib.planar_destroy(handle)
+                            _,a=encode(inp);_,b=encode_rgb(inp,ref)
+                            error=max(abs(x-y) for x,y in zip(a['xyb'],b['xyb']))
+                            maximum=max(maximum,error);self.assertLess(error,3e-6)
+                            self.assertEqual(a['simd_lanes'],4);count+=1
+        print(json.dumps(dict(transfer_siting_cases=count,max_xyb_error=maximum)))
+
     def test_hdr_neutral_levels(self):
         from fixtures import pq_nits,hlg_scene
         observations={}

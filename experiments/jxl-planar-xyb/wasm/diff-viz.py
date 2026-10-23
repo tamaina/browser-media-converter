@@ -27,7 +27,7 @@ def reconstruct(f):
         a=np.ndarray((ph,pw),dtype='u1' if depth==8 else '<u2',buffer=base64.b64decode(p['data']),offset=p['offset'],strides=(p['stride'],1 if depth==8 else 2)).astype('float64')
         planes.append(a)
     def up(a):
-        x=np.clip((np.arange(w)+.5)/2-.5,0,a.shape[1]-1);y=np.clip((np.arange(h)+.5)/2-.5,0,a.shape[0]-1)
+        x=np.clip(np.arange(w)/2+(-.25 if f.get('chromaSiting','left')=='center' else 0),0,a.shape[1]-1);y=np.clip(np.arange(h)/2+(0 if f.get('chromaSiting','left')=='topleft' else -.25),0,a.shape[0]-1)
         xi=x.astype(int);yi=y.astype(int);tx=x-xi;ty=y-yi
         top=a[yi[:,None],xi]*(1-tx)+a[yi[:,None],np.minimum(xi+1,a.shape[1]-1)]*tx
         bot=a[np.minimum(yi+1,a.shape[0]-1)[:,None],xi]*(1-tx)+a[np.minimum(yi+1,a.shape[0]-1)[:,None],np.minimum(xi+1,a.shape[1]-1)]*tx
@@ -138,7 +138,7 @@ source_analysis=root/'build/real10/source-analysis.json'
 if source_analysis.exists() and any(c.get('real10') for c in obs['cases']):
     obs['fixturePreparation']['outputRange']='legacy full; real10 limited'
     obs['measurement']['rawSamples']='build/browser/{browser,native}.json'
-    obs['real10']={'copyright':'Netflix Inc. 2015','license':'CC BY-NC-ND 4.0','sources':'real10/README.md','preparation':'10-bit BT.709 limited left -> sRGB limited center using zscale; no U8 intermediate','analysis':json.loads(source_analysis.read_text())}
+    obs['real10']={'copyright':'Netflix Inc. 2015','license':'CC BY-NC-ND 4.0','sources':'real10/README.md','preparation':'direct 10-bit BT.709 limited left; scale retains left chroma; no transfer conversion','analysis':json.loads(source_analysis.read_text())}
 before_path=root/'build/round5-before.json'
 if before_path.exists():
     before=json.loads(before_path.read_text())
@@ -153,8 +153,7 @@ for c in obs['cases']:
             for mode in ('fused','rgb','rgbE2e'):group[mode].pop('samples',None)
         for mode in ('fused','rgb','rgbE2e'):
             for key in ('sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs','samplesMs','medianMs'):c[mode].pop(key,None)
-    else:
-        for mode in ('fused','rgb'):c[mode]['qualityVsSource'].pop('maxError',None)
+
 cases=obs.pop('cases')
 text=json.dumps(obs,indent=2,allow_nan=False).rstrip()[:-1]+',\n  "cases": [\n'+',\n'.join('    '+json.dumps(c,separators=(',',':'),allow_nan=False) for c in cases)+'\n  ]\n}\n'
 assert len(text.encode())<100000,len(text.encode())

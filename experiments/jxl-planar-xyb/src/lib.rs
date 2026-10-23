@@ -28,7 +28,7 @@ pub struct FrameInput {
     primaries: u32,
     transfer: u32,
     full_range: u32,
-    centered: u32,
+    siting: u32,
     origin_x: u32,
     origin_y: u32,
     intensity: f32,
@@ -75,6 +75,8 @@ struct KernelYuv {
     full_range: u32,
     sx: u32,
     sy: u32,
+    transfer: u32,
+    siting: u32,
 }
 type Fill = unsafe extern "C" fn(*mut c_void, usize, usize, usize, usize, *mut f32, usize) -> i32;
 unsafe extern "C" {
@@ -111,6 +113,7 @@ pub struct Session {
     full: bool,
     sx: usize,
     sy: usize,
+    siting: u32,
     planes: Vec<Plane>,
 }
 fn need(ok: bool, message: &str) -> Result<(), String> {
@@ -119,7 +122,7 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
 fn check_config(c: &Config) -> Result<(), String> {
     need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
     #[cfg(target_arch = "wasm32")]
-    need(c.primaries == 1 && c.transfer == 13, "WASM requires BT.709 primaries and sRGB transfer (SDR only)")?;
+    need(c.primaries == 1 && matches!(c.transfer, 1 | 13), "WASM requires BT.709 primaries and sRGB/709 transfer (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -183,8 +186,8 @@ impl Session {
             "profile/matrix pair outside proof scope",
         )?;
         need(
-            i.full_range <= 1 && i.centered == 1 && i.origin_x == 0 && i.origin_y == 0,
-            "explicit range, centered chroma and origin (0,0) required",
+            i.full_range <= 1 && i.siting <= 2 && i.origin_x == 0 && i.origin_y == 0,
+            "explicit range, valid siting chroma and origin (0,0) required",
         )?;
         let (sx, sy) = match i.format {
             0 | 3 => (2, 2),
@@ -259,7 +262,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
-            strict: option == 1 || config.primaries != 1 || config.transfer != 13,
+            strict: option == 1 || config.primaries != 1 || !matches!(config.transfer, 1 | 13),
             config,
             depth: i.depth,
             storage: i.storage,
@@ -267,6 +270,7 @@ impl Session {
             full: i.full_range == 1,
             sx,
             sy,
+            siting: i.siting,
             planes,
         };
         timings[0] = unsafe { planar_clock_ms() } - start;
@@ -303,8 +307,8 @@ impl Session {
     }
     fn chroma(&self, c: usize, x: usize, y: usize) -> f64 {
         let p = &self.planes[c];
-        let fx = ((x as f64 + 0.5) / self.sx as f64 - 0.5).clamp(0.0, (p.width - 1) as f64);
-        let fy = ((y as f64 + 0.5) / self.sy as f64 - 0.5).clamp(0.0, (p.height - 1) as f64);
+        let fx = (x as f64 / self.sx as f64 + if self.siting == 1 { 0.5 / self.sx as f64 - 0.5 } else { 0.0 }).clamp(0.0, (p.width - 1) as f64);
+        let fy = (y as f64 / self.sy as f64 + if self.siting != 2 { 0.5 / self.sy as f64 - 0.5 } else { 0.0 }).clamp(0.0, (p.height - 1) as f64);
         let x0 = fx.floor() as usize;
         let y0 = fy.floor() as usize;
         let x1 = (x0 + 1).min(p.width - 1);
@@ -515,6 +519,8 @@ pub unsafe extern "C" fn planar_encode(
             full_range: u32::from(s.full),
             sx: s.sx as u32,
             sy: s.sy as u32,
+            transfer: s.config.transfer,
+            siting: s.siting,
         };
         hdr_jxl_encode(
             &(*session).config,

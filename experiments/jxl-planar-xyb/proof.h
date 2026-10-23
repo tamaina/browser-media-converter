@@ -6,10 +6,11 @@ extern "C" {
 #endif
 typedef struct { const uint8_t* data; size_t size,offset,stride,width,height; } PlanarPlane;
 typedef struct {
-  uint32_t width,height,format,depth,storage,matrix,primaries,transfer,full_range,centered,origin_x,origin_y;
+  uint32_t width,height,format,depth,storage,matrix,primaries,transfer,full_range,siting,origin_x,origin_y;
   float intensity;
   PlanarPlane planes[3];
 } PlanarInput;
+// siting=0 left (default),1 center,2 topleft; ignored on unsubsampled axes.
 // format=0 I420,1 I422,2 I444,3 NV12; storage=0 U8,1 U16LE low bits.
 // matrix=1 BT709,6 BT601,9 BT2020-NCL; primaries=1 BT709,11 P3,9 BT2020.
 // transfer=1 BT709,13 sRGB,16 PQ,18 HLG. See README for supported pairs.

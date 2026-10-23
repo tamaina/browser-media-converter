@@ -35,19 +35,20 @@ are independently probed for `yuv420p10le` before their raw payload is extracted
 source dimensions and raw byte counts are checked too. Color descriptions live
 in `manifest.json`.
 
-The existing WASM SDR API requires **sRGB transfer and centered chroma**.
-A separate zscale pass explicitly converts BT.709 transfer → sRGB, left → center,
-retaining 10-bit limited BT.709 YUV. The benchmark `.yuv` / `.api.y4m` use these
-prepared samples. It is not valid to relabel source BT.709/left as sRGB/center.
-Conversion may change super-whites/overshoots; report source and prepared OOR
-separately with `real10/analyze.py`. Codec clipping happens after matrix
-reconstruction and before sRGB linearization as documented in WASM.md.
+Round 7 directly accepts **BT.709 transfer and left chroma**. The manifest points
+to `.bt709-left.yuv`; no second transfer/siting conversion is performed. The
+720p resize explicitly sets `chromalin=left:chromal=left` and
+`transferin=709:transfer=709` in zscale. The 1440p crop remains sample-exact.
+`analyze.py` scans the source/API bytes with the same left interpolation;
+the two OOR rates must match. Old ignored sRGB/center files are unused.
+Clipping occurs after the matrix and before inverse BT.709 OETF. See WASM.md
+for the difference from BT.1886 and Chrome's display treatment.
 
 Run `node experiments/jxl-planar-xyb/wasm/browser-test.mjs --benchmark --real10`
 (or `REAL10=1 ... --benchmark`). Without the flag no real10 input is used;
 without the manifest/files the optional set is skipped with a notice. Missing
 sets do not prevent default tests. All actual measurements use VideoFrame
-I420P10, limited range, BT.709 matrix/primaries and sRGB transfer.
+I420P10, limited range, BT.709 matrix/primaries and BT.709 transfer with explicit left siting.
 Precision checks use distance 0.01 and compare float reconstruction against
 both fused and U8-quantized RGB, with 10-bit output headers for both. The fixed
 top-center ROI is x=[w/3,2w/3), y=[0,h/5); it includes sky in Aerial/Pier but is

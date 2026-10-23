@@ -19,6 +19,7 @@ int main() {
     setenv("JXL_EXPERIMENT_CAPTURE_XYB","1",1);
     setenv("JXL_EXPERIMENT_OBSERVE_REFERENCE","1",1);
     for(uint32_t depth:{8u,10u,12u}) for(uint32_t sx:{1u,2u}) for(uint32_t sy:{1u,2u}) {
+      for(uint32_t transfer:{13u,1u}) for(uint32_t siting:{0u,1u,2u})
       for(uint32_t matrix:{1u,6u}) for(bool full:{false,true})
       for(uint32_t pattern:{0u,1u,2u}) for(uint32_t width=1;width<=33;++width) {
         const uint32_t height=3;
@@ -38,8 +39,8 @@ int main() {
         }
         JxlExperimentalYuv raw{{{y.data,y.size,width*bytes,width,height},
                                 {u.data,u.size,cw*bytes,cw,ch},
-                                {v.data,v.size,cw*bytes,cw,ch}},width,height,depth,matrix,uint32_t(full),sx,sy};
-        Config config{width,height,1,13,255,depth};Encoded out{};char error[256]{};
+                                {v.data,v.size,cw*bytes,cw,ch}},width,height,depth,matrix,uint32_t(full),sx,sy,transfer,siting};
+        Config config{width,height,1,transfer,255,depth};Encoded out{};char error[256]{};
         auto unused=[](void*,size_t,size_t,size_t,size_t,float*,size_t)->int{return 1;};
         if(hdr_jxl_encode(&config,nullptr,unused,nullptr,&raw,&out,error,sizeof(error))) throw std::runtime_error(error);
         if(out.simd_lanes!=4 || out.callbacks || out.peak_rgb_bytes || !out.size) throw std::runtime_error("fused path not used");
@@ -50,8 +51,8 @@ int main() {
           return double(bytes==1?a[0]:uint32_t(a[0])|(uint32_t(a[1])<<8));
         };
         auto chroma=[&](const Guard& p,size_t x,size_t row) {
-          const double fx=std::clamp((x+.5)/sx-.5,0.,double(cw-1));
-          const double fy=std::clamp((row+.5)/sy-.5,0.,double(ch-1));
+          const double fx=std::clamp(double(x)/sx+(siting==1?.5/sx-.5:0.),0.,double(cw-1));
+          const double fy=std::clamp(double(row)/sy+(siting!=2?.5/sy-.5:0.),0.,double(ch-1));
           const size_t x0=size_t(fx),y0=size_t(fy),x1=std::min(x0+1,cw-1),y1=std::min(y0+1,ch-1);
           const double tx=fx-x0,ty=fy-y0;
           return ((1-ty)*((1-tx)*sample(p,x0,y0,cw)+tx*sample(p,x1,y0,cw))+ty*((1-tx)*sample(p,x0,y1,cw)+tx*sample(p,x1,y1,cw))-value)/denom;

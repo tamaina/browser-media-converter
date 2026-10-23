@@ -18,14 +18,14 @@ SOURCES=[('Chimera','Aerial',600),('Chimera','PierSeaside',300),('ElFuente','Boa
 def run(args):return subprocess.check_output(args)
 def valid(p):
     return p.exists() and p.stat().st_size==len(HEADER)+FRAME and p.open('rb').read(len(HEADER)+6)==HEADER+b'FRAME\n'
-def convert(src,dest,vf,w,h,srgb=False):
+def convert(src,dest,vf,w,h):
     # A self-describing intermediate permits a meaningful ffprobe format check;
     # forcing ffprobe's raw input format would only repeat an assumption.
     container=dest.with_suffix('.y4m')
     run(['ffmpeg','-v','error','-threads','1','-i',str(src),'-frames:v','1','-vf',vf,
          '-filter_threads','1','-threads','1','-pix_fmt','yuv420p10le','-color_range','tv',
-         '-colorspace','bt709','-color_primaries','bt709','-color_trc','iec61966-2-1' if srgb else 'bt709',
-         '-chroma_sample_location','center' if srgb else 'left','-strict','-1','-f','yuv4mpegpipe','-y',str(container)])
+         '-colorspace','bt709','-color_primaries','bt709','-color_trc','bt709',
+         '-chroma_sample_location','left','-strict','-1','-f','yuv4mpegpipe','-y',str(container)])
     meta=json.loads(run(['ffprobe','-v','error','-show_entries','stream=width,height,pix_fmt','-of','json',str(container)]))['streams'][0]
     assert meta==dict(width=w,height=h,pix_fmt='yuv420p10le'),meta
     data=container.read_bytes();start=data.index(b'\n')+1
@@ -46,17 +46,11 @@ for folder,scene,n in SOURCES:
     assert valid(src)
     for w,h in ([(1280,720),(2560,1440)] if scene=='Boat' else [(1280,720)]):
         name=f'netflix-{scene.lower()}-f{n}-{w}x{h}-10bit'
-        source=OUT/(name+'.bt709-left.yuv');api=OUT/(name+'.yuv')
+        source=OUT/(name+'.bt709-left.yuv')
         crop='crop=3840:2160:128:0' if w==1280 else 'crop=2560:1440:768:360'
         z='zscale=rangein=limited:range=limited:matrixin=709:matrix=709:primariesin=709:primaries=709:transferin=709:transfer=709:chromalin=left:chromal=left:dither=none:filter=spline36'
         vf='setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709,'+crop+(f',{z}:w={w}:h={h}' if w==1280 else '')
         convert(src,source,vf,w,h)
-        # API requires sRGB transfer / centered chroma; retain >8-bit throughout.
-        args=['ffmpeg','-v','error','-threads','1','-f','rawvideo','-pixel_format','yuv420p10le','-video_size',f'{w}x{h}','-i',str(source)]
-        dest=OUT/(name+'.api.y4m')
-        run(args+['-frames:v','1','-vf',z.replace('transfer=709:','transfer=iec61966-2-1:').replace('chromal=left:','chromal=center:')+',format=yuv420p10le','-filter_threads','1','-threads','1','-strict','-1','-f','yuv4mpegpipe','-y',str(dest)])
-        assert run(['ffprobe','-v','error','-show_entries','stream=pix_fmt','-of','csv=p=0',str(dest)]).decode().strip()=='yuv420p10le'
-        data=dest.read_bytes();a=data.index(b'\n')+1;assert data[a:a+6]==b'FRAME\n';api.write_bytes(data[a+6:]);assert api.stat().st_size==w*h*3
-        manifest.append(dict(name=name,width=w,height=h,format='I420P10',fullRange=False,url='/build/real10/'+api.name,sourceURL=url,frame=n,sourceFile=source.name,sourceTransfer='bt709',sourceChroma='left',transfer='srgb',chromaSiting='center',verifiedPixFmt='yuv420p10le'))
-        print('Prepared',name,flush=True)
+        manifest.append(dict(name=name,width=w,height=h,format='I420P10',fullRange=False,url='/build/real10/'+source.name,sourceURL=url,frame=n,sourceFile=source.name,sourceTransfer='bt709',sourceChroma='left',transfer='bt709',chromaSiting='left',verifiedPixFmt='yuv420p10le'))
+        print('Prepared direct BT.709/left',name,flush=True)
 (OUT/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
