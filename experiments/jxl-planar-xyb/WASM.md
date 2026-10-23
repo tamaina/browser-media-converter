@@ -48,16 +48,23 @@ The benchmark writes the small reviewable `wasm-observations.json`.
 ```js
 import {createEncoder} from './wasm/api.mjs';
 const encoder = await createEncoder();
-const jxl = encoder.encodePlanarYuv({
+const input = {
   width, height, format: 'I420', matrix: 'bt709', fullRange: false,
   planes: [
     {data: yBytes, offset: 0, stride: yStride},
     {data: uBytes, offset: 0, stride: uStride},
     {data: vBytes, offset: 0, stride: vStride},
   ],
-}, {distance: 1, effort: 3}); // owned Uint8Array
+};
+const jxl = encoder.encodePlanarYuv(input, {distance: 1, effort: 3}); // owned Uint8Array
 const reference = encoder.encodeRgb({width, height, data: packedFloatRgb});
-console.log(encoder.stats);
+console.log(encoder.stats); // copyMs, preflightMs, sampleCheckMs, createMs,
+                            // conversionMs, encodeMs, totalMs, heap capacity
+// Experimental, explicit, default stays strict:
+encoder.encodePlanarYuv(input, {validation: 'certificate'});
+// Fair comparison path: same planes -> checked Rust planar_region -> RGB codec.
+encoder.encodePlanarYuv(input, {rgbViaPlanar: true});
+// Test observer only (default false in the JS API): {observe: true}
 ```
 
 Supported formats: U8 I420/I422/I444/NV12, centered chroma, BT.601/BT.709 NCL,
@@ -79,121 +86,205 @@ clipping, tone mapping or inferred transfer conversion. A VideoFrame's color
 metadata must describe sRGB-transfer samples; arbitrary camera/video BT.709
 transfer samples require an explicit conversion before using this SDR API.
 
-## Verification and measurement method
+## Round 2 measurement method
 
-32 fixture cases cover all four formats, two matrices, both ranges and dimensions
-1×1 / 17×9. Plane layouts have nonzero offsets and padded strides. Chrome creates
-a BufferInit VideoFrame with explicit color space, then `copyTo` returns the
-actual plane layouts. Active copied samples and transfer/range metadata are
-checked before the returned data feeds both native and WASM encoders. Negative
-API cases exercise depth, transfer, matrix, plane count, dimensions, plane bounds,
-out-of-gamut reconstruction and nonfinite RGB.
+All timings below are actual runs on this host, distance 1 / effort 3. Each
+benchmark mode has one warmup and five timed runs, in fixed fused / prepared RGB /
+RGB end-to-end / certificate order. Tables use component-wise medians; columns
+therefore need not add exactly. No randomized-order or thermal-stability claim.
+The 32 small fixtures remain correctness tests, not timing evidence.
 
-The native Rust session reconstructs reference RGB. Both the native fused output
-and browser fused/RGB output are independently decoded by jxl-oxide 0.12.6,
-requesting the original color encoding. Quality is measured against that
-reconstructed float sRGB source, not against a browser screenshot. Tests require
-PSNR >25 dB against source and maximum absolute decoded error <0.03 versus the
-native fused result. These are explicit experimental regression bounds, not
-perceptual quality guarantees. Byte identity is recorded separately. Float32
-Highway YUV math versus Rust f64 reconstruction, target-specific SIMD math and
-compiler optimization can change quantization and codestream bytes.
+Both end-to-end paths start from the **same VideoFrame.copyTo bytes and layouts**.
+`fused` uploads those planes, creates an owned Rust session, validates, encodes,
+copies out the codestream, and frees the allocations. `rgbE2e` uploads the same
+planes and creates an RGB-conversion-only session: layout, ownership and stored
+sample checks occur at creation, but nominal RGB admission is performed by Rust
+`planar_region` while it reconstructs a whole packed Float32 RGB buffer. The normal
+RGB encoder then validates that buffer and encodes it. This avoids an extra full
+RGB reconstruction/preflight during session creation. A conversion-only session
+is explicitly forbidden from calling `planar_encode`; out-of-range conversion
+still rejects before encoding. Prepared RGB starts with the previously generated
+float buffer and excludes YUV-to-RGB conversion; it is only a codec baseline.
 
-Benchmark cases add a 513×257 synthetic fixture and 513×257 frames from root
-`fujioka.jpg` and the frame at 10 seconds of `bbb.mov`. ffmpeg performs resize,
-RGB contrast inset (`val*0.8+25`), and full-range BT.709 I420 conversion with one
-thread. The video is explicitly converted from BT.709 to sRGB transfer first
-(using BT.709 input primaries/matrix/transfer, confirmed with ffprobe). This
-inset is part of the measured source fixture, used to stay inside
-the proof's strict nominal RGB admission rules. These are transformed real
-content cases, not original-resolution or untouched-source quality claims.
+WASM boundary times use `emscripten_get_now` in the entry/bridge. Native uses
+`steady_clock` for the Rust sub-stages and Python `perf_counter` around the same
+create / convert / encode boundaries. `encodeMs` includes encoder setup, color
+conversion, compression, and C++ output allocation/copy; RGB also includes its
+normal finite/range validation. It excludes session creation and destruction.
+`totalMs` includes session destruction, output copy/free, and (WASM only) JS input
+validation, malloc/upload and output-to-JS copy. Native excludes ctypes input
+construction and file IO; its conversion includes allocation/initialization of
+the float output. WASM conversion includes malloc/free of that buffer in total.
+Frame preparation, VideoFrame.copyTo itself, transport, source-RGB loading and
+independent decoding are excluded from all timers. This measures the incremental
+cost once copyTo output is already available, not video decode latency.
 
-Each mode has one warmup and five timed runs. Browser timing includes JS copy,
-WASM allocation, Rust session copy/preflight (fused), encode and output copy.
-Prepared RGB excludes YUV→RGB conversion. Native timings use prevalidated session
-or prepared float RGB and include output copy/free; session creation is reported
-separately. The prototype XYB hash observer is active in fused encodes; the
-normal RGB API has no observer. These measurement boundaries do not support
-a pure WASM/native codec speed ratio. Native uses the existing `-O1` build, while
-WASM uses `-O2`. Modes run in fixed fused/RGB order, with no claim of thermal or
-JIT tier stabilization beyond the stated warmup. Heap observations are WASM linear-memory capacity before/after each call;
-`peakHeap` is the maximum capacity sampled after calls (capacity never shrinks),
-not live malloc bytes, browser process RSS or temporary JS allocations.
+`createMs` includes `copyMs` (metadata/layout checks and owned-plane compact copy)
+and `preflightMs` (sample-depth checks plus nominal RGB reconstruction checks).
+`sampleCheckMs` is a separately timed subset of preflight, not an extra stage.
+The difference preflight - sampleCheck approximates the per-pixel reconstruction
+cost in strict mode. Native and WASM now measure these same boundaries; native
+libjxl remains -O1, native Rust/bridge -O2, WASM Rust/C++ -O2 with SIMD, so this is
+not a controlled cross-platform compiler comparison.
 
-## Results
+The XYB hash/capture observer and kernel conversion timer are **off in every
+benchmark mode**. Disabling instrumentation also avoids the initial kernel timer
+clock read. The same SIMD lane metadata remains available. Native test defaults
+keep the observer enabled; browser correctness fixtures explicitly enable it.
+Observer on/off codestream identity is checked. `planar_instrumentation(0/1)` is
+per module/library and must not be changed concurrently with an encode.
 
-Build with Emscripten 6.0.13, Rust 1.97.1 and CMake 3.31.6, `-O2`:
+### Explicit validation prototype
+
+`validation: 'strict'` remains the default. `validation: 'certificate'` scans
+plane extrema and uses conservative affine RGB bounds, relying on centered
+bilinear chroma interpolation being a convex combination. Only if all channels'
+bounds are strictly inside [0,1], with a 1e-12 roundoff margin, can it skip exact
+per-pixel reconstruction. Otherwise it falls back to the original f64 pixel
+check. Stored sample/depth checks remain. Non-U8 inputs fall back. This is a
+sufficient certificate, never a relaxed range or clipping policy; it can add
+work on difficult content. Tests cover admitted and saturated rejected inputs,
+all four layouts, strict/certificate agreement, conversion-only rejection at
+region time, and refusing fused encode from an unvalidated session.
+
+### Content and quality
+
+Real sources are root `fujioka.jpg` and `bbb.mov` at 10 s. ffmpeg runs with one
+thread. Video BT.709 samples are converted to sRGB transfer before YUV creation.
+Every analyzed fixture is BT.709 full-range U8 I420; resized fixtures are 513×257.
+“Inset” means RGB `val*0.8+25` before YUV conversion. “Untouched” means no inset;
+resized cases still include resize, and every case includes YUV420 conversion
+(and video transfer conversion). These are not untouched original-file RGB values.
+
+`wasm/range-scan.cc` diagnoses compact YUV with the same centered-chroma f64
+formula as Rust, counts pixels with **any** channel outside [0,1], and reports
+channel extrema without clipping. It does not encode or modify admission.
+Below-limit untouched frames are separately sent through native and WASM strict
+and certificate creation/encode rejection probes. Native-size fujioka is above
+the 4 MP API limit; its range scan is diagnostic only, and native creation also
+confirms the dimension rejection. Native-size bbb is 1280×720 and is benchmarked
+with inset. No full-size fujioka encode is claimed.
+
+The independent jxl-oxide decoder requests original encoding and checks dimensions,
+primaries, transfer and full-range RGB metadata. PSNR compares decoded floats to
+Rust-reconstructed sRGB from the measured YUV fixture, excluding resizing,
+subsampling and inset distortion relative to the original media. No perceptual
+metric or original-media PSNR is implied. Regression bounds remain source PSNR
+>25 dB and maximum decoded difference from native fused <0.03.
+
+Large fixture bytes use HTTP and base64 outside the timed region. Passing full
+numeric arrays through Playwright exhausted Node's default heap on the initial
+full-resolution attempt; the final results use the corrected transport.
+
+## Round 2 results
+
+Run: 2026-10-23T15:39:40.712Z. Intel(R) Core(TM) i7-10510U CPU @ 1.80GHz; Chrome 156.0.8078.47, Node v24.18.0, Linux 7.0.0-38-generic. Highway reports WASM / four float lanes.
 
 | Artifact | Raw bytes | gzip bytes |
 | --- | ---: | ---: |
-| codec.wasm | 2,277,726 | 856,305 |
-| codec.mjs | 15,340 | 4,695 |
+| codec.mjs | 15,465 | 4,721 |
+| codec.wasm | 2,279,886 | 857,090 |
 
-Google Chrome 156.0.8078.47 (headless), Node 24.18.0, Linux
-7.0.0-38-generic on Intel Core i7-10510U @ 1.80 GHz. The runtime target is
-**Highway WASM**, with **four float lanes (128-bit)** reported by the actual
-fused kernel. `HWY_COMPILE_ONLY_STATIC` fixes dispatch to that target; the wrapper
-also reports `TargetName(HWY_STATIC_TARGET)` compiled with the same flags.
+### WASM fused breakdown (ms)
 
-The initial 32-case run passed all source/metadata/native checks. All 64 WASM
-codestreams (fused and RGB) were byte-identical to native fused results, with
-zero cross-platform decoded difference. Minimum source PSNR was 41.668 dB.
-The final benchmark run passed **35 cases**, including metadata checks from
-jxl-oxide (dimensions, primaries, transfer and full-range RGB output). All 35
-fused WASM outputs match native fused byte-for-byte; all 35 RGB WASM outputs
-match native RGB byte-for-byte. Fused and RGB match on 34 of 35 cases. The
-513×257 synthetic RGB result differs from fused with decoded PSNR 79.120 dB and
-maximum error 0.0127844. This difference also occurs natively, consistent with
-the known float32 fused YUV arithmetic versus Rust's f64 reconstruction changing
-quantization decisions. Cross-platform decoded differences for corresponding
-paths are zero in this run. No general byte-identity guarantee follows.
+| Input | Copy/layout | Sample check¹ | RGB check² | Create | Encode only | Total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Synthetic 513×257 | 0.40 | 1.70 | 12.40 | 14.50 | 10.30 | 24.70 |
+| fujioka 513×257 inset | 0.50 | 1.40 | 10.50 | 12.30 | 10.80 | 23.30 |
+| bbb 513×257 inset | 0.40 | 1.50 | 10.50 | 12.40 | 10.90 | 23.50 |
+| bbb 1280×720 inset | 2.80 | 9.80 | 73.60 | 86.40 | 64.90 | 151.60 |
 
-All rows below are 513×257 I420 / BT.709 full-range, distance 1, effort 3.
-Times are medians of five samples after one warmup; source preparation is
-excluded. Native session creation is a separate single observation, not a median.
+¹ Included in preflight. ² Difference of the two component medians; includes loop/timer overhead.
 
-| Input | WASM fused ms | WASM RGB ms | Native fused ms | Native RGB ms | Native create ms |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Synthetic | 27.60 | 8.20 | 12.15 | 8.87 | 12.92 |
-| fujioka.jpg, transformed | 24.60 | 10.80 | 14.55 | 11.95 | 13.91 |
-| bbb.mov at 10 s, transformed | 25.60 | 10.90 | 14.76 | 11.60 | 13.15 |
+| Input | Prepared RGB encode / total | RGB E2E create / convert / encode / total | Certificate create / encode / total |
+| --- | ---: | ---: | ---: |
+| Synthetic 513×257 | 8.30 / 8.60 | 2.00 / 12.00 / 7.40 / 21.30 | 2.30 / 9.40 / 11.70 |
+| fujioka 513×257 inset | 10.40 / 10.50 | 2.10 / 11.40 / 9.80 / 23.40 | 12.40 / 10.70 / 23.20 |
+| bbb 513×257 inset | 9.80 / 10.10 | 2.00 / 11.80 / 10.20 / 24.40 | 12.50 / 10.70 / 23.40 |
+| bbb 1280×720 inset | 62.60 / 64.10 | 12.20 / 73.40 / 56.70 / 142.60 | 89.70 / 65.00 / 154.80 |
 
-| Input | JXL bytes (each path) | Fused source PSNR dB | RGB source PSNR dB | Max source error (each path) |
-| --- | ---: | ---: | ---: | ---: |
-| Synthetic | 5,132 | 45.594 | 45.594 | 0.039777 |
-| fujioka.jpg, transformed | 27,955 | 40.516 | 40.516 | 0.182867 |
-| bbb.mov at 10 s, transformed | 28,886 | 38.594 | 38.594 | 0.269819 |
+### Native fused breakdown (ms)
 
-Final native regression rerun: `python3 test_xyb.py` passed all five test
-methods (252 original fixtures and 102 additional fused cases, plus the existing
-HDR/validation/ownership checks). `build/tail-guard` passed all 396 four-lane
-guard-page tail encodes. Native HDR behavior remains covered by those tests;
-WASM continues to reject HDR.
+| Input | Copy/layout | Sample check¹ | RGB check² | Create | Encode only | Total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Synthetic 513×257 | 1.25 | 0.86 | 12.08 | 14.21 | 9.81 | 24.30 |
+| fujioka 513×257 inset | 1.27 | 0.86 | 11.42 | 13.57 | 11.97 | 25.95 |
+| bbb 513×257 inset | 1.16 | 0.82 | 10.97 | 12.96 | 11.91 | 24.99 |
+| bbb 1280×720 inset | 9.36 | 6.35 | 78.16 | 94.62 | 79.73 | 173.50 |
 
-All measured WASM heap capacities were **33,554,432 B (32 MiB) before, after
-and at the observed peak**, across repeated encodes in the same instance. No
-memory growth was needed for this suite. This measures linear-memory capacity
-only. Output buffers are freed, but capacity remains reserved for reuse.
+¹ Included in preflight. ² Difference of the two component medians; includes loop/timer overhead.
 
-Prepared RGB is faster here; the fused one-shot API still copies and preflights
-every source pixel in Rust, whereas RGB starts with prepared samples. The native
-fused timer additionally excludes that session work. These results do not show
-a one-shot speed advantage over the prepared-RGB baseline. Distance 1 also allows
-localized errors of 0.27 on this content, inherited by the RGB path. Source PSNR
-refers to the transformed YUV fixture, and excludes resize/chroma/inset distortion
-relative to the original media. SSIMULACRA2 and Butteraugli were not measured.
+| Input | Prepared RGB encode / total | RGB E2E create / convert / encode / total | Certificate create / encode / total |
+| --- | ---: | ---: | ---: |
+| Synthetic 513×257 | 9.56 / 9.58 | 2.06 / 11.60 / 7.84 / 21.67 | 2.62 / 10.26 / 12.88 |
+| fujioka 513×257 inset | 11.71 / 11.75 | 2.19 / 12.13 / 10.86 / 25.00 | 13.07 / 11.91 / 24.85 |
+| bbb 513×257 inset | 11.69 / 11.72 | 2.18 / 12.04 / 11.26 / 25.07 | 14.30 / 12.44 / 26.84 |
+| bbb 1280×720 inset | 73.31 / 73.37 | 15.96 / 80.53 / 71.64 / 167.60 | 97.31 / 81.14 / 178.48 |
 
-Raw samples and per-case quality/identity/memory observations are in
-[wasm-observations.json](wasm-observations.json) (about 61 kB). `psnr: null` denotes
-identical decoded samples (infinite PSNR).
+### Encoded size and quality
 
-## Limits and next steps
+| Input | Fused / RGB bytes | Fused / RGB PSNR dB | Fused / RGB max error |
+| --- | ---: | ---: | ---: |
+| Synthetic 513×257 | 5,132 / 5,132 | 45.594 / 45.594 | 0.039777 / 0.039777 |
+| fujioka 513×257 inset | 27,955 / 27,955 | 40.516 / 40.516 | 0.182867 / 0.182867 |
+| bbb 513×257 inset | 28,886 / 28,886 | 38.594 / 38.594 | 0.269819 / 0.269819 |
+| bbb 1280×720 inset | 171,948 / 171,948 | 39.220 / 39.220 | 0.447033 / 0.447033 |
 
-This is a synchronous, whole-frame experiment. Growing WASM memory retains its
-high-water capacity after freeing allocations. Final XYB, encoder work buffers,
-owned compact YUV and output remain whole-frame. No streaming, workers/pthreads,
-SIMD-less fallback, HDR/P3/BT.709 transfer support, alpha/ICC metadata, production
-packaging, or changes to `packages/*` are included. A production wrapper would
-need scheduling/cancellation, explicit color conversion, memory budgets, broader
-quality/content coverage and portability checks. Threads, bounded-memory input,
-HDR validation and package integration remain separate work.
+### Nominal-range diagnosis
+
+| Input (no inset) | Out-of-range pixels / pixels | Fraction | RGB min / max | Encode admission |
+| --- | ---: | ---: | ---: | --- |
+| fujioka-513x257-untouched | 154 / 131,841 | 0.116807% | -0.099228 / 1.111737 | Rejected, strict + certificate (WASM/native) |
+| fujioka-4272x2856-untouched | 1,944 / 12,200,832 | 0.015933% | -0.160325 / 1.092223 | 4 MP dimension limit |
+| bbb-513x257-untouched | 2,322 / 131,841 | 1.761212% | -0.048771 / 1.053157 | Rejected, strict + certificate (WASM/native) |
+| bbb-1280x720-untouched | 14,510 / 921,600 | 1.574436% | -0.073021 / 1.066018 | Rejected, strict + certificate (WASM/native) |
+
+Inset range scans and raw five-sample timing series are retained in [wasm-observations.json](wasm-observations.json).
+
+Final benchmark passed 36 admitted fixtures plus 3 untouched rejection probes. 36/36 fused WASM streams and 36/36 prepared RGB WASM streams match their native path byte-for-byte. Certificate streams match strict fused; RGB E2E streams match prepared RGB. This is observed identity, not a general guarantee.
+
+Maximum sampled WASM linear-memory capacity was 83,689,472 bytes; this is retained capacity after calls, not live allocation peak, JS memory or RSS. Whole-frame RGB E2E allocates an additional float RGB buffer; fused avoids it.
+
+## Verification, interpretation, and decisions
+
+Final sequential commands: `build-wasm.sh`, native `build.sh` (to refresh the
+matching ABI/library and guard executable), `browser-test.mjs`,
+`browser-test.mjs --benchmark`, `python3 test_xyb.py`, then `build/tail-guard`.
+The normal browser test passed 32 fixtures, including certificate byte agreement,
+negative validation and observer-toggle checks. Native `test_xyb.py` passed all six methods (252 original fixtures, 102 extra
+fused cases, existing HDR/ownership checks and the new validation-option tests).
+`build/tail-guard` passed all 396 four-lane guard-page tail encodes.
+
+Strict fused has no demonstrated real-content speed win in this run: the
+513×257 inset frames are roughly tied with RGB E2E (23.3 vs 23.4 ms and 23.5 vs
+24.4 ms), while native-size bbb is slower (151.6 vs 142.6 ms). Fixed mode order
+and five samples limit the interpretation of small differences. WASM RGB
+reconstruction admission accounts for approximately 10.5 ms of the 12.3–12.4 ms
+small real-frame creation time, and 73.6 ms of 86.4 ms at 720p; copy/layout is
+only 0.4–0.5 ms and 2.8 ms respectively. The certificate reduces synthetic total
+from 24.7 to 11.7 ms, but does not improve these real-content totals; its
+inconclusive-bound fallback remains a limitation. Fused still avoids the extra
+whole-frame packed RGB buffer.
+
+Compare strict fused **total** with RGB E2E **total**, not prepared RGB. The
+breakdowns identify admission/reconstruction cost independently of compression.
+Certificate timings show a content-dependent optimization with strict fallback;
+no default admission policy was changed. Compiler -O3 comparison was skipped:
+it would require a second complete codec build/measurement cycle, so -O2 remains
+the measured default and no -O3 size/speed claim is made.
+
+User decisions remain:
+
+- Whether out-of-nominal real content should continue to reject, or a separately
+  specified clipping policy should be added. The reported fractions measure the
+  current reconstruction; they do not predict clipping's visual effect.
+- Whether a conservative certificate should become the default after broader
+  coverage, or a vectorized exact admission check should be developed. The
+  current option stays explicit and can fall back with extra scan overhead.
+- Whether the observed whole-frame time/memory tradeoff justifies pursuing fused
+  WASM integration. A production decision still needs broader real content,
+  mobile targets, scheduling and perceptual quality evaluation.
+
+This remains a synchronous whole-frame SDR experiment. Growing WASM memory keeps
+its high-water capacity. No workers/pthreads, streaming, cancellation, SIMD-less
+fallback, HDR/P3, alpha/ICC, package integration or changesets are included.

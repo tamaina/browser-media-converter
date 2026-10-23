@@ -1,6 +1,19 @@
 // MIT experiment: small C ABI over unmodified BSD libjxl, no image-file IO.
 #include <jxl/encode.h>
 #include <algorithm>
+#include <chrono>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+static bool instrumentation=true;
+extern "C" void bridge_instrumentation(int enabled) { instrumentation=enabled!=0; }
+extern "C" double planar_clock_ms() {
+#ifdef __EMSCRIPTEN__
+  return emscripten_get_now();
+#else
+  return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
+#endif
+}
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -107,8 +120,8 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
       input.opaque=&source; input.get_color_channels_pixel_format=format;
       input.get_color_channel_data_at=get; input.release_buffer=release;
       input.experimental_fill_row=observed_reference?nullptr:row;
-      input.experimental_observe_xyb=observe;
-      input.experimental_conversion_ms=&result->conversion_ms;
+      input.experimental_observe_xyb=instrumentation?observe:nullptr;
+      input.experimental_conversion_ms=instrumentation?&result->conversion_ms:nullptr;
       input.experimental_simd_lanes=&result->simd_lanes;
       input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
       if(input.experimental_yuv && c->primaries==1 && c->transfer==13)

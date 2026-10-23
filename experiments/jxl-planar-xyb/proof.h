@@ -19,6 +19,11 @@ typedef struct PlanarSession PlanarSession;
 // All caller pointer/length pairs must be valid. create copies admitted samples;
 // the session owns them. One caller at a time per session; no concurrent destroy.
 int planar_create(const PlanarInput*,PlanarSession**,char* error,size_t error_size);
+void planar_instrumentation(int enabled);
+double planar_clock_ms();
+// timings: three doubles: copy/layout, total preflight, stored-sample subset.
+// option 0 strict; 1 certificate + fallback; 2 checked RGB conversion only.
+int planar_create_profile(const PlanarInput*,PlanarSession**,uint32_t option,double* timings,char* error,size_t error_size);
 void planar_destroy(PlanarSession*);
 int planar_region(PlanarSession*,size_t x,size_t y,size_t width,size_t height,float* rgb,size_t float_count);
 int planar_encode(PlanarSession*,PlanarEncoded*,char* error,size_t error_size);

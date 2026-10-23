@@ -11,6 +11,33 @@ from proof import ROOT,library,load,encode,encode_rgb
 import validation as prior
 
 class XYBTests(unittest.TestCase):
+    def test_validation_options(self):
+        from proof import Input, Encoded
+        lib=library()
+        lib.planar_create_profile.argtypes=[C.POINTER(Input),C.POINTER(C.c_void_p),C.c_uint32,C.POINTER(C.c_double),C.c_char_p,C.c_size_t]
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            for fmt in ['I420','I422','I444','NV12']:
+                for full in [False,True]:
+                    m,_=fixture(Path(tmp),fmt,17,9,'709-srgb',full)
+                    inp,keep=load(m,Path(tmp))
+                    for invalid in [False,True]:
+                        if invalid:
+                            # Saturated U/V must fail reconstructed RGB admission.
+                            for c in range(1,2 if fmt=='NV12' else 3):
+                                C.memset(inp.planes[c].data,255,inp.planes[c].size)
+                        for option in [0,1,2]:
+                            handle=C.c_void_p();err=C.create_string_buffer(512);times=(C.c_double*3)()
+                            status=lib.planar_create_profile(C.byref(inp),C.byref(handle),option,times,err,512)
+                            self.assertEqual(bool(status),invalid and option!=2)
+                            if not status:
+                                try:
+                                    rgb=(C.c_float*(17*9*3))()
+                                    self.assertEqual(bool(lib.planar_region(handle,0,0,17,9,rgb,len(rgb))),invalid)
+                                    if option==2:
+                                        out=Encoded()
+                                        self.assertNotEqual(lib.planar_encode(handle,C.byref(out),err,512),0)
+                                        self.assertIn(b'conversion-only',err.value)
+                                finally:lib.planar_destroy(handle)
     def test_fused_reference(self):
         os.environ["JXL_EXPERIMENT_CAPTURE_XYB"]="1"
         self.addCleanup(lambda: os.environ.pop("JXL_EXPERIMENT_CAPTURE_XYB",None))

@@ -88,6 +88,8 @@ unsafe extern "C" {
         n: usize,
     ) -> i32;
     fn hdr_jxl_free(out: *mut Encoded);
+    fn planar_clock_ms() -> f64;
+    fn bridge_instrumentation(enabled: i32);
 }
 struct Plane {
     bytes: Vec<u8>,
@@ -99,6 +101,7 @@ struct Plane {
     component: usize,
 }
 pub struct Session {
+    nominal_preflight: bool,
     config: Config,
     depth: u32,
     storage: u32,
@@ -141,7 +144,8 @@ fn check_config(c: &Config) -> Result<(), String> {
 }
 impl Session {
     /// Caller supplies valid pointer/length pairs borrowed only for this call.
-    unsafe fn copy_from(i: &FrameInput) -> Result<Self, String> {
+    unsafe fn copy_from(i: &FrameInput, option: u32, timings: &mut [f64; 3]) -> Result<Self, String> {
+        let start = unsafe { planar_clock_ms() };
         let config = Config {
             width: i.width,
             height: i.height,
@@ -246,6 +250,7 @@ impl Session {
             });
         }
         let session = Self {
+            nominal_preflight: option != 2,
             config,
             depth: i.depth,
             storage: i.storage,
@@ -255,6 +260,8 @@ impl Session {
             sy,
             planes,
         };
+        timings[0] = unsafe { planar_clock_ms() } - start;
+        let check_start = unsafe { planar_clock_ms() };
         // Admit all stored samples and converted RGB before the codec emits bytes.
         let max = (1u32 << i.depth) - 1;
         for c in 0..3 {
@@ -268,12 +275,32 @@ impl Session {
                 }
             }
         }
-        for y in 0..h {
-            for x in 0..w {
-                session.pixel(x, y)?;
+        timings[2] = unsafe { planar_clock_ms() } - check_start;
+        if option != 2 && !(option == 1 && session.range_certificate()) {
+            for y in 0..h {
+                for x in 0..w { session.pixel(x, y)?; }
             }
         }
+        timings[1] = unsafe { planar_clock_ms() } - check_start;
         Ok(session)
+    }
+    // A sufficient, conservative certificate: interpolation is a convex
+    // combination of stored chroma samples. Margins cover f64 roundoff.
+    // If inconclusive, use the original exact per-pixel admission check.
+    fn range_certificate(&self) -> bool {
+        if self.depth != 8 || self.storage != 0 { return false; }
+        let ranges: Vec<(f64,f64)> = self.planes.iter().map(|p| {
+            (*p.bytes.iter().min().unwrap() as f64, *p.bytes.iter().max().unwrap() as f64)
+        }).collect();
+        let (kr,kb) = match self.matrix { 1 => (0.2126,0.0722), 6 => (0.299,0.114), _ => (0.2627,0.0593) };
+        let kg = 1.0-kr-kb;
+        let (offset,yd,cd) = if self.full { (0.0,255.0,255.0) } else { (16.0,219.0,224.0) };
+        let (yl,yh)=((ranges[0].0-offset)/yd,(ranges[0].1-offset)/yd);
+        let (ul,uh)=((ranges[1].0-128.0)/cd,(ranges[1].1-128.0)/cd);
+        let (vl,vh)=((ranges[2].0-128.0)/cd,(ranges[2].1-128.0)/cd);
+        let a=2.0*(1.0-kr); let b=2.0*(1.0-kb);
+        [(yl+a*vl,yh+a*vh),(yl-b*kb/kg*uh-a*kr/kg*vh,yh-b*kb/kg*ul-a*kr/kg*vl),(yl+b*ul,yh+b*uh)]
+            .iter().all(|&(lo,hi)| lo > 1e-12 && hi < 1.0-1e-12)
     }
     fn sample(&self, c: usize, x: usize, y: usize) -> u32 {
         let p = &self.planes[c];
@@ -382,8 +409,21 @@ pub unsafe extern "C" fn planar_create(
     error: *mut c_char,
     n: usize,
 ) -> i32 {
+    unsafe { planar_create_profile(input, out, 0, std::ptr::null_mut(), error, n) }
+}
+/// Experimental option 1 enables a conservative certificate with strict fallback.
+/// Option 2 is RGB-conversion-only: region checks every reconstructed pixel;
+/// planar_encode refuses this session. No unvalidated fused encode is possible.
+/// timings points to three doubles: metadata/layout/copy, total preflight,
+/// then the stored-sample-only subset of preflight.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn planar_create_profile(
+    input: *const FrameInput, out: *mut *mut Session, option: u32,
+    timings: *mut f64, error: *mut c_char, n: usize,
+) -> i32 {
     guard(
         || {
+            need(option <= 2, "unknown validation option")?;
             need(
                 !input.is_null() && !out.is_null(),
                 "null input/session output",
@@ -391,7 +431,9 @@ pub unsafe extern "C" fn planar_create(
             // SAFETY: pointer layouts and lifetimes are the C caller's obligation.
             unsafe {
                 *out = std::ptr::null_mut();
-                let session = Session::copy_from(&*input)?;
+                let mut measured = [0.0; 3];
+                let session = Session::copy_from(&*input, option, &mut measured)?;
+                if !timings.is_null() { std::ptr::copy_nonoverlapping(measured.as_ptr(), timings, 3); }
                 *out = Box::into_raw(Box::new(session));
             }
             Ok(())
@@ -461,6 +503,9 @@ pub unsafe extern "C" fn planar_encode(
     // SAFETY: synchronous bridge borrows session until all callbacks complete.
     unsafe {
         let s = &*session;
+        if !s.nominal_preflight {
+            return report(Err("RGB-conversion-only session cannot fused encode".into()), error, n);
+        }
         let yuv = KernelYuv {
             planes: std::array::from_fn(|c| {
                 let p = &s.planes[c];
@@ -545,4 +590,10 @@ pub unsafe extern "C" fn planar_free(out: *mut Encoded) {
     unsafe {
         hdr_jxl_free(out);
     }
+}
+
+/// Test instrumentation defaults on natively; benchmark callers disable it.
+#[unsafe(no_mangle)]
+pub extern "C" fn planar_instrumentation(enabled: i32) {
+    unsafe { bridge_instrumentation(enabled); }
 }

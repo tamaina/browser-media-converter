@@ -21,7 +21,10 @@ export async function createEncoder(options = {}) {
     return {distance,effort};
   }
   function run(i,o,rgb) {
+    const start=performance.now();
     const {distance,effort}=config(i,o);
+    if(o.validation!==undefined && !["strict","certificate"].includes(o.validation))fail("unknown validation");
+    m._w_options(+(o.observe??false),+(o.validation==="certificate"));
     const formats=['I420','I422','I444','NV12'];
     const format=rgb ? 2 : formats.indexOf(i.format);
     const matrix=rgb ? 1 : ({bt709:1,bt601:6})[i.matrix];
@@ -52,13 +55,13 @@ export async function createEncoder(options = {}) {
           return {p,span};
         });
         layouts.forEach(({p,span},c)=>m._w_plane(c,alloc(p.data.subarray(p.offset??0,(p.offset??0)+span)),span,0,p.stride));
-        status=m._w_encode();
+        status=m._w_encode(+(o.rgbViaPlanar??false));
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()));
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
-      stats={heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
+      stats={sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       return bytes;
-    } finally {m._w_free();for(const p of pointers)m._free(p);}
+    } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
   return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>run(i,o,true),get stats(){return {...stats};}};
 }

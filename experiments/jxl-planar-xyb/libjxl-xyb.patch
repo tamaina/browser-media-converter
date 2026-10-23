@@ -63,7 +63,7 @@ index 66d1a5e..1be7b39 100644
 +       frame_info.ib_needs_color_transform && !jpeg_data &&
 +       num_extra_channels == 0 && cparams.speed_tier > SpeedTier::kKitten));
 +
-+  const auto conversion_start = std::chrono::steady_clock::now();
++  const auto conversion_start = input.experimental_conversion_ms ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 +  if (!jpeg_data && !input.experimental_fill_row && !fused_input) {
      JXL_RETURN_IF_ERROR(CopyColorChannels(input, patch_rect, frame_info,
                                            metadata->m, pool, &color, alpha,

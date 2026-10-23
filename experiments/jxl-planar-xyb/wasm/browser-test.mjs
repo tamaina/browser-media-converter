@@ -11,13 +11,24 @@ const work=path.join(root,'build/browser');await mkdir(work,{recursive:true});
 const benchmark=process.argv.includes('--benchmark');
 const python=mode=>execFileSync('python3',[path.join(root,'wasm/native.py'),mode],{stdio:'inherit',env:{...process.env,LD_LIBRARY_PATH:path.join(root,'build/native/lib')},maxBuffer:16*1024*1024});
 const repo=path.resolve(root,'../..');
-const real=[];
-if(benchmark) for(const [name,file] of [['fujioka','fujioka.jpg'],['bbb','bbb.mov']]) {
-  // Conservative inset avoids out-of-gamut YUV reconstructions rejected by the proof.
-  const out=path.join(work,name+'.yuv');
-  const transfer=name==='bbb'?'colorspace=iall=bt709:all=bt709:trc=srgb,':'';
-  execFileSync('/usr/bin/ffmpeg',['-v','error','-threads','1',...(name==='bbb'?['-ss','10']:[]),'-i',path.join(repo,file),'-frames:v','1','-vf',transfer+'scale=513:257,format=rgb24,lutrgb=r=val*0.8+25:g=val*0.8+25:b=val*0.8+25,scale=out_color_matrix=bt709:out_range=full,format=yuv420p','-filter_threads','1','-threads','1','-f','rawvideo','-y',out],{stdio:'inherit'});
-  real.push({name,bytes:[...await readFile(out)]});
+const real=[],rangeAnalysis=[];
+if(benchmark) {
+  console.log('Preparing real-content range probes (serial ffmpeg + f64 scanner)...');
+  execFileSync('g++',['-std=c++17','-O2',path.join(root,'wasm/range-scan.cc'),'-o',path.join(work,'range-scan')],{stdio:'inherit'});
+  for(const [name,file,nw,nh] of [['fujioka','fujioka.jpg',4272,2856],['bbb','bbb.mov',1280,720]]) {
+    for(const [w,h] of [[513,257],[nw,nh]])for(const inset of [false,true]) {
+      // Above-limit native-size fujioka: analyze untouched, no encode/inset claim.
+      if(w*h>4194304 && inset)continue;
+      const label=`${name}-${w}x${h}-${inset?'inset':'untouched'}`;
+      const out=path.join(work,label+'.yuv');
+      const transfer=name==='bbb'?'colorspace=iall=bt709:all=bt709:trc=srgb,':'';
+      const filter=transfer+`scale=${w}:${h},format=rgb24,`+(inset?'lutrgb=r=val*0.8+25:g=val*0.8+25:b=val*0.8+25,':'')+'scale=out_color_matrix=bt709:out_range=full,format=yuv420p';
+      execFileSync('/usr/bin/ffmpeg',['-v','error','-threads','1',...(name==='bbb'?['-ss','10']:[]),'-i',path.join(repo,file),'-frames:v','1','-vf',filter,'-filter_threads','1','-threads','1','-f','rawvideo','-y',out],{stdio:'inherit'});
+      const analysis=JSON.parse(execFileSync(path.join(work,'range-scan'),[out,String(w),String(h)],{encoding:'utf8'}));
+      rangeAnalysis.push({name:label,width:w,height:h,inset,...analysis,dimensionAdmissible:w*h<=4194304});
+      if(w*h<=4194304)real.push({name:label,width:w,height:h,url:'/build/browser/'+label+'.yuv',rejectionProbe:!inset});
+    }
+  }
 }
 const server=createServer(async(req,res)=> {
   try {
@@ -36,6 +47,7 @@ let browser;
 try {
   browser=await launch();let page=await browser.newPage();await page.goto(origin);
   const fixtures=await page.evaluate(async({benchmark,real})=> {
+    const base64=bytes=>{let text='';for(let i=0;i<bytes.length;i+=32768)text+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(text);};
     const cases=[];
     async function make(name,w,h,format,matrix,fullRange,raw,bench=false) {
       const sx=format==='I444'?1:2,sy=['I420','NV12'].includes(format)?2:1;
@@ -53,57 +65,88 @@ try {
         const actual=await vf.copyTo(copied,{layout});
         if(vf.format!==format || vf.colorSpace.fullRange!==fullRange || vf.colorSpace.transfer!=='iec61966-2-1')throw Error('VideoFrame metadata mismatch');
         shapes.forEach(([row,rows],c)=>{for(let y=0;y<rows;y++)for(let x=0;x<row;x++)if(copied[actual[c].offset+y*actual[c].stride+x]!==data[layout[c].offset+y*layout[c].stride+x])throw Error('copyTo sample mismatch');});
-        cases.push({name,width:w,height:h,format,matrix,fullRange,benchmark:bench,planes:actual.map(p=>({data:[...copied],offset:p.offset,stride:p.stride}))});
+        cases.push({name,width:w,height:h,format,matrix,fullRange,benchmark:bench,planes:actual.map(p=>({data:base64(copied),offset:p.offset,stride:p.stride}))});
       } finally {vf.close();}
     }
     for(const format of ['I420','I422','I444','NV12'])for(const matrix of ['bt601','bt709'])for(const full of [false,true])for(const [w,h]of [[1,1],[17,9]]) await make(`${format}-${matrix}-${full}-${w}`,w,h,format,matrix,full);
     if(benchmark) {
       await make('synthetic',513,257,'I420','bt709',true,null,true);
-      for(const r of real)await make(r.name,513,257,'I420','bt709',true,r.bytes,true);
+      for(const r of real) {await make(r.name,r.width,r.height,'I420','bt709',true,new Uint8Array(await (await fetch(r.url)).arrayBuffer()),true);cases[cases.length-1].rejectionProbe=r.rejectionProbe;}
     }
     return cases;
   },{benchmark,real});
   await browser.close();browser=null;
-  await writeFile(path.join(work,'inputs.json'),JSON.stringify(fixtures));
+  const probes=fixtures.filter(f=>f.rejectionProbe);
+  const admitted=fixtures.filter(f=>!f.rejectionProbe);
+  await writeFile(path.join(work,'inputs.json'),JSON.stringify(admitted));
+  await writeFile(path.join(work,'probes.json'),JSON.stringify(probes));
+  await writeFile(path.join(work,'range-analysis.json'),JSON.stringify(rangeAnalysis));
+  console.log(`Native references: ${admitted.length} fixtures, ${probes.length} range probes...`);
   python('reference');
+  console.log('Browser encodes (serial modes)...');
   browser=await launch();page=await browser.newPage();await page.goto(origin);
   const version=browser.version();
-  const results=await page.evaluate(async({fixtures,origin})=> {
+  const browserResult=await page.evaluate(async({origin})=> {
+    const fixtures=await (await fetch('/build/browser/inputs.json')).json();
+    const probes=await (await fetch('/build/browser/probes.json')).json();
+    const unpack=data=>Uint8Array.from(atob(data),c=>c.charCodeAt(0));
     const {createEncoder}=await import('/wasm/api.mjs');const encoder=await createEncoder();
-    const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:new Uint8Array(p.data)}))};
+    const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
     const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))},{...base,planes:base.planes.map((p,c)=>({...p,data:c?new Uint8Array(p.data.length).fill(255):p.data}))}];
-    for(const i of invalid) {let rejected=false;try{encoder.encodePlanarYuv(i);}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
+    for(const i of invalid) for(const validation of ['strict','certificate']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
     let rgbRejected=false;try{encoder.encodeRgb({width:1,height:1,data:new Float32Array([NaN,0,0])});}catch{rgbRejected=true;}if(!rgbRejected)throw Error('invalid RGB accepted');
+    const probeResults=[];
+    for(const f of probes) {
+      const input={...f,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
+      const outcomes={};
+      for(const validation of ['strict','certificate']) {
+        try {encoder.encodePlanarYuv(input,{validation});outcomes[validation]={rejected:false};}
+        catch(e) {outcomes[validation]={rejected:true,error:String(e)};}
+      }
+      probeResults.push({name:f.name,...outcomes});
+    }
+    // Exercise observer toggle on the same fixture and require identical bytes.
+    const off=encoder.encodePlanarYuv(base,{observe:false});
+    const on=encoder.encodePlanarYuv(base,{observe:true});
+    if(off.length!==on.length || off.some((v,i)=>v!==on[i]))throw Error('observer changes output');
     const results=[];
     for(const f of fixtures) {
-      const input={...f,planes:f.planes.map(p=>({...p,data:new Uint8Array(p.data)}))};
+      const input={...f,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
       const rgb=new Float32Array(await (await fetch(`${origin}/build/browser/${f.name}.rgb`)).arrayBuffer());
       const result={name:f.name,width:f.width,height:f.height,format:f.format,matrix:f.matrix,fullRange:f.fullRange,benchmark:f.benchmark};
-      for(const mode of ['fused','rgb']) {
-        const times=[];let bytes;let peakHeap=0,firstHeap;
+      for(const mode of (f.benchmark?['fused','rgb','rgbE2e','certificate']:['fused','rgb','certificate'])) {
+        const times=[],samples=[];let bytes;let peakHeap=0,firstHeap;
         for(let run=0;run<(f.benchmark?6:1);run++) {
           const start=performance.now();
-          bytes=mode==='fused'?encoder.encodePlanarYuv(input):encoder.encodeRgb({width:f.width,height:f.height,data:rgb});
+          const options={observe:!f.benchmark,validation:mode==='certificate'?'certificate':'strict',rgbViaPlanar:mode==='rgbE2e'};
+          bytes=mode==='rgb'?encoder.encodeRgb({width:f.width,height:f.height,data:rgb},options):encoder.encodePlanarYuv(input,options);
           const elapsed=performance.now()-start;
-          if(run)times.push(elapsed);
+          if(run){times.push(elapsed);samples.push(encoder.stats);}
           const stats=encoder.stats;firstHeap??=stats.heapBefore;peakHeap=Math.max(peakHeap,stats.heapAfter);
         }
         const sorted=[...times].sort((a,b)=>a-b);
-        result[mode]={samplesMs:times,medianMs:times.length?sorted[Math.floor(sorted.length/2)]:null,size:bytes.length,bytes:[...bytes],...encoder.stats,heapBefore:firstHeap,peakHeap};
-        if(mode==='fused' && (encoder.stats.simdLanes!==4 || !encoder.stats.target.includes('WASM')))throw Error(`SIMD target: ${JSON.stringify(encoder.stats)}`);
+        const median=Object.fromEntries(['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'].map(k=>[k,samples.length?[...samples].map(s=>s[k]).sort((a,b)=>a-b)[Math.floor(samples.length/2)]:encoder.stats[k]]));
+        result[mode]={median,samples:f.benchmark?samples.map(s=>Object.fromEntries(Object.keys(median).map(k=>[k,s[k]]))):[],samplesMs:times,medianMs:times.length?sorted[Math.floor(sorted.length/2)]:null,size:bytes.length,bytes:[...bytes],...encoder.stats,heapBefore:firstHeap,peakHeap};
+        if(['fused','certificate'].includes(mode) && (encoder.stats.simdLanes!==4 || !encoder.stats.target.includes('WASM')))throw Error(`SIMD target: ${JSON.stringify(encoder.stats)}`);
+      }
+      for(const [mode,reference] of (f.benchmark?[['certificate','fused'],['rgbE2e','rgb']]:[['certificate','fused']])) {
+        if(result[mode].bytes.length!==result[reference].bytes.length || result[mode].bytes.some((v,i)=>v!==result[reference].bytes[i]))throw Error(`${mode} changes output`);
+        result[mode].byteIdenticalToBaseline=true;delete result[mode].bytes;
       }
       results.push(result);
     }
-    return results;
-  },{fixtures,origin});
+    return {results,probeResults};
+  },{origin});
   await browser.close();browser=null;
+  const {results,probeResults}=browserResult;
   for(const r of results)for(const mode of ['fused','rgb']) {await writeFile(path.join(work,`${r.name}.${mode}.jxl`),new Uint8Array(r[mode].bytes));delete r[mode].bytes;}
   await writeFile(path.join(work,'browser.json'),JSON.stringify(results));
+  console.log('Independent decode and quality verification...');
   python('verify');
   const verified=JSON.parse(await readFile(path.join(work,'verified.json')));
   const native=JSON.parse(await readFile(path.join(work,'native.json')));
-  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},fixturePreparation:{realSize:'513x257',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:'val*0.8+25',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(root,'build/wasm/sizes.json'))),cases:verified.map((r,i)=>({...r,native:native[i].native}))};
-  await writeFile(path.join(root,benchmark?'wasm-observations.json':'build/browser/test-observations.json'),JSON.stringify(observations,null,2)+'\n');
+  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},measurement:{warmups:1,timedRuns:5,order:['fused','rgb','rgbE2e','certificate'],instrumentation:'off for every benchmark mode; on for test fused/certificate',clock:'emscripten_get_now inside WASM; performance.now including JS marshaling/free for total',rgbE2e:'same VideoFrame.copyTo planes -> owned Rust session -> checked planar_region -> float RGB encode; no redundant RGB preflight during create',copyMs:'Rust metadata/layout checks plus owned plane copy; excludes JS-to-WASM copy',sampleCheckMs:'stored sample depth check only; subset of preflightMs',preflightMs:'stored sample depth check plus RGB admission (or certificate/fallback); RGB E2E defers RGB admission to conversion',nativeTotal:'same boundaries excluding JS-to-WASM and output-to-JS copies; includes output copy/free and session destroy'},fixturePreparation:{realSize:'513x257 plus native-size bbb 1280x720; native-size fujioka range analysis only',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:'val*0.8+25',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,rangeAnalysis,rejectionProbes:probeResults,nativeRejectionProbes:JSON.parse(await readFile(path.join(work,'native-probes.json'))),caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(root,'build/wasm/sizes.json'))),cases:verified.map((r,i)=>{if(r.benchmark)return {...r,native:native[i].native};const compact={...r,native:{fused:{size:native[i].native.fused.size},rgb:{size:native[i].native.rgb.size}}};for(const mode of ['fused','rgb','certificate'])compact[mode]=Object.fromEntries(Object.entries(r[mode]).filter(([k])=>['size','simdLanes','target','qualityVsSource','qualityVsNative','byteIdenticalToNativeSamePath','byteIdenticalToNative','byteIdenticalToBaseline'].includes(k)));return compact;})};
+  await writeFile(path.join(root,benchmark?'wasm-observations.json':'build/browser/test-observations.json'),JSON.stringify({...observations,cases:undefined},null,2).slice(0,-2)+',\n  \"cases\": [\n'+observations.cases.map(c=>'    '+JSON.stringify(c)).join(',\n')+'\n  ]\n}\n');
   console.log(`PASS: ${verified.length} VideoFrame fixtures, fused + RGB, independent jxl-oxide decode, native comparison.`);
   for(const r of observations.cases.filter(r=>r.benchmark))console.log(JSON.stringify(r));
 } finally {if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
