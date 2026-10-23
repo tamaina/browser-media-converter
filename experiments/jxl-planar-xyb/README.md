@@ -1,5 +1,8 @@
 # Experimental planar YUV → XYB → JPEG XL
 
+The SDR WebAssembly build, browser API, verification and benchmarks are documented
+in [WASM.md](WASM.md).
+
 The current version adds a **fused Highway SIMD SDR path**, retaining the prior
 row implementation for HDR/wide-gamut fallback and comparison. Start with
 [SIMD.md](SIMD.md) for current coverage, native CPU requirements, commands and
@@ -109,9 +112,9 @@ applies `libjxl-xyb.patch`, builds the codec, Rust adapter, stock decoder and Ru
 jxl-oxide 0.12.6 decoder. Build artifacts and vendor source remain ignored. No AGPL
 implementation is used; libjxl remains BSD and local glue follows the repo MIT
 license. Rust crate dependencies exist only in the independent decoder oracle.
-Emscripten/Wasm has not been built in this environment (no `emcc` or installed
-Rust Emscripten target). Reuse of libjxl Highway remains preferable to rewriting
-its SIMD core in Rust; this proof's Rust reconstruction is scalar.
+The original native-only environment did not include Emscripten. The new SDR
+WASM experiment is documented in [WASM.md](WASM.md). Reuse of libjxl Highway
+remains preferable to rewriting its SIMD core in Rust; this proof's Rust reconstruction is scalar.
 
 ## Historical scalar row observations and limits
 

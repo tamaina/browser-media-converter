@@ -1,0 +1,2421 @@
+{
+  "date": "2026-10-23T15:21:20.734Z",
+  "host": {
+    "platform": "linux",
+    "release": "7.0.0-38-generic",
+    "cpu": "Intel(R) Core(TM) i7-10510U CPU @ 1.80GHz",
+    "node": "v24.18.0",
+    "chrome": "156.0.8078.47"
+  },
+  "toolchain": {
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "ffmpeg": "ffmpeg version 8.0.1-3ubuntu2 Copyright (c) 2000-2025 the FFmpeg developers",
+    "libjxl": "v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc"
+  },
+  "fixturePreparation": {
+    "realSize": "513x257",
+    "bbbTimestampSeconds": 10,
+    "bbbInputColor": "bt709 matrix/primaries/transfer (confirmed with ffprobe)",
+    "bbbOutputTransfer": "srgb",
+    "contrastInset": "val*0.8+25",
+    "outputMatrix": "bt709",
+    "outputRange": "full",
+    "format": "I420"
+  },
+  "benchmark": true,
+  "caseCount": 35,
+  "sizes": {
+    "codec.mjs": {
+      "raw": 15340,
+      "gzip": 4695
+    },
+    "codec.wasm": {
+      "raw": 2277726,
+      "gzip": 856305
+    }
+  },
+  "cases": [
+    {
+      "name": "I420-bt601-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I420",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 58.25694131133755,
+        "maxError": 0.0014655441045761108
+      },
+      "native": {
+        "fused": {
+          "medianMs": 1.4661469031125307,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.821294030174613,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.04189601168036461
+      }
+    },
+    {
+      "name": "I420-bt601-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I420",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 116,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 45.08020555166123,
+          "maxError": 0.0263025164604187
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 116,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 45.08020555166123,
+          "maxError": 0.0263025164604187
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 45.08020555166123,
+        "maxError": 0.0263025164604187
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7045300444588065,
+          "samplesMs": [],
+          "size": 116
+        },
+        "rgb": {
+          "medianMs": 0.7153180195018649,
+          "samplesMs": [],
+          "size": 116
+        },
+        "sessionCreateMs": 0.047291978262364864
+      }
+    },
+    {
+      "name": "I420-bt601-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I420",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 62.472117691087234,
+        "maxError": 0.001149594783782959
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6554259452968836,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6442699814215302,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.00852195080369711
+      }
+    },
+    {
+      "name": "I420-bt601-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I420",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 114,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.121423761130345,
+          "maxError": 0.024163365364074707
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 114,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.121423761130345,
+          "maxError": 0.024163365364074707
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.121423761130345,
+        "maxError": 0.024163365364074707
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6473320536315441,
+          "samplesMs": [],
+          "size": 114
+        },
+        "rgb": {
+          "medianMs": 0.6310970056802034,
+          "samplesMs": [],
+          "size": 114
+        },
+        "sessionCreateMs": 0.024204025976359844
+      }
+    },
+    {
+      "name": "I420-bt709-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 68.5396447877852,
+        "maxError": 0.0005570352077484131
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6097159348428249,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6190109997987747,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.007812981493771076
+      }
+    },
+    {
+      "name": "I420-bt709-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 114,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.844459660248475,
+          "maxError": 0.02235954999923706
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 114,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.844459660248475,
+          "maxError": 0.02235954999923706
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.844459660248475,
+        "maxError": 0.02235954999923706
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6468110950663686,
+          "samplesMs": [],
+          "size": 114
+        },
+        "rgb": {
+          "medianMs": 0.6607320392504334,
+          "samplesMs": [],
+          "size": 114
+        },
+        "sessionCreateMs": 0.023519969545304775
+      }
+    },
+    {
+      "name": "I420-bt709-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 59.993461475701395,
+        "maxError": 0.0012835264205932617
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6010960787534714,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6350500043481588,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.009762006811797619
+      }
+    },
+    {
+      "name": "I420-bt709-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 110,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.577761885394985,
+          "maxError": 0.024620622396469116
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 110,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.577761885394985,
+          "maxError": 0.024620622396469116
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.577761885394985,
+        "maxError": 0.024620622396469116
+      },
+      "native": {
+        "fused": {
+          "medianMs": 1.2825810117647052,
+          "samplesMs": [],
+          "size": 110
+        },
+        "rgb": {
+          "medianMs": 0.8180879522114992,
+          "samplesMs": [],
+          "size": 110
+        },
+        "sessionCreateMs": 0.025231041945517063
+      }
+    },
+    {
+      "name": "I422-bt601-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I422",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 58.25694131133755,
+        "maxError": 0.0014655441045761108
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7005659863352776,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6918590515851974,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.009260023944079876
+      }
+    },
+    {
+      "name": "I422-bt601-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I422",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 118,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.97991121081141,
+          "maxError": 0.029295265674591064
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 118,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.97991121081141,
+          "maxError": 0.029295265674591064
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 42.97991121081141,
+        "maxError": 0.029295265674591064
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7256419630721211,
+          "samplesMs": [],
+          "size": 118
+        },
+        "rgb": {
+          "medianMs": 0.7452269783243537,
+          "samplesMs": [],
+          "size": 118
+        },
+        "sessionCreateMs": 0.026024063117802143
+      }
+    },
+    {
+      "name": "I422-bt601-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I422",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 62.472117691087234,
+        "maxError": 0.001149594783782959
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7301209261640906,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6574220024049282,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.013028038665652275
+      }
+    },
+    {
+      "name": "I422-bt601-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I422",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 117,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.393412599220426,
+          "maxError": 0.03248792886734009
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 117,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.393412599220426,
+          "maxError": 0.03248792886734009
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.393412599220426,
+        "maxError": 0.03248792886734009
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6788650061935186,
+          "samplesMs": [],
+          "size": 117
+        },
+        "rgb": {
+          "medianMs": 0.6829600315541029,
+          "samplesMs": [],
+          "size": 117
+        },
+        "sessionCreateMs": 0.026570982299745083
+      }
+    },
+    {
+      "name": "I422-bt709-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I422",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 68.5396447877852,
+        "maxError": 0.0005570352077484131
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6616050377488136,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6394709926098585,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.008172937668859959
+      }
+    },
+    {
+      "name": "I422-bt709-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I422",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 117,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.679498929557795,
+          "maxError": 0.02953287959098816
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 117,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.679498929557795,
+          "maxError": 0.02953287959098816
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 42.679498929557795,
+        "maxError": 0.02953287959098816
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6703860126435757,
+          "samplesMs": [],
+          "size": 117
+        },
+        "rgb": {
+          "medianMs": 0.664912979118526,
+          "samplesMs": [],
+          "size": 117
+        },
+        "sessionCreateMs": 0.024787033908069134
+      }
+    },
+    {
+      "name": "I422-bt709-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I422",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 59.993461475701395,
+        "maxError": 0.0012835264205932617
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6242509698495269,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6411760114133358,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.0075480202212929726
+      }
+    },
+    {
+      "name": "I422-bt709-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I422",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 115,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.11059171344806,
+          "maxError": 0.023571014404296875
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 115,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.11059171344806,
+          "maxError": 0.023571014404296875
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.11059171344806,
+        "maxError": 0.023571014404296875
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6635920144617558,
+          "samplesMs": [],
+          "size": 115
+        },
+        "rgb": {
+          "medianMs": 0.6531269755214453,
+          "samplesMs": [],
+          "size": 115
+        },
+        "sessionCreateMs": 0.02659799065440893
+      }
+    },
+    {
+      "name": "I444-bt601-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I444",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 58.25694131133755,
+          "maxError": 0.0014655441045761108
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 58.25694131133755,
+        "maxError": 0.0014655441045761108
+      },
+      "native": {
+        "fused": {
+          "medianMs": 1.2321299873292446,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.8599290158599615,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.012172036804258823
+      }
+    },
+    {
+      "name": "I444-bt601-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I444",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 127,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.817668542089436,
+          "maxError": 0.03320711851119995
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 127,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.817668542089436,
+          "maxError": 0.03320711851119995
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 41.817668542089436,
+        "maxError": 0.03320711851119995
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7288100896403193,
+          "samplesMs": [],
+          "size": 127
+        },
+        "rgb": {
+          "medianMs": 0.7202910492196679,
+          "samplesMs": [],
+          "size": 127
+        },
+        "sessionCreateMs": 0.03264902625232935
+      }
+    },
+    {
+      "name": "I444-bt601-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I444",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.472117691087234,
+          "maxError": 0.001149594783782959
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 62.472117691087234,
+        "maxError": 0.001149594783782959
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6745470454916358,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.7473380537703633,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.008912989869713783
+      }
+    },
+    {
+      "name": "I444-bt601-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I444",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 127,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.668226846924874,
+          "maxError": 0.0315629243850708
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 127,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.668226846924874,
+          "maxError": 0.0315629243850708
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 41.668226846924874,
+        "maxError": 0.0315629243850708
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.8206060156226158,
+          "samplesMs": [],
+          "size": 127
+        },
+        "rgb": {
+          "medianMs": 0.7353289984166622,
+          "samplesMs": [],
+          "size": 127
+        },
+        "sessionCreateMs": 0.047483015805482864
+      }
+    },
+    {
+      "name": "I444-bt709-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "I444",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 68.5396447877852,
+          "maxError": 0.0005570352077484131
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 68.5396447877852,
+        "maxError": 0.0005570352077484131
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.669994973577559,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.6632539443671703,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.009490991942584515
+      }
+    },
+    {
+      "name": "I444-bt709-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "I444",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 126,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.73724707698511,
+          "maxError": 0.030235618352890015
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 126,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.73724707698511,
+          "maxError": 0.030235618352890015
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 41.73724707698511,
+        "maxError": 0.030235618352890015
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6830039201304317,
+          "samplesMs": [],
+          "size": 126
+        },
+        "rgb": {
+          "medianMs": 0.6940470775589347,
+          "samplesMs": [],
+          "size": 126
+        },
+        "sessionCreateMs": 0.02732989378273487
+      }
+    },
+    {
+      "name": "I444-bt709-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "I444",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 65,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 59.993461475701395,
+          "maxError": 0.0012835264205932617
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 59.993461475701395,
+        "maxError": 0.0012835264205932617
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6622900255024433,
+          "samplesMs": [],
+          "size": 65
+        },
+        "rgb": {
+          "medianMs": 0.644410029053688,
+          "samplesMs": [],
+          "size": 65
+        },
+        "sessionCreateMs": 0.008036033250391483
+      }
+    },
+    {
+      "name": "I444-bt709-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "I444",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 121,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.99641119355822,
+          "maxError": 0.0276930034160614
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 121,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 41.99641119355822,
+          "maxError": 0.0276930034160614
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 41.99641119355822,
+        "maxError": 0.0276930034160614
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6750180618837476,
+          "samplesMs": [],
+          "size": 121
+        },
+        "rgb": {
+          "medianMs": 0.652506947517395,
+          "samplesMs": [],
+          "size": 121
+        },
+        "sessionCreateMs": 0.026075984351336956
+      }
+    },
+    {
+      "name": "NV12-bt601-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "NV12",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.990644355102354,
+          "maxError": 0.0011838972568511963
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 62.990644355102354,
+          "maxError": 0.0011838972568511963
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 62.990644355102354,
+        "maxError": 0.0011838972568511963
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6318519590422511,
+          "samplesMs": [],
+          "size": 64
+        },
+        "rgb": {
+          "medianMs": 0.9085220517590642,
+          "samplesMs": [],
+          "size": 64
+        },
+        "sessionCreateMs": 0.008266069926321507
+      }
+    },
+    {
+      "name": "NV12-bt601-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "NV12",
+      "matrix": "bt601",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 123,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.62138594336267,
+          "maxError": 0.04080754518508911
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 123,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 42.62138594336267,
+          "maxError": 0.04080754518508911
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 42.62138594336267,
+        "maxError": 0.04080754518508911
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.9450609795749187,
+          "samplesMs": [],
+          "size": 123
+        },
+        "rgb": {
+          "medianMs": 0.7622069679200649,
+          "samplesMs": [],
+          "size": 123
+        },
+        "sessionCreateMs": 0.054841977544128895
+      }
+    },
+    {
+      "name": "NV12-bt601-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "NV12",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 56.795479543406486,
+          "maxError": 0.0017875134944915771
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 56.795479543406486,
+          "maxError": 0.0017875134944915771
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 56.795479543406486,
+        "maxError": 0.0017875134944915771
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.697462004609406,
+          "samplesMs": [],
+          "size": 64
+        },
+        "rgb": {
+          "medianMs": 0.687115010805428,
+          "samplesMs": [],
+          "size": 64
+        },
+        "sessionCreateMs": 0.009258976206183434
+      }
+    },
+    {
+      "name": "NV12-bt601-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "NV12",
+      "matrix": "bt601",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 125,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 43.51495355285219,
+          "maxError": 0.031929850578308105
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 125,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 43.51495355285219,
+          "maxError": 0.031929850578308105
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 43.51495355285219,
+        "maxError": 0.031929850578308105
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7737939013168216,
+          "samplesMs": [],
+          "size": 125
+        },
+        "rgb": {
+          "medianMs": 0.7899639895185828,
+          "samplesMs": [],
+          "size": 125
+        },
+        "sessionCreateMs": 0.027182046324014664
+      }
+    },
+    {
+      "name": "NV12-bt709-false-1",
+      "width": 1,
+      "height": 1,
+      "format": "NV12",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 60.74741913002602,
+          "maxError": 0.0012433528900146484
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 60.74741913002602,
+          "maxError": 0.0012433528900146484
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 60.74741913002602,
+        "maxError": 0.0012433528900146484
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7091739680618048,
+          "samplesMs": [],
+          "size": 64
+        },
+        "rgb": {
+          "medianMs": 0.6920529995113611,
+          "samplesMs": [],
+          "size": 64
+        },
+        "sessionCreateMs": 0.011269934475421906
+      }
+    },
+    {
+      "name": "NV12-bt709-false-17",
+      "width": 17,
+      "height": 9,
+      "format": "NV12",
+      "matrix": "bt709",
+      "fullRange": false,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 126,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.01416595569475,
+          "maxError": 0.030497640371322632
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 126,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 44.01416595569475,
+          "maxError": 0.030497640371322632
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 44.01416595569475,
+        "maxError": 0.030497640371322632
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.7007659878581762,
+          "samplesMs": [],
+          "size": 126
+        },
+        "rgb": {
+          "medianMs": 0.7262080907821655,
+          "samplesMs": [],
+          "size": 126
+        },
+        "sessionCreateMs": 0.026262016035616398
+      }
+    },
+    {
+      "name": "NV12-bt709-true-1",
+      "width": 1,
+      "height": 1,
+      "format": "NV12",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 54.86578751974217,
+          "maxError": 0.0025934576988220215
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 64,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 54.86578751974217,
+          "maxError": 0.0025934576988220215
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 54.86578751974217,
+        "maxError": 0.0025934576988220215
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6946839857846498,
+          "samplesMs": [],
+          "size": 64
+        },
+        "rgb": {
+          "medianMs": 0.6599720800295472,
+          "samplesMs": [],
+          "size": 64
+        },
+        "sessionCreateMs": 0.008183997124433517
+      }
+    },
+    {
+      "name": "NV12-bt709-true-17",
+      "width": 17,
+      "height": 9,
+      "format": "NV12",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": false,
+      "fused": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 123,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 43.22095097940139,
+          "maxError": 0.045178115367889404
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [],
+        "medianMs": null,
+        "size": 123,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 43.22095097940139,
+          "maxError": 0.045178115367889404
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 43.22095097940139,
+        "maxError": 0.045178115367889404
+      },
+      "native": {
+        "fused": {
+          "medianMs": 0.6951739778742194,
+          "samplesMs": [],
+          "size": 123
+        },
+        "rgb": {
+          "medianMs": 0.6823660805821419,
+          "samplesMs": [],
+          "size": 123
+        },
+        "sessionCreateMs": 0.024943030439317226
+      }
+    },
+    {
+      "name": "synthetic",
+      "width": 513,
+      "height": 257,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": true,
+      "fused": {
+        "samplesMs": [
+          28.90000009536743,
+          29.59999990463257,
+          26.200000047683716,
+          25.899999976158142,
+          27.600000023841858
+        ],
+        "medianMs": 27.600000023841858,
+        "size": 5132,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 45.593626374575734,
+          "maxError": 0.03977680206298828
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [
+          7.899999976158142,
+          9.600000023841858,
+          8.200000047683716,
+          8.899999976158142,
+          8.199999928474426
+        ],
+        "medianMs": 8.200000047683716,
+        "size": 5132,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 45.59447202938444,
+          "maxError": 0.03977680206298828
+        },
+        "qualityVsNative": {
+          "psnr": 79.11995036057692,
+          "maxError": 0.012784361839294434
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": false
+      },
+      "nativeQualityVsSource": {
+        "psnr": 45.593626374575734,
+        "maxError": 0.03977680206298828
+      },
+      "native": {
+        "fused": {
+          "medianMs": 12.147363042458892,
+          "samplesMs": [
+            12.147363042458892,
+            12.198212905786932,
+            12.266551959328353,
+            12.116056983359158,
+            12.12274597492069
+          ],
+          "size": 5132
+        },
+        "rgb": {
+          "medianMs": 8.870070101693273,
+          "samplesMs": [
+            8.931647054851055,
+            8.78357095643878,
+            8.870070101693273,
+            9.03336494229734,
+            8.67443101014942
+          ],
+          "size": 5132
+        },
+        "sessionCreateMs": 12.920318986289203
+      }
+    },
+    {
+      "name": "fujioka",
+      "width": 513,
+      "height": 257,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": true,
+      "fused": {
+        "samplesMs": [
+          25.799999952316284,
+          23.800000071525574,
+          24.899999976158142,
+          23.899999976158142,
+          24.600000023841858
+        ],
+        "medianMs": 24.600000023841858,
+        "size": 27955,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 40.51553352195832,
+          "maxError": 0.1828671395778656
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [
+          10.900000095367432,
+          10.699999928474426,
+          10.800000071525574,
+          11.399999976158142,
+          10.299999952316284
+        ],
+        "medianMs": 10.800000071525574,
+        "size": 27955,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 40.51553352195832,
+          "maxError": 0.1828671395778656
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 40.51553352195832,
+        "maxError": 0.1828671395778656
+      },
+      "native": {
+        "fused": {
+          "medianMs": 14.55321698449552,
+          "samplesMs": [
+            13.572177034802735,
+            14.19214194174856,
+            14.62575001642108,
+            15.261619002558291,
+            14.55321698449552
+          ],
+          "size": 27955
+        },
+        "rgb": {
+          "medianMs": 11.947466991841793,
+          "samplesMs": [
+            11.947466991841793,
+            11.244182009249926,
+            11.74334401730448,
+            12.124842964112759,
+            12.018247973173857
+          ],
+          "size": 27955
+        },
+        "sessionCreateMs": 13.914313982240856
+      }
+    },
+    {
+      "name": "bbb",
+      "width": 513,
+      "height": 257,
+      "format": "I420",
+      "matrix": "bt709",
+      "fullRange": true,
+      "benchmark": true,
+      "fused": {
+        "samplesMs": [
+          27.5,
+          24.899999976158142,
+          25.600000023841858,
+          24.899999976158142,
+          25.800000071525574
+        ],
+        "medianMs": 25.600000023841858,
+        "size": 28886,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 4,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 38.59364315022248,
+          "maxError": 0.26981882005929947
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "rgb": {
+        "samplesMs": [
+          9.5,
+          11,
+          10.5,
+          10.899999976158142,
+          12.200000047683716
+        ],
+        "medianMs": 10.899999976158142,
+        "size": 28886,
+        "heapBefore": 33554432,
+        "heapAfter": 33554432,
+        "simdLanes": 0,
+        "target": "WASM",
+        "peakHeap": 33554432,
+        "qualityVsSource": {
+          "psnr": 38.59364315022248,
+          "maxError": 0.26981882005929947
+        },
+        "qualityVsNative": {
+          "psnr": null,
+          "maxError": 0
+        },
+        "byteIdenticalToNativeSamePath": true,
+        "byteIdenticalToNative": true
+      },
+      "nativeQualityVsSource": {
+        "psnr": 38.59364315022248,
+        "maxError": 0.26981882005929947
+      },
+      "native": {
+        "fused": {
+          "medianMs": 14.760992955416441,
+          "samplesMs": [
+            13.005820917896926,
+            14.760992955416441,
+            14.86065099015832,
+            14.750705915503204,
+            15.01692901365459
+          ],
+          "size": 28886
+        },
+        "rgb": {
+          "medianMs": 11.600955971516669,
+          "samplesMs": [
+            11.600955971516669,
+            12.380962958559394,
+            13.649626052938402,
+            11.594392010010779,
+            11.47939101792872
+          ],
+          "size": 28886
+        },
+        "sessionCreateMs": 13.154538930393755
+      }
+    }
+  ]
+}

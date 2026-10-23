@@ -17,6 +17,10 @@ struct Source {
   std::vector<float> captured;
   std::map<const void*,std::vector<float>> buffers;
 };
+#ifdef __EMSCRIPTEN__
+extern float wasm_distance;
+extern int wasm_effort;
+#endif
 static void format(void*,JxlPixelFormat* f) { *f={3,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0}; }
 static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* stride) noexcept {
   auto& s=*static_cast<Source*>(opaque);
@@ -77,8 +81,13 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
+    #ifdef __EMSCRIPTEN__
+    check(JxlEncoderSetFrameDistance(settings,wasm_distance));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
+#else
     check(JxlEncoderSetFrameDistance(settings,1.0f));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
+#endif
     bool observed_reference=rgb && std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE");
     struct RGB { const float* p;size_t width; } reference{rgb,c->width};
     if(observed_reference) {

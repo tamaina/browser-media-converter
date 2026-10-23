@@ -112,6 +112,8 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(message.into()) }
 }
 fn check_config(c: &Config) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    need(c.primaries == 1 && c.transfer == 13, "WASM requires BT.709 primaries and sRGB transfer (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -148,6 +150,8 @@ impl Session {
             intensity: i.intensity,
         };
         check_config(&config)?;
+        #[cfg(target_arch = "wasm32")]
+        need(i.depth == 8 && i.storage == 0, "WASM requires 8-bit U8 planes")?;
         need(
             i.format <= 3 && matches!(i.depth, 8 | 10 | 12),
             "unsupported format/depth",
