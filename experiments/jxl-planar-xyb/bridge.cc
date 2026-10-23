@@ -31,6 +31,8 @@ struct Source {
   void* opaque; Fill fill; Encoded& result;
   bool failed=false; size_t live=0;
   std::vector<float> captured;
+  size_t capture_width=0,capture_height=0;
+  std::vector<uint8_t> captured_pixels;
   std::map<const void*,std::vector<float>> buffers;
 };
 #ifdef __EMSCRIPTEN__
@@ -62,11 +64,26 @@ static int row(void* opaque,size_t x,size_t y,size_t w,float* r,float* g,float* 
     return 0;
   } catch(...) { return 1; }
 }
-static void observe(void* opaque,size_t,size_t w,const float* x,const float* y,const float* b) {
+static void observe(void* opaque,size_t row_x,size_t row_y,size_t w,const float* x,const float* y,const float* b) {
   auto& source=*static_cast<Source*>(opaque);
   auto& hash=source.result.xyb_hash;
   if(diagnostics || std::getenv("JXL_EXPERIMENT_CAPTURE_XYB")) {
-    for(auto* p:{x,y,b}) source.captured.insert(source.captured.end(),p,p+w);
+    // Streaming patches overlap in both axes. Capture absolute pixel coordinates,
+    // rather than appending callback order (which overcounts tiled images).
+    if(row_x>source.capture_width || w>source.capture_width-row_x || row_y>=source.capture_height)
+      throw std::runtime_error("XYB capture bounds: y="+std::to_string(row_y)+" w="+std::to_string(w)+" expected="+std::to_string(source.capture_width)+"x"+std::to_string(source.capture_height));
+    if(source.captured.empty()) {
+      source.captured.resize(source.capture_width*source.capture_height*3);
+      source.captured_pixels.resize(source.capture_width*source.capture_height);
+    }
+    size_t channel=0;
+    for(auto* p:{x,y,b}) {
+      float* dest=source.captured.data()+(row_y*3+channel++)*source.capture_width+row_x;
+      for(size_t i=0;i<w;++i) if(source.captured_pixels[row_y*source.capture_width+row_x+i] && p[i]!=dest[i])
+        throw std::runtime_error("overlapping XYB capture differs");
+      std::copy_n(p,w,dest);
+    }
+    std::fill_n(source.captured_pixels.data()+row_y*source.capture_width+row_x,w,1);
   }
   for(auto* p:{x,y,b}) for(size_t i=0;i<w;++i) {
     uint32_t bits; std::memcpy(&bits,p+i,4);
@@ -83,7 +100,8 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
   *result={}; result->xyb_hash=14695981039346656037ULL;
   try {
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
-    Source source{opaque,fill,*result,false,0,{}, {}};
+    Source source{opaque,fill,*result,false,0,{},0,0,{}, {}};
+    source.capture_width=c->width;source.capture_height=c->height;
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
@@ -144,6 +162,8 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     if(!result->data) throw std::runtime_error("output allocation failed");
     std::memcpy(result->data,out.data(),used); result->size=used;
     if(!source.captured.empty()) {
+      if(std::find(source.captured_pixels.begin(),source.captured_pixels.end(),0)!=source.captured_pixels.end())
+        throw std::runtime_error("incomplete XYB capture");
       result->xyb_count=source.captured.size();
       result->xyb_data=static_cast<float*>(std::malloc(result->xyb_count*sizeof(float)));
       if(!result->xyb_data) { std::free(result->data);*result={};throw std::runtime_error("capture allocation"); }

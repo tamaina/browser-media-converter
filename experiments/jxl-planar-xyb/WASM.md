@@ -1,4 +1,4 @@
-# SDR planar YUV in WebAssembly — Round 5
+# SDR planar YUV in WebAssembly — Round 6
 
 This experiment links the owned Rust planar session and `bridge.cc` to patched
 libjxl v0.11.1 (794a5dcf0d54f9f0b20d288a12e87afb91d20dfc), with Highway
@@ -515,3 +515,210 @@ No build/test/browser/benchmark overlapped another heavy process. All builds
 used one job. Changes are confined to this experiment; no commits, changesets,
 or package changes were made. Raw logs are `build/round5-{wasm,native,test,
 benchmark,capture,diff,python,tail}.log`.
+
+
+## Round 6 — genuine Netflix 10-bit SDR content
+
+Sources: Xiph derf's Netflix open-content mirror, **Netflix Inc. (C) 2015,
+CC BY-NC-ND 4.0** ([license](https://creativecommons.org/licenses/by-nc-nd/4.0/)).
+Frames and derivatives are local evaluation material only: **never commit or
+redistribute them**. Reproduction scripts, attribution and aggregate measurements
+are the only versioned additions. See [real10/README.md](real10/README.md) for
+full source/copyright URLs and assumptions.
+
+| Frame (zero-based) | Source | Copyright |
+| --- | --- | --- |
+| Aerial f600 | [4K y4m](https://media.xiph.org/video/derf/Chimera/Netflix_Aerial_4096x2160_60fps_10bit_420.y4m) | [Areal (sic)](https://media.xiph.org/video/derf/Chimera/Netflix_Areal_Copyright.txt) |
+| PierSeaside f300 | [4K y4m](https://media.xiph.org/video/derf/Chimera/Netflix_PierSeaside_4096x2160_60fps_10bit_420.y4m) | [notice](https://media.xiph.org/video/derf/Chimera/Netflix_PierSeaside_Copyright.txt) |
+| Boat f150 | [4K y4m](https://media.xiph.org/video/derf/ElFuente/Netflix_Boat_4096x2160_60fps_10bit_420.y4m) | [notice](https://media.xiph.org/video/derf/ElFuente/Netflix_Boat_Copyright.txt) |
+
+The notices identify 10-bit 4:2:0 BT.709, 59.94 fps. The exact 44-byte y4m
+header uses F60:1 and has no color tags; ffprobe cannot recover transfer,
+primaries, matrix or chroma siting from it. We explicitly assume **BT.709
+primaries/matrix/transfer, limited range, MPEG-2 left chroma**. Header plus one
+26,542,086-byte frame is extracted using HTTP Range at `44+n*26542086`.
+Existing exact-size/header/FRAME-verified extracts are reused; no additional
+video frames were downloaded for this round.
+
+Each scene is center-cropped 3840×2160 at (128,0), then zscale spline36 resized
+to 1280×720, dither=none. Boat additionally has a **2560×1440 unscaled crop** at
+(768,360), 3,686,400 pixels. `.bt709-left.yuv` retains this color interpretation;
+the unscaled crop is verified sample-exact against all three original planes.
+All intermediate/output samples are 10-bit low-aligned U16LE I420P10; no U8 RGB
+intermediate. Raw files cannot describe their pixel format/tags: raw byte counts are checked, and both source and API y4m intermediates are
+independently probed for dimensions / `yuv420p10le` before extracting their raw
+payload; color metadata is in ignored `manifest.json`.
+
+**The current API accepts sRGB transfer / centered chroma only.** A separate
+10-bit zscale pass converts BT.709 transfer → sRGB and left → center, retaining
+BT.709 matrix/primaries and limited range. Only these prepared planes enter
+VideoFrame/copyTo and both native/WASM pipelines. They must not be mistaken for
+unchanged source-transfer samples. Source and prepared OOR are reported
+separately; the source transfer conversion itself can change super-whites.
+
+The `--benchmark --real10` flag (or `REAL10=1 ... --benchmark`) adds the four
+optional fixtures. Absent files/manifest produce a SKIP notice; default tests
+require no download. Actual VideoFrame metadata and copyTo samples are checked.
+The 1440p case exposed a **measurement-harness memory issue**: serializing all
+codestreams as number arrays exhausted Node's default ~2 GB heap. Result bytes
+now use Base64 transport, and fixture planes retain only their own span. No
+fused-kernel change or heap-limit increase was needed. Diagnostic capture
+also returns one encode at a time to bound transport memory.
+
+The unscaled crop needs `setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709`
+**before** crop/output tagging. Merely setting output tags on an untagged y4m
+caused ffmpeg to alter sample values. The script now declares input color first;
+`analyze.py` asserts sample equality against the original Y/U/V crop. This was a
+fixture-preparation bug, not a fused conversion bug; final measurements use the
+corrected crop. Scaled outputs already used explicit zscale input/output color.
+
+A second diagnostic issue appeared at 2560×1440: libjxl's streaming patches
+notify overlapping horizontal patches (2,576 aggregate callback columns for a
+2,560-column image). The experiment-only observer now includes x as well as y.
+`bridge.cc` stores XYB by absolute pixel coordinates, checks numerically identical
+overlapping pixels and verifies complete coverage, rather than appending callbacks.
+This affects diagnostic capture only; normal benchmarks allocate no capture
+image. Hash instrumentation keeps its prior callback-order semantics. Both
+native and WASM were rebuilt, and diagnostic codestreams are checked against
+normal benchmark codestreams. No fused arithmetic or clipping rule changed.
+
+### Measured results
+
+Run: 2026-10-23T22:34:12.220Z; Intel(R) Core(TM) i7-10510U CPU @ 1.80GHz; Chrome 156.0.8078.47. Baseline HEAD `caf3f7c`; distance 1, effort 3, one warmup + five timed runs, serial fixed order fused / prepared RGB / RGB E2E. WASM and native artifacts were rebuilt serially after the bridge diagnostic capture fix; the fused conversion kernel is unchanged.
+
+Original 4K Y code evidence (before processing):
+
+| Source | Y min–max | Occupied Y codes | Y LSB2 counts (0/1/2/3) |
+| --- | ---: | ---: | --- |
+| Aerial f600 | 59–953 | 895 | 2212604 / 2210250 / 2209404 / 2215102 |
+| PierSeaside f300 | 53–935 | 857 | 2208082 / 2212118 / 2214816 / 2212344 |
+| Boat f150 | 56–870 | 813 | 2378761 / 2195274 / 2137876 / 2135449 |
+
+There are no 4-code comb gaps: these originals carry genuine low-bit variation, unlike the 8-bit-derived bbb fixture. Code values are not limited to [64,940]; source super-whites are retained in the source-domain scan.
+
+| Input | Source BT.709/left OOR % | Prepared sRGB/center OOR % |
+| --- | ---: | ---: |
+| aerial-f600-1280x720 | 4.833116 | 11.998698 |
+| pierseaside-f300-1280x720 | 0.407335 | 2.525065 |
+| boat-f150-1280x720 | 5.114366 | 9.639540 |
+| boat-f150-2560x1440 | 1.788954 | 4.027262 |
+
+OOR is the fraction of pixels with any **unclipped** reconstructed nonlinear RGB channel outside [0,1], including tiny excursions. The remeasured derived bbb 720p P10 fixture has **31.834744%** OOR (Round 5: 31.83%). These are scene/preparation differences, not a controlled depth comparison.
+
+WASM median **create / encode / JS-inclusive total**, ms. Prepared RGB excludes create/conversion; RGB E2E total includes source-depth-rounded scalar conversion.
+
+| Input | Fused | Prepared RGB | RGB E2E |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 0.80 / 72.40 / 74.00 | 0.00 / 65.40 / 67.00 | 1.00 / 61.00 / 143.90 |
+| pierseaside-f300-1280x720 | 0.80 / 71.00 / 72.40 | 0.00 / 61.20 / 62.70 | 0.90 / 60.80 / 144.20 |
+| boat-f150-1280x720 | 1.00 / 79.20 / 80.50 | 0.00 / 69.00 / 70.90 | 0.90 / 67.20 / 151.30 |
+| boat-f150-2560x1440 | 4.50 / 259.80 / 266.30 | 0.00 / 229.80 / 236.30 | 4.60 / 223.70 / 556.10 |
+
+Native median **create / encode / total**, ms (no JS marshaling).
+
+| Input | Fused | Prepared RGB | RGB E2E |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 1.32 / 84.96 / 86.30 | 0.00 / 70.70 / 70.73 | 1.33 / 71.15 / 160.85 |
+| pierseaside-f300-1280x720 | 1.33 / 81.27 / 82.66 | 0.00 / 64.58 / 64.61 | 1.33 / 66.88 / 153.62 |
+| boat-f150-1280x720 | 1.34 / 92.70 / 94.07 | 0.00 / 76.29 / 76.34 | 1.36 / 76.62 / 165.18 |
+| boat-f150-2560x1440 | 5.64 / 336.97 / 342.85 | 0.00 / 291.51 / 291.58 | 5.95 / 290.41 / 660.50 |
+
+Source quality uses the same clipped reconstruction rounded to **10-bit**. Independent jxl-oxide float decode is not clamped. All real fused and RGB outputs were verified **10-bit integer**; RGB E2E is byte-identical to prepared RGB in both WASM and native.
+
+| Input | Fused bytes / source PSNR dB | RGB bytes / source PSNR dB | Fused/RGB PSNR dB |
+| --- | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 212,391 / 37.407677 | 212,390 / 37.407173 | 52.469394 |
+| pierseaside-f300-1280x720 | 157,082 / 39.987175 | 157,050 / 39.989938 | 55.455705 |
+| boat-f150-1280x720 | 300,796 / 37.482564 | 300,819 / 37.480712 | 52.638001 |
+| boat-f150-2560x1440 | 684,456 / 39.130156 | 684,558 / 39.129145 | 54.591060 |
+
+Agreement uses maximum channel error per pixel, **255-scaled levels even for P10**. Threshold columns are percentages of pixels; these do not imply an U8 encode/decode.
+
+| Input | Max | >8 % | >16 % | >32 % | Unrounded pre-encoder XYB max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 32.186428 | 0.161675 | 0.013672 | 0.000109 | 4.17232513e-07 |
+| pierseaside-f300-1280x720 | 53.686378 | 0.030056 | 0.006402 | 0.001302 | 3.57627869e-07 |
+| boat-f150-1280x720 | 59.425819 | 0.059353 | 0.016602 | 0.003255 | 4.76837158e-07 |
+| boat-f150-2560x1440 | 44.860695 | 0.050130 | 0.007595 | 0.000651 | 4.76837158e-07 |
+
+### Real-content precision retention
+
+Distance **0.01**, effort 3, both streams signal 10-bit. Error is measured against the **unrounded, clipped float source reconstruction** in 1/1023 units. The comparison path explicitly quantizes RGB to U8 before encoding; fused does not. Max errors include lossy reconstruction and decoded overshoot, so a larger local maximum is not proof of lost source bits.
+
+| Input | Fused max / mean | U8 path max / mean | Top-center fused max / mean | Top-center U8 max / mean |
+| --- | ---: | ---: | ---: | ---: |
+| aerial-f600-1280x720 | 21.044021 / 0.467988 | 19.963289 / 1.106199 | 2.582292 / 0.217863 | 4.711154 / 0.951061 |
+| pierseaside-f300-1280x720 | 50.395857 / 0.299554 | 50.786038 / 0.994143 | 3.202192 / 0.238265 | 4.653959 / 0.959516 |
+| boat-f150-1280x720 | 32.417186 / 0.391036 | 31.073274 / 0.988874 | 3.302802 / 0.264016 | 4.792495 / 0.974602 |
+| boat-f150-2560x1440 | 42.800207 / 0.340649 | 40.586291 / 0.999186 | 4.428115 / 0.235434 | 5.070056 / 0.964234 |
+
+The fixed top-center ROI is x=[w/3,2w/3), y=[0,h/5); sky is useful in Aerial/Pier, while Boat is not assumed to be a smooth sky patch. Assertions require lower whole-frame mean error for fused on every real input. The synthetic gradient retains the stronger Round 4 absolute and ratio assertions. Header depth alone is not used as evidence of precision retention.
+
+### Visual review and interpretation
+
+Inspected all four real inputs' fused/RGB worst-region crops, plus source-error
+crops, heatmaps, OOR masks and sky/reference views. Aerial peaks occur in green
+foliage (e.g. 1184,663); Pier peaks occur on yellow roof/railing edges (856,240);
+Boat 720p peaks occur on diagonal painted lettering (903,351); the native crop
+peaks include green/black lettering (879,1080) and a yellow/pink boundary
+(2007,1224). Both fused and rounded RGB show similar lossy blur/ringing relative
+to the reference. No systematic fused-only chroma shift, color cast, visible
+banding or vertical streaming-patch seam was found. Aerial's OOR mask is largely
+foliage/shadows, unlike the large sky mask in derived bbb. Clipping at [0,1] is
+shared by the reference and both encoder paths; source super-whites are not a
+promise of highlight recovery. External transfer conversion also changes
+negative footroom (prepared Y min=64), while Aerial retains super-white luma
+(prepared Y max=969). These preprocessing effects are not fused-path errors.
+
+All real inputs pass pre-encoder fused/unrounded XYB max <3e-6 (measured maximum
+4.768371582e-7); source-depth rounding increases max XYB difference to about
+4.9e-4. With rounding removed, distance-1 Aerial/Boat 720p decodes are identical;
+Pier/native Boat have maxima 1.4913/1.5618 in 255-scaled levels, with **no >8
+pixels**. At distance 0.1 the unrounded control maxima are 1.4163, 1.9168, 2.5596,
+4.4175 levels respectively, again no >8 pixels. Rounded-path distance-0.1 maxima
+are 13.2096, 28.9573, 17.5487, 21.3223 levels. This supports RGB input rounding
+changing lossy coding decisions; it does not identify the individual codec
+partition/quantization decision. No fused-kernel fix was indicated.
+
+PNG display clamps/rounds to U8 and cannot establish absence of subtle 10-bit
+banding. The float precision and sky-region errors above are the evidence for
+retained precision. This is one host, fixed mode order and five samples, with no
+thermal control or randomized trial; timing differences between reruns are not
+attributed solely to a code change.
+
+Real PNGs (all ignored/local):
+
+| Input | Fused/RGB crops | Heatmap | OOR mask |
+| --- | --- | --- | --- |
+| Aerial 720p | [crops](build/diff-viz/netflix-aerial-f600-1280x720-10bit-fusedRgb-crops.png) | [heat](build/diff-viz/netflix-aerial-f600-1280x720-10bit-fusedRgb-heat.png) | [OOR](build/diff-viz/netflix-aerial-f600-1280x720-10bit-oor-mask.png) |
+| Pier 720p | [crops](build/diff-viz/netflix-pierseaside-f300-1280x720-10bit-fusedRgb-crops.png) | [heat](build/diff-viz/netflix-pierseaside-f300-1280x720-10bit-fusedRgb-heat.png) | [OOR](build/diff-viz/netflix-pierseaside-f300-1280x720-10bit-oor-mask.png) |
+| Boat 720p | [crops](build/diff-viz/netflix-boat-f150-1280x720-10bit-fusedRgb-crops.png) | [heat](build/diff-viz/netflix-boat-f150-1280x720-10bit-fusedRgb-heat.png) | [OOR](build/diff-viz/netflix-boat-f150-1280x720-10bit-oor-mask.png) |
+| Boat 1440p | [crops](build/diff-viz/netflix-boat-f150-2560x1440-10bit-fusedRgb-crops.png) | [heat](build/diff-viz/netflix-boat-f150-2560x1440-10bit-fusedRgb-heat.png) | [OOR](build/diff-viz/netflix-boat-f150-2560x1440-10bit-oor-mask.png) |
+
+### Reproduction (sequential)
+
+```sh
+# From repository root. Each command must finish before starting the next.
+export PYTHONPATH="$PWD/experiments/jxl-planar-xyb/build/python"
+python3 experiments/jxl-planar-xyb/real10/fetch.py
+python3 experiments/jxl-planar-xyb/real10/analyze.py
+bash experiments/jxl-planar-xyb/build-wasm.sh
+CMAKE="$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake" bash experiments/jxl-planar-xyb/build.sh
+node experiments/jxl-planar-xyb/wasm/browser-test.mjs
+node experiments/jxl-planar-xyb/wasm/browser-test.mjs --benchmark --real10
+node experiments/jxl-planar-xyb/wasm/diff-viz.mjs
+python3 experiments/jxl-planar-xyb/wasm/diff-viz.py
+(cd experiments/jxl-planar-xyb && python3 test_xyb.py)
+experiments/jxl-planar-xyb/build/tail-guard
+```
+
+The WASM build sources `~/emsdk/emsdk_env.sh` and both builds use one job;
+`build.sh` also rebuilds tail-guard. Chrome channel is `chrome`.
+Full timing samples remain in ignored `build/browser/browser.json` and
+`native.json`; committed observations retain medians, quality, depth, source
+histograms/OOR and compact local-difference summaries under 100 kB. Independent
+benchmark float decodes may be reused for diagnostics only after codestream byte
+identity and decode freshness checks. `--reuse-decodes` additionally reuses the
+other diagnostic decodes when newer than their corresponding codestream.
+
+Final checks: serial WASM/native rebuilds succeeded; default browser **81/81**, real10 benchmark **91/91**, native `test_xyb.py` **9/9** (22.164 s), tail-guard **4,752/4,752**. The regenerated source/API raw files are SHA-256 byte-identical to the final benchmark inputs; native crop sample equality and independent source/API y4m ffprobe checks passed. Final observations: **93084 bytes**. No media outputs are versioned.

@@ -33,7 +33,7 @@ index 633a98e..9a5dc91 100644
 +  size_t* experimental_simd_lanes;
 +  int (*experimental_fill_row)(void*, size_t x, size_t y, size_t width,
 +                               float* r, float* g, float* b);
-+  void (*experimental_observe_xyb)(void*, size_t y, size_t width,
++  void (*experimental_observe_xyb)(void*, size_t x0, size_t y0, size_t width,
 +                                   const float* x, const float* l, const float* b);
 +
  };
@@ -103,7 +103,7 @@ index 66d1a5e..1be7b39 100644
 +      }
 +      if (input.experimental_observe_xyb) {
 +        for (size_t y = 0; y < color.ysize(); ++y) {
-+          input.experimental_observe_xyb(input.opaque, patch_rect.y0() + y,
++          input.experimental_observe_xyb(input.opaque, patch_rect.x0(), patch_rect.y0() + y,
 +              color.xsize(), color.PlaneRow(0, y), color.PlaneRow(1, y),
 +              color.PlaneRow(2, y));
 +        }

@@ -1,5 +1,6 @@
 """Serial native fixture, benchmark and independent jxl-oxide oracle runner."""
 import ctypes as C
+import numpy as np
 import json,sys,time,statistics,subprocess,math,base64
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -97,8 +98,12 @@ elif sys.argv[1]=='verify':
         b=out.read_bytes();return (C.c_float*(len(b)//4)).from_buffer_copy(b)
     def compare(a,b):
         assert len(a)==len(b)
-        mse=sum((x-y)**2 for x,y in zip(a,b))/len(a)
-        return {'psnr':-10*math.log10(mse) if mse else None,'maxError':max(abs(x-y) for x,y in zip(a,b)), 'maxAbsDiff8bit':255*max(abs(x-y) for x,y in zip(a,b))}
+        # Vectorize float-oracle comparisons: avoid repeated Python passes and
+        # millions of boxed floats for the optional 3.7 MP fixture.
+        delta=np.ctypeslib.as_array(a).astype('float64')-np.ctypeslib.as_array(b)
+        mse=float(np.mean(delta*delta));maximum=float(np.max(np.abs(delta)))
+        return {'psnr':-10*math.log10(mse) if mse else None,'maxError':maximum,'maxAbsDiff8bit':255*maximum}
+
     results=json.loads((work/'browser.json').read_text())
     for r in results:
         name=r['name'];src=(work/(name+'.rgb')).read_bytes();source=(C.c_float*(len(src)//4)).from_buffer_copy(src)
@@ -133,6 +138,19 @@ elif sys.argv[1]=='verify':
     assert precision['fused']['meanError1023']<.25 and precision['fused']['maxError1023']<1,precision
     assert precision['fused']['meanError1023']<precision['8bit']['meanError1023']*.5,precision
     assert precision['fused']['maxError1023']<precision['8bit']['maxError1023']*.75,precision
+    real_precision={}
+    for e in extras:
+        if 'realPrecision' not in e:continue
+        name=e['realPrecision']
+        reference=np.fromfile(work/(name+'.float.rgb'),dtype='<f4').reshape(e['height'],e['width'],3)
+        a=np.ctypeslib.as_array(decode(work/(e['name']+'.jxl'),e['width'],e['height'])).reshape(reference.shape)
+        error=np.abs(a.astype('float64')-reference)*1023
+        # Fixed top-center region, useful for sky in Aerial/Pier (not assumed smooth in Boat).
+        roi=error[:e['height']//5,e['width']//3:2*e['width']//3]
+        real_precision.setdefault(name,{})[e['mode']]={'maxError1023':float(error.max()),'meanError1023':float(error.mean()),'topCenter':{'maxError1023':float(roi.max()),'meanError1023':float(roi.mean())}}
+    for name,p in real_precision.items():
+        assert p['fused']['meanError1023'] < p['8bit']['meanError1023'],(name,p)
+    print('Real precision:',json.dumps(real_precision))
     header_comparisons=[]
     for e in extras:
         if 'headerComparison' not in e or e['requested']!='preserve':continue
@@ -140,5 +158,5 @@ elif sys.argv[1]=='verify':
         a=work/(e['name']+'.jxl');b=work/(other['name']+'.jxl')
         header_comparisons.append({'name':e['headerComparison'],'sourceDepth':e['sourceDepth'],'width':e['width'],'height':e['height'],'preserveBytes':a.stat().st_size,'float32Bytes':b.stat().st_size,**compare(decode(a,e['width'],e['height']),decode(b,e['width'],e['height']))})
     print('Header comparison:',json.dumps(header_comparisons))
-    (work/'depth-verification.json').write_text(json.dumps({'matrix':[e for e in extras if e['name'].startswith('matrix-')],'precision':precision,'distance':.01,'headerComparisons':header_comparisons},indent=2))
+    (work/'depth-verification.json').write_text(json.dumps({'realPrecision':real_precision,'matrix':[e for e in extras if e['name'].startswith('matrix-')],'precision':precision,'distance':.01,'headerComparisons':header_comparisons},indent=2))
     (work/'verified.json').write_text(json.dumps(results,indent=2)+'\n')

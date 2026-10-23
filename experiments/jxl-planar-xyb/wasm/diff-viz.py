@@ -33,7 +33,10 @@ def reconstruct(f):
         bot=a[np.minimum(yi+1,a.shape[0]-1)[:,None],xi]*(1-tx)+a[np.minimum(yi+1,a.shape[0]-1)[:,None],np.minimum(xi+1,a.shape[1]-1)]*tx
         return top*(1-ty[:,None])+bot*ty[:,None]
     maximum=2**depth-1
-    yy=planes[0]/maximum;cb=(up(planes[1])-2**(depth-1))/maximum;cr=(up(planes[2])-2**(depth-1))/maximum
+    scale=2**(depth-8)
+    yy=planes[0]/maximum if f['fullRange'] else (planes[0]-16*scale)/(219*scale)
+    divisor=maximum if f['fullRange'] else 224*scale
+    cb=(up(planes[1])-2**(depth-1))/divisor;cr=(up(planes[2])-2**(depth-1))/divisor
     r=yy+2*(1-.2126)*cr;b=yy+2*(1-.0722)*cb;g=(yy-.2126*r-.0722*b)/(1-.2126-.0722)
     raw=np.stack([r,g,b],axis=-1);clipped=np.clip(raw,0,1).astype('float32')
     ref=(np.floor(clipped*np.float32(maximum)+np.float32(.5))/np.float32(maximum)).astype('float32')
@@ -45,6 +48,13 @@ def reconstruct(f):
     return raw,ref,grad
 
 def decode(stem,w,h):
+    # Reuse the independent benchmark float decode only after byte identity and freshness checks.
+    for suffix,mode in (('-d1-fused','fused'),('-d1-rounded','rgb')):
+        if stem.endswith(suffix):
+            baseline=root/'build/browser'/(stem[:-len(suffix)]+'.'+mode+'.jxl')
+            cached=baseline.with_suffix('.f32')
+            if baseline.exists() and cached.exists() and cached.stat().st_mtime>=baseline.stat().st_mtime and baseline.read_bytes()==(work/(stem+'.jxl')).read_bytes():
+                return np.fromfile(cached,dtype='<f4').reshape(h,w,3)
     out=work/(stem+'.f32')
     if '--reuse-decodes' not in sys.argv or not out.exists() or out.stat().st_mtime < (work/(stem+'.jxl')).stat().st_mtime:
         subprocess.run([str(oracle),str(work/(stem+'.jxl')),str(out)],check=True,stdout=subprocess.DEVNULL)
@@ -124,16 +134,23 @@ obs['localDiff']={
         comparisons={k:dict(max=v['all']['max'],fractions=[v['all'][f'gt{t}'] for t in (8,16,32)]) for k,v in r['comparisons'].items()},
         attribution={k:{field:v[field] for field in (('max','mean') if k.startswith('xyb') else ('max','gt8','gt16','gt32','psnr'))} for k,v in r['attribution'].items()}) for r in results]
 }
+source_analysis=root/'build/real10/source-analysis.json'
+if source_analysis.exists() and any(c.get('real10') for c in obs['cases']):
+    obs['fixturePreparation']['outputRange']='legacy full; real10 limited'
+    obs['measurement']['rawSamples']='build/browser/{browser,native}.json'
+    obs['real10']={'copyright':'Netflix Inc. 2015','license':'CC BY-NC-ND 4.0','sources':'real10/README.md','preparation':'10-bit BT.709 limited left -> sRGB limited center using zscale; no U8 intermediate','analysis':json.loads(source_analysis.read_text())}
 before_path=root/'build/round5-before.json'
 if before_path.exists():
     before=json.loads(before_path.read_text())
     obs['createRegression']={'beforeDate':before['date'],'afterDate':obs['date'],
         'fields':['copyMs','sampleCheckMs','createMs','encodeMs','totalMs'],
         'cases':[dict(name=c['name'],before=[next(b for b in before['cases'] if b['name']==c['name'])['fused']['median'][k] for k in ('copyMs','sampleCheckMs','createMs','encodeMs','totalMs')],
-            after=[c['fused']['median'][k] for k in ('copyMs','sampleCheckMs','createMs','encodeMs','totalMs')]) for c in obs['cases'] if c.get('benchmark')]}
+            after=[c['fused']['median'][k] for k in ('copyMs','sampleCheckMs','createMs','encodeMs','totalMs')]) for c in obs['cases'] if c.get('benchmark') and any(b['name']==c['name'] for b in before['cases'])]}
 # Avoid repeating benchmark last-sample times and non-benchmark error maxima.
 for c in obs['cases']:
     if c.get('benchmark'):
+        for group in (c,c['native']):
+            for mode in ('fused','rgb','rgbE2e'):group[mode].pop('samples',None)
         for mode in ('fused','rgb','rgbE2e'):
             for key in ('sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs','samplesMs','medianMs'):c[mode].pop(key,None)
     else:

@@ -8,8 +8,8 @@ import path from 'node:path';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const work=path.join(root,'build/diff-viz');await mkdir(work,{recursive:true});
 const names=['fujioka-513x257-untouched','bbb-513x257-untouched','bbb-1280x720-untouched','bbb-1280x720-10bit'];
-const fixtures=JSON.parse(await readFile(path.join(root,'build/browser/inputs.json'))).filter(f=>names.includes(f.name));
-if(fixtures.length!==4)throw Error('Run --benchmark first');
+const fixtures=JSON.parse(await readFile(path.join(root,'build/browser/inputs.json'))).filter(f=>names.includes(f.name) || f.real10);
+if(fixtures.length<4)throw Error('Run --benchmark first');
 const server=createServer(async(req,res)=>{try{
   const f=path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname);
   if(f!==path.resolve(root) && !f.startsWith(root))throw Error('path');
@@ -23,16 +23,17 @@ try{
   browser=await chromium.launch({...process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{channel:'chrome'},args:['--no-sandbox','--disable-gpu']});
   const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}`);
   for(const f of fixtures){
-    const results=await page.evaluate(async f=>{
+    for(const distance of [1,.1])for(const mode of [0,1,2]) {
+    const results=await page.evaluate(async ({f,distance,mode})=>{
       const {default:createModule}=await import('/build/wasm/codec.mjs');const m=await createModule();
       const b64=bytes=>{let s='';for(let i=0;i<bytes.length;i+=32768)s+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(s);};
       const depth=f.format.includes('P10')?10:8;
       const result=[];
-      for(const distance of [1,.1])for(const mode of [0,1,2]){
+      {
         const ptrs=[];
         try{
           m._w_options(1,0);m._w_diagnostics(1);
-          m._w_init(f.width,f.height,0,1,1,distance,3,depth,depth);
+          m._w_init(f.width,f.height,0,1,+f.fullRange,distance,3,depth,depth);
           f.planes.forEach((p,c)=>{
             const data=Uint8Array.from(atob(p.data),c=>c.charCodeAt(0));
             const ptr=m._malloc(data.length);ptrs.push(ptr);m.HEAPU8.set(data,ptr);
@@ -44,7 +45,7 @@ try{
         }finally{m._w_free();ptrs.forEach(p=>m._free(p));}
       }
       return result;
-    },f);
+    },{f,distance,mode});
     for(const r of results){
       const stem=`${f.name}-d${r.distance}-${['fused','rounded','unrounded'][r.mode]}`;
       await writeFile(path.join(work,stem+'.jxl'),Buffer.from(r.jxl,'base64'));
@@ -53,6 +54,7 @@ try{
         const baseline=await readFile(path.join(root,'build/browser',f.name+['.fused.jxl','.rgb.jxl'][r.mode]));
         if(!baseline.equals(Buffer.from(r.jxl,'base64')))throw Error('diagnostic capture changes normal benchmark codestream: '+stem);
       }
+    }
     }
     console.log('Captured '+f.name);
   }
