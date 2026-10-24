@@ -174,3 +174,13 @@ caveats, and measured results; older rounds below retain historical context.
 Round 9 changes BT.709/SMPTE170M transfer defaults to display-referred BT.1886
 (Lb=0, gamma 2.4). The encode option `bt709Linearization` retains explicit
 `srgb` and `inverse-oetf` policies; see [WASM.md](WASM.md#round-9--bt1886-gamma-24-for-bt709smpte170m).
+
+Round 10 resolves planar colour as explicit fields > `colorSpace` fields >
+BT.709 matrix/primaries/transfer and limited-range defaults. Returned JXL
+`Uint8Array` also exposes `colorResolved` (with per-field provenance) and
+`warnings`; the same fields are in `encoder.stats`. Pass the actual
+`frame.colorSpace` after `copyTo`, and supply known chroma siting separately.
+BT.601/709/2020-NCL matrices and BT.709/SMPTE-C/BT.470BG/Display P3/BT.2020
+primaries use fused SDR conversion, with matching source primaries in the JXL
+header. `encodeRgb` accepts the same primaries. See the
+[Round 10 API and measured decoder caveats](WASM.md#round-10--source-colour-handling-in-yuvxyb).

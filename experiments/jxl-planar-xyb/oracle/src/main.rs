@@ -15,7 +15,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if args.get(3).is_some_and(|s| s == "--encoding") {
         println!("{original:?}"); return Ok(());
     }
-    image.request_color_encoding(original.clone());
+    let mut desired=original.clone();
+    match args.get(3).map(String::as_str) {
+        Some("--linear-source") => desired.tf=jxl_oxide::color::TransferFunction::Linear,
+        Some("--linear709") => desired=jxl_oxide::EnumColourEncoding::srgb_linear(original.rendering_intent),
+        Some("--srgb") => desired=jxl_oxide::EnumColourEncoding::srgb(original.rendering_intent),
+        Some(_) => return Err("unknown output encoding".into()),
+        None => (),
+    }
+    image.request_color_encoding(desired);
     let render = image.render_frame(0)?;
     let mut stream = render.stream_no_alpha();
     println!(

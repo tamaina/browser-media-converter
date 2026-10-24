@@ -32,8 +32,8 @@ def load(m,base):
     if set(c)-{"bt709Linearization"}!={"primaries","transfer","matrix","fullRange","chromaSiting","intensityTargetNits"}: raise ValueError("explicit complete color metadata required")
     if type(c["fullRange"]) is not bool or c["chromaSiting"] not in ("left","center","topleft"): raise ValueError("explicit boolean range and valid chroma siting required")
     policy=c.get('bt709Linearization','gamma2.4')
-    if 'bt709Linearization' in c and (c['transfer'] not in ('bt709','smpte170m') or policy not in ('gamma2.4','srgb','inverse-oetf')): raise ValueError('invalid bt709Linearization')
-    transfer=({'gamma2.4':1,'srgb':13,'inverse-oetf':1001}[policy] if c['transfer'] in ('bt709','smpte170m') else {'srgb':13,'iec61966-2-1':13,'pq':16,'hlg':18}[c['transfer']])
+    if 'bt709Linearization' in c and (c['transfer'] not in ('bt709','smpte170m','bt2020-10','bt2020-12','bt470bg') or policy not in ('gamma2.4','srgb','inverse-oetf')): raise ValueError('invalid bt709Linearization')
+    transfer=({'gamma2.4':1,'srgb':13,'inverse-oetf':1001}[policy] if c['transfer'] in ('bt709','smpte170m','bt2020-10','bt2020-12','bt470bg') else {'linear':8,'srgb':13,'iec61966-2-1':13,'pq':16,'hlg':18}[c['transfer']])
     formats={"NV12":(3,8)}
     for index,name in enumerate(("I420","I422","I444")):
         for depth in (8,10,12): formats[name+("" if depth==8 else f"P{depth}")]=(index,depth)
@@ -42,8 +42,8 @@ def load(m,base):
     if set(m["origin"])!={"x","y"}: raise ValueError("explicit origin x/y required")
     if type(c["intensityTargetNits"]) not in (float,int): raise ValueError("numeric luminance target required")
     i=Input(integer(m["width"]),integer(m["height"]),fmt,depth,{"u8":0,"u16le-lsb":1}[m["storage"]],
-            {"bt709":1,"smpte170m":6,"bt470bg":6,"bt2020-ncl":9}[c["matrix"]],
-            {"bt709":1,"smpte432":11,"bt2020":9}[c["primaries"]],
+            {"bt601":6,"bt709":1,"smpte170m":6,"bt470bg":6,"bt2020-ncl":9}[c["matrix"]],
+            {"bt709":1,"bt470bg":5,"smpte170m":6,"smpte432":11,"bt2020":9}[c["primaries"]],
             transfer,int(c["fullRange"]),{"left":0,"center":1,"topleft":2}[c["chromaSiting"]],
             integer(m["origin"]["x"]),integer(m["origin"]["y"]),c["intensityTargetNits"])
     if len(m["planes"])!=(2 if fmt==3 else 3): raise ValueError("plane count")

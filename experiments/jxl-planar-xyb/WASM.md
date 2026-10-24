@@ -1,4 +1,4 @@
-# SDR planar YUV in WebAssembly — Round 9
+# SDR planar YUV in WebAssembly — Round 10
 
 This experiment links the owned Rust planar session and `bridge.cc` to patched
 libjxl v0.11.1 (794a5dcf0d54f9f0b20d288a12e87afb91d20dfc), with Highway
@@ -57,22 +57,14 @@ not promise integer-exact reconstruction. The `'preserve'` convention mirrors
 Native `PlanarRgbConfig.depth` / `planar_set_bit_depth` use 0 for float32 and
 8/10/12 for integer headers; a new planar session defaults to its source depth.
 
-The WASM API remains SDR: BT.709 primaries only (D65), matrix `bt709` or
-BT.601 (`smpte170m` / `bt470bg`, with legacy `bt601` alias), explicit boolean
-`fullRange`. Input fields `transfer?: 'iec61966-2-1' | 'srgb' | 'bt709' |
-'smpte170m'` and `chromaSiting?: 'left' | 'center' | 'topleft'` sit alongside
-`matrix`, `primaries` and `fullRange`. Omitted transfer retains sRGB; omitted
-primaries retains BT.709. `srgb` aliases WebCodecs `iec61966-2-1`.
-As of Round 9, `bt709` and `smpte170m` default to BT.1886 with Lb=0:
-`linear=clamp(E,0,1)^2.4`, header GAMMA `1/2.4`. The single new encode option
-`bt709Linearization: 'gamma2.4' | 'srgb' | 'inverse-oetf'` selects that default,
-sRGB linearization/header (Round 8 variant d), or the historical inverse709/TF709.
-It rejects unless input transfer is explicitly `bt709` or `smpte170m`; unknown
-and null values reject. Both `encodePlanarYuv` and `encodeRgb` accept it.
-sRGB signals CICP 13. `encodeRgb` also accepts this transfer field, so prepared
-nonlinear RGB can use the matching encoding. PQ/HLG/P3/BT.2020 and unknown or
-null metadata reject; no tone mapping occurs. Historical native-only tests
-retain their older HDR/P3 reference profiles.
+The WASM API is SDR and resolves source colour automatically from explicit fields,
+`colorSpace` and visible defaults. It supports BT.601/709/2020-NCL matrices and
+BT.709, SMPTE-C, BT.470BG, Display P3 and BT.2020 primaries. See
+[Round 10](#round-10--source-colour-handling-in-yuvxyb) for the current API,
+precedence, supported transfers and decoder limitations. Planar omitted transfer
+now means BT.709 → gamma 2.4; RGB omitted transfer retains sRGB for compatibility.
+PQ/HLG, ICC and the YUV API's identity RGB matrix reject. Historical rounds below
+retain their original measurements and policy descriptions.
 
 **Default siting changes from center to left.** Left is horizontally co-sited,
 vertically centered for 4:2:0 (usual MPEG-2/H.264/HEVC interpretation); center
@@ -86,10 +78,9 @@ VideoColorSpace has no chroma-location member: callers must supply siting from
 codec/container knowledge, never infer it from `frame.colorSpace`.
 
 ```js
-const color = frame.colorSpace.toJSON();
 // After copyTo, provide per-plane Uint8Array, offset, and byte stride:
 encoder.encodePlanarYuv({width, height, format: frame.format,
-  ...color, chromaSiting: 'left', planes});
+  colorSpace: frame.colorSpace, chromaSiting: 'left', planes});
 ```
 
 `validation: 'clip'` is default; `'strict'` scans and rejects reconstructed RGB
@@ -1300,3 +1291,277 @@ assumes zero display black; no nonzero-Lb compensation, tone mapping or ambient
 adaptation is performed. sRGB opt-in deliberately chooses Chrome-video-like
 appearance rather than the owner's BT.1886 interpretation. Enum gamma precision,
 8-bit readback, compression and chroma interpolation leave small residuals.
+
+
+## Round 10 — source colour handling in YUV→XYB
+
+### API, precedence and defaults
+
+```js
+// copyTo stays caller-owned: this synchronous API consumes copied plane layouts.
+const bytes = encoder.encodePlanarYuv({
+  width, height, format: frame.format, planes,
+  colorSpace: frame.colorSpace, // VideoColorSpace prototype getters are supported
+  chromaSiting: 'topleft',     // e.g. known H.264 chroma_sample_loc_type=2
+});
+console.log(bytes.colorResolved, bytes.warnings);
+// Uint8Array API and byte ownership are unchanged; these also appear in stats.
+```
+
+For each colour field: explicit encode option (second argument) > explicit input
+field > `colorSpace` property > default. An input object with `.colorSpace` is a
+VideoFrame-shaped metadata carrier; the API does not synchronously call
+VideoFrame.copyTo for you. `colorSpace` accepts a native VideoColorSpace or a
+plain object, including inherited getters. `null`/`undefined` fields mean absent;
+explicit `false` is preserved. Unknown non-null values fail instead of falling
+back. Optional second-argument `colorSpace` takes precedence over input
+`colorSpace`. ICC input remains rejected (also as an encode option).
+
+| Resolved field | Planar default | Reason / policy |
+| --- | --- | --- |
+| matrix | bt709 | Chrome's observed untagged YUV interpretation |
+| primaries | bt709 | Same observed fallback, D65 |
+| transfer | bt709 | Round 9 display-referred gamma 2.4 interpretation |
+| fullRange | false | Chrome's observed untagged limited range |
+| chromaSiting | left | Existing API default; not inferred from WebCodecs |
+| linearization | gamma2.4 for BT-like transfer; srgb or linear otherwise | Derived from resolved transfer unless bt709Linearization explicitly selects policy |
+
+Defaults are a visible fallback, **not source metadata detection**. Every
+defaulted field, including siting and derived linearization, gets a warning.
+`colorResolved` contains `{matrix,primaries,transfer,fullRange,chromaSiting,
+linearization,source}`. `source` has each of those six keys, with values
+`'option' | 'colorSpace' | 'default'`; linearization provenance is `'option'`
+only when `bt709Linearization` is set, otherwise `'default'`. Each returned
+Uint8Array has `.colorResolved` and `.warnings`, as does `encoder.stats`.
+
+Fully explicit Round 9 calls retain the same conversion/header/output semantics.
+The intentionally changed case is **omitted/null planar transfer**, which now
+means BT.709/gamma2.4 rather than sRGB. `encodeRgb` retains its omitted-transfer
+sRGB default for compatibility; pass the planar resolved transfer/primaries when
+comparing. Output-depth defaults, source-depth rounding only in the RGB baseline,
+strict validation, limits, and synchronous ownership remain unchanged.
+
+### Supported matrices, primaries and transfers
+
+| Kind | Accepted names | Implementation / JXL header |
+| --- | --- | --- |
+| Matrix | bt709 | Kr=.2126, Kb=.0722 |
+| Matrix | bt470bg, smpte170m, bt601 (legacy alias) | Kr=.299, Kb=.114; matrix aliases do not imply primaries |
+| Matrix | bt2020-ncl | Kr=.2627, Kb=.0593; SDR in WASM |
+| Matrix | rgb | Reject clearly: identity RGB is not YUV plane storage; use encodeRgb |
+| Primaries | bt709 | SRGB enum (1), D65 |
+| Primaries | smpte432 | P3 enum (11), D65 (Display P3, not DCI white) |
+| Primaries | bt2020 | 2100 enum (9), D65 |
+| Primaries | smpte170m | CUSTOM (2), R(.630,.340), G(.310,.595), B(.155,.070), D65 |
+| Primaries | bt470bg | CUSTOM (2), R(.64,.33), G(.29,.60), B(.15,.06), D65 |
+| Transfer | bt709, smpte170m | E^2.4 default, GAMMA header 1/2.4 |
+| Transfer aliases (manual descriptors) | bt2020-10, bt2020-12, bt470bg | Same BT-like gamma rule; these are **not** current WebCodecs enum strings |
+| Transfer | iec61966-2-1, srgb (API alias) | Existing inverse sRGB, sRGB header |
+| Transfer | linear | Identity, LINEAR header (8) |
+| Transfer | pq, hlg, smpte2084, arib-std-b67 | Clear “SDR only” error |
+
+The [current WebCodecs specification](https://www.w3.org/TR/webcodecs/#video-transfer-characteristics)
+lists bt709, smpte170m, iec61966-2-1, linear, pq and hlg. Chrome
+156.0.8078.47 accepts/reports those six in new VideoColorSpace, rejecting the
+three manual aliases and the HDR long spellings. All five requested primaries
+and the four YUV matrix names are real WebCodecs values. The research note's
+claim that bt2020-10/12 are WebCodecs transfer enum members was incorrect.
+Manual descriptors can still use those familiar CICP transfer labels.
+`bt709Linearization:'gamma2.4'|'srgb'|'inverse-oetf'` applies to all five
+BT-like API transfer labels, including aliases and colour resolved from defaults
+or colorSpace. It rejects other transfer classes, invalid policies and null.
+The opt-in headers stay sRGB and TF709 respectively. Gamma serializes as
+0.4166667, matching Round 9; the built-in exponent remains exactly 2.4f.
+
+### Fused primaries, header and decoder behaviour
+
+The opsin matrix expects linear BT.709. New source-linear → BT.709 matrix P is
+folded once per streaming patch into the premultiplied absorbance matrix:
+**O′ = O·P**. Intensity scaling and all three cube-root biases remain unchanged;
+there is no extra per-pixel RGB matrix. Matrices derive from the published xy
+primaries and D65 (.3127,.3290), without chromatic adaptation between D65 spaces.
+The independent NumPy oracle recomputes RGB→XYZ matrices by solving the white
+normalization, then solves M709·P=Msource; it imports no kernel matrix tables.
+
+The sequence is range/matrix → clip nonlinear source RGB to [0,1] → selected
+linearization → folded primary/opsin transform. **There is no RGB clipping after
+primary conversion.** libjxl LinearRGBToXYB applies ZeroIfNegative to mixed
+absorbance (including bias), then CubeRootAndAdd; it does not clamp converted
+BT.709 RGB or XYB X. P3 tests cover linear BT.709 approximately -0.22494…1.22494,
+and BT.2020 reaches -0.23761. All nine fixtures have zero negative absorbance
+samples; the oracle also reports the irreversible error that an absorbance clamp
+would cause (zero here). Lossy coding can introduce additional excursions;
+float metrics retain them, while display sRGB comparisons explicitly clamp to
+[0,1] before transfer encoding. No wide-gamut preservation claim extends to
+source values already clipped in the nonlinear source domain.
+
+Source primaries, D65 and selected transfer are signalled with
+JxlEncoderSetColorEncoding. Custom xy values are used for SMPTE-C/BT.470BG;
+no SetICCProfile or input ICC is used. JXL output represents RGB, so source YUV
+matrix/range do not survive as YUV tags. `colorResolved` records that input
+interpretation. libjxl dec_xyb.cc constructs the requested-primary-dependent
+inverse opsin matrix; original-space float output is supported for all five.
+
+`encodeRgb`, native RGB reference and row comparison now take the same source
+primaries. Patched ToXYB recognizes these five D65 spaces, including the two
+exact custom xy sets, with sRGB/linear/TF709/gamma transfers. It uses the same
+built-in transfer and folded opsin branch before ApplyColorTransform; optional
+linear scratch is explicitly converted to linear BT.709 without clipping.
+Thus these SDR cases traverse **neither native LCMS nor WASM skcms**. Ordinary
+sRGB/linear-sRGB fast paths remain intact. Other native profiles (including the
+historical PQ/HLG fallback suites) retain CMS; WASM rejects HDR.
+
+Independent unmodified system libjxl float decode and actual djxl PFM CLI output
+request/preserve the original profile. djxl PFM is float **original nonlinear
+encoding**, not necessarily linear; the runner checks it against explicit
+original libjxl output before applying the independent transfer/matrix.
+jxl-oxide 0.12.6 is also measured in original, linear source, linear709 and sRGB.
+**Its direct wide-gamut source output is not faithful for out-of-sRGB pixels.**
+Pinned jxl-render-0.12.4 starts XYB as Perceptual regardless of the header's
+Relative intent, then jxl-color-0.11.0 convert.rs applies GamutMap before a
+primary change. For BT.2020/P3 the direct linear-source errors are about
+0.12730/0.31262. An independently evaluated model of that decoder policy is
+checked at 1e-4; it is separate from the source-correctness reference. Requesting
+linear709 bypasses that primary-change stage, preserves negatives, and converting
+that float output back to source via independent P⁻¹ passes the same .04 source
+linear gate. Direct oxide original-space errors remain in JSON; they are not
+silently replaced with corrected values. sRGB output remains accurate.
+
+### Chroma siting and Chrome colour caveat
+
+`topleft` is cosited in **both** axes for I420 and horizontally for I422;
+unsubsampled axes have identity coordinates. Independent separable np.interp
+uses physical sample positions sx·k+phaseX, sy·l+phaseY, with zero phases for
+topleft; the 420 and 422 checkerboard chroma-edge cases verify actual pre-encoder
+XYB and decoded pixels. This reference does not copy the C++ inverse-coordinate
+formula. Existing all-siting format/tail suites remain enabled.
+
+WebCodecs has no chroma-location field. When codec/container knowledge says
+H.264 VUI chroma_sample_loc_type=2 (e.g. bbb.mov), pass
+`chromaSiting:'topleft'`; do not infer it from frame.colorSpace. Left remains the
+default, so callers must override it when known.
+
+The earlier Chrome 156 metadata audit observed that VideoDecoder ignored VP9
+bitstream colour: BT.601 and full-range VP9 still reported BT.709 limited.
+Correct values arrived only via **VideoDecoder config.colorSpace**. When demuxing
+WebM, pass its Colour element matrix/primaries/transfer/range through that config
+before decoding, then use the resulting frame.colorSpace. H.264 VUI was honoured;
+untagged video and new VideoFrame(buffer) without colour metadata became BT.709
+limited. The canvas test in this round reconfirms Display P3 VideoFrame primaries
+smpte432. These are browser observations, not a promise for every codec/platform,
+and metadata resolution cannot recover colour information discarded upstream.
+
+P3 capture is a real display-p3 2D canvas → VideoFrame (rgb/smpte432/sRGB/full).
+This Chrome rejects explicit copyTo I444 (non-RGB destination unsupported), so
+the test uses VideoEncoder VP9 → VideoDecoder with explicit P3/BT709/limited
+config, then copyTo I420. It takes colour from the decoded frame and checks
+saturated values beyond the sRGB gamut. The reference starts from the **actual
+copied YUV**, so this tests ingestion/encoding, not lossless preservation through
+the preceding lossy VP9 encode or correctness of every Chrome RGB→YUV policy.
+
+### Accuracy and Chrome canvas measurements
+
+Nine cases, distance .01, effort 3, float32 output header. Reference is separate
+float64 NumPy (published xy, forward YCbCr solve, independent interpolation,
+analytic transfer, spec opsin). No colour-science dependency was needed.
+Actual pre-encoder XYB max error is <3e-6 in every case; native/WASM fused XYB
+is **exactly equal** in all nine captures. Fused/RGB uses unrounded independent
+source RGB here; existing suites separately retain the rounded RGB baseline.
+
+Numbers below are **max / mean** absolute errors. Source linear and linear709
+are unit linear values; sRGB is 8-bit code scale after display clipping.
+Chrome uses Playwright channel chrome, version 156.0.8078.47, headless Linux,
+--no-sandbox/--disable-gpu, and explicit canvas colour spaces/readback. No
+force-color-profile flag is used. A P3 canvas is measured in addition to sRGB.
+
+| Case | libjxl source linear | libjxl linear709 | libjxl sRGB8 | Chrome sRGB8 |
+| --- | ---: | ---: | ---: | ---: |
+| untagged | 7.0406e-05 / 2.13082e-05 | 7.0406e-05 / 2.13082e-05 | 0.0554197 / 0.00950085 | 1.47363 / 0.524385 |
+| 601-smptec | 6.74317e-05 / 2.23494e-05 | 6.61641e-05 / 2.08471e-05 | 0.0531944 / 0.0101198 | 1.29525 / 0.394617 |
+| 601-full | 8.65706e-05 / 2.07199e-05 | 8.32643e-05 / 1.89623e-05 | 0.033444 / 0.0085249 | 1.29945 / 0.26577 |
+| 470bg | 7.23491e-05 / 1.77687e-05 | 6.40223e-05 / 1.67094e-05 | 0.0447508 / 0.0077286 | 1.87039 / 0.520969 |
+| 2020-10bit | 5.84099e-05 / 1.66917e-05 | 6.64852e-05 / 2.07058e-05 | 0.0341359 / 0.00506415 | 6.63183 / 0.490722 |
+| topleft420 | 0.00109605 / 5.23078e-05 | 0.00109605 / 5.23078e-05 | 1.82234 / 0.0198477 | 2.07753 / 0.373107 |
+| topleft422 | 0.000393956 / 3.30884e-05 | 0.000393956 / 3.30884e-05 | 0.26812 / 0.0122861 | 1.50858 / 0.367959 |
+| linear | 8.95517e-05 / 3.18913e-05 | 8.95517e-05 / 3.18913e-05 | 0.0221772 / 0.00644378 | 1.43606 / 0.359416 |
+| p3-canvas | 0.0017314 / 6.89758e-05 | 0.00189785 / 7.59081e-05 | 0.970674 / 0.011727 | 2.10786 / 0.127143 |
+
+| Case | oxide direct source linear | oxide source via linear709 | oxide linear709 | oxide sRGB8 |
+| --- | ---: | ---: | ---: | ---: |
+| untagged | 7.04656e-05 / 2.13271e-05 | 7.04656e-05 / 2.13271e-05 | 7.04656e-05 / 2.13271e-05 | 0.062329 / 0.0113607 |
+| 601-smptec | 6.73423e-05 / 2.2302e-05 | 6.57002e-05 / 2.13679e-05 | 6.61939e-05 / 2.08237e-05 | 0.0457772 / 0.0102476 |
+| 601-full | 8.67196e-05 / 2.07576e-05 | 8.27486e-05 / 1.97033e-05 | 8.33239e-05 / 1.8965e-05 | 0.0385281 / 0.012175 |
+| 470bg | 7.25577e-05 / 1.77362e-05 | 6.36122e-05 / 1.64676e-05 | 6.41415e-05 / 1.66833e-05 | 0.0471403 / 0.00786563 |
+| 2020-10bit | 0.1273 / 0.0223868 | 5.0538e-05 / 1.63596e-05 | 6.67236e-05 / 2.07166e-05 | 0.026278 / 0.00537644 |
+| topleft420 | 0.00109611 / 5.2311e-05 | 0.00109611 / 5.2311e-05 | 0.00109611 / 5.2311e-05 | 1.82613 / 0.0209489 |
+| topleft422 | 0.000393837 / 3.3093e-05 | 0.000393837 / 3.3093e-05 | 0.000393837 / 3.3093e-05 | 0.269716 / 0.0138254 |
+| linear | 8.90749e-05 / 3.17429e-05 | 8.90749e-05 / 3.17429e-05 | 8.90749e-05 / 3.17429e-05 | 0.0296641 / 0.0135216 |
+| p3-canvas | 0.312618 / 0.0628442 | 0.00171427 / 6.65868e-05 | 0.00189701 / 7.5878e-05 | 0.97092 / 0.0127282 |
+
+P3 Chrome display-p3 canvas error: 2 / 0.177084 code levels.
+All-pixel gates (including chroma edges): arithmetic XYB <3e-6; decoder linear709
+and source linear <.04, decoder clipped sRGB <12 levels; Chrome max ≤12 and
+mean ≤2 levels. For oxide direct source output the known gamut policy is checked
+at <1e-4, and source correctness instead uses its linear709 output followed by
+independent P⁻¹ at the unchanged .04 gate. This is a new decoder-policy
+qualification, not a passing claim for oxide's direct original-space decode.
+**No pre-existing suite gate was weakened.** The old validation expectations
+for SMPTE-C/BT.470BG rejection become acceptance; omitted planar transfer policy
+validation now resolves BT.709. Existing P3 native cases now expect fused SIMD
+rather than row fallback. Those changes follow the expanded API.
+
+### Timing and final sequential verification
+
+Final checks all passed, strictly in this order after the final builds:
+
+| Check | Result |
+| --- | --- |
+| build-wasm.sh | pass; EMCC_CORES=1, CMake one job |
+| native build.sh | pass; CMake/Cargo one job |
+| node wasm/browser-test.mjs | 138/138 existing fixtures, plus 9/9 source-colour cases and 18 API checks |
+| node wasm/browser-test.mjs --benchmark --real10 | 148/148, including all 4 local Netflix fixtures |
+| python3 test_xyb.py | 12/12 methods (20.537 s); new 45 source-primary/matrix/transfer cases |
+| build/tail-guard | 28,512/28,512 four-lane guarded encodes |
+| node round10/benchmark.mjs | both source-primary timing controls passed |
+
+Aerial f600, 1280×720 I420P10 BT.709 matrix/transfer, limited, left, distance 1,
+effort 3: one warmup + five runs per primary, fixed BT709 then P3 order. The
+**same YUV samples are reinterpreted** for this primary-matrix cost control;
+this does not claim they are independently mastered P3 scene content.
+
+| Source primaries | Median conversion ms | Median total ms |
+| --- | ---: | ---: |
+| bt709 | 37.5 | 77.9 |
+| smpte432 (P3 D65) | 37.5 | 79.0 |
+
+Conversion medians are equal at this measurement resolution, consistent with
+matrix folding; total varies with codec work/output size and machine noise.
+Conversion is a subset of encode time, so component times must not be summed.
+The conversion timer now stays enabled in the normal chunked bridge even with
+the XYB observer off, exposed via w_time(6) and stats.conversionMs. Total includes
+JS plane upload, owned Rust copy/validation, encode, returned-byte copy and free
+(unlike the preloaded Round 9 timing wrapper). Observer remains off for timing.
+No thermal/randomized control or universal speed guarantee is claimed.
+
+Final JSON sizes: round10/round10-observations.json **23,611 bytes**;
+wasm-observations.json **79,704 bytes**.
+
+Artifacts: compact aggregate [round10-observations.json](round10/round10-observations.json)
+(<30 kB), [wasm-observations.json](wasm-observations.json) (<100 kB).
+`build/round10/` holds raw planes, codestreams, actual XYB, float decodes, full
+Chrome pixels and policy diagnostics. `build/round10-final-*.log` holds final
+suite logs. Netflix Aerial and every derivative remain only under ignored
+`build/`; no media is staged or committed. Reproduction: run the six requested
+commands sequentially as in Round 9, then `node round10/benchmark.mjs`.
+`node wasm/browser-test.mjs` invokes the extra Round 10 runner after closing the
+existing suite's browser. Each Round 10 native/decoder phase runs with Chrome
+closed, and every new numeric runner uses one BLAS thread.
+
+Caveats: this is one software/headless browser and machine; physical screens,
+GPU overlays, other OSes, HDR and arbitrary ICC/whitepoints are untested. Gamma
+2.4 means zero display black, not camera inverse-OETF or matching Chrome video
+brightness. The P3 VP9 pre-processing is lossy. Float decode retains extended
+values; 8-bit canvas readback and browser gamut management add separate error.
+The pinned oxide direct-wide-gamut output limitation is measured above. No
+source YUV sample preservation, lossless colour, or universal timing guarantee
+is claimed.

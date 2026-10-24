@@ -1,5 +1,6 @@
 // Independent process using the unmodified libjxl decoder; no adapter linked.
 #include <jxl/decode.h>
+#include <jxl/encode.h>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -9,7 +10,7 @@
 #include <vector>
 int main(int argc,char** argv) {
   try {
-    if(argc!=3) throw std::runtime_error("usage: decode input.jxl output.f32le");
+    if(argc!=3 && argc!=4) throw std::runtime_error("usage: decode input.jxl output.f32le");
     std::ifstream file(argv[1],std::ios::binary);
     if(!file) throw std::runtime_error("input open");
     std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),{});std::vector<float> rgb;
@@ -26,7 +27,14 @@ int main(int argc,char** argv) {
       } else if(status==JXL_DEC_COLOR_ENCODING) {
         JxlColorEncoding original{},pixels{};
         check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&original));
-        check(JxlDecoderSetPreferredColorProfile(dec.get(),&original));
+        JxlColorEncoding desired=original;
+        if(argc==4) {
+          if(std::strcmp(argv[3],"--linear-source")==0) desired.transfer_function=JXL_TRANSFER_FUNCTION_LINEAR;
+          else if(std::strcmp(argv[3],"--linear709")==0) JxlColorEncodingSetToLinearSRGB(&desired,JXL_FALSE);
+          else if(std::strcmp(argv[3],"--srgb")==0) JxlColorEncodingSetToSRGB(&desired,JXL_FALSE);
+          else throw std::runtime_error("unknown output encoding");
+        }
+        check(JxlDecoderSetPreferredColorProfile(dec.get(),&desired));
         check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_DATA,&pixels));
         std::printf("{\"width\":%u,\"height\":%u,\"bits\":%u,\"exponent\":%u,\"primaries\":%d,\"transfer\":%d,\"dataPrimaries\":%d,\"dataTransfer\":%d,\"intensity\":%.9g}\n",info.xsize,info.ysize,info.bits_per_sample,info.exponent_bits_per_sample,int(original.primaries),int(original.transfer_function),int(pixels.primaries),int(pixels.transfer_function),info.intensity_target);
       } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER) {

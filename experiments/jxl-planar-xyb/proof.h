@@ -12,8 +12,8 @@ typedef struct {
 } PlanarInput;
 // siting=0 left (default),1 center,2 topleft; ignored on unsubsampled axes.
 // format=0 I420,1 I422,2 I444,3 NV12; storage=0 U8,1 U16LE low bits.
-// matrix=1 BT709,6 BT601,9 BT2020-NCL; primaries=1 BT709,11 P3,9 BT2020.
-// Internal transfer: 1=BT.1886 gamma2.4 (BT709 default), 13=sRGB,
+// matrix=1 BT709,6 BT601,9 BT2020-NCL; primaries=1 BT709,5 BT470BG,6 SMPTE-C,11 P3,9 BT2020.
+// Internal transfer: 1=BT.1886 gamma2.4 (BT709 default), 8=linear, 13=sRGB,
 // 1001=inverse BT709 OETF; 16=PQ,18=HLG. See WASM.md for policy options.
 // depth=0 retains float32 header (32 bits, 8 exponent); otherwise integer 8/10/12.
 typedef struct { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; } PlanarRgbConfig;

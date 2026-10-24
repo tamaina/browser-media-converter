@@ -79,6 +79,7 @@ struct KernelYuv {
     sy: u32,
     transfer: u32,
     siting: u32,
+    primaries: u32,
 }
 type Fill = unsafe extern "C" fn(*mut c_void, usize, usize, usize, usize, *mut f32, usize) -> i32;
 unsafe extern "C" {
@@ -124,7 +125,7 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
 fn check_config(c: &Config) -> Result<(), String> {
     need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
     #[cfg(target_arch = "wasm32")]
-    need(c.primaries == 1 && matches!(c.transfer, 1 | 13 | 1001), "WASM requires BT.709 primaries and sRGB/gamma2.4/inverse709 transfer (SDR only)")?;
+    need(matches!(c.primaries, 1 | 5 | 6 | 9 | 11) && matches!(c.transfer, 1 | 8 | 13 | 1001), "unsupported WASM colour (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -136,7 +137,7 @@ fn check_config(c: &Config) -> Result<(), String> {
     need(
         matches!(
             (c.primaries, c.transfer),
-            (1, 1 | 13 | 1001) | (11, 13) | (9, 16 | 18)
+            (1 | 5 | 6 | 9 | 11, 1 | 8 | 13 | 1001) | (9, 16 | 18)
         ),
         "unsupported primaries/transfer pair",
     )?;
@@ -183,10 +184,7 @@ impl Session {
             matches!(i.matrix, 1 | 6 | 9),
             "unsupported matrix (constant-luminance is not NCL)",
         )?;
-        need(
-            (i.primaries == 9 && i.matrix == 9) || (i.primaries != 9 && matches!(i.matrix, 1 | 6)),
-            "profile/matrix pair outside proof scope",
-        )?;
+        need(!matches!(i.transfer,16|18) || i.matrix==9, "HDR proof requires BT2020 NCL matrix")?;
         need(
             i.full_range <= 1 && i.siting <= 2 && i.origin_x == 0 && i.origin_y == 0,
             "explicit range, valid siting chroma and origin (0,0) required",
@@ -264,7 +262,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
-            strict: option == 1 || config.primaries != 1 || !matches!(config.transfer, 1 | 13 | 1001),
+            strict: option == 1 || !matches!(config.transfer, 1 | 8 | 13 | 1001),
             config,
             depth: i.depth,
             storage: i.storage,
@@ -523,6 +521,7 @@ pub unsafe extern "C" fn planar_encode(
             sy: s.sy as u32,
             transfer: s.config.transfer,
             siting: s.siting,
+            primaries: s.config.primaries,
         };
         hdr_jxl_encode(
             &(*session).config,

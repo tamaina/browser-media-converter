@@ -39,7 +39,7 @@ int main() {
         }
         JxlExperimentalYuv raw{{{y.data,y.size,width*bytes,width,height},
                                 {u.data,u.size,cw*bytes,cw,ch},
-                                {v.data,v.size,cw*bytes,cw,ch}},width,height,depth,matrix,uint32_t(full),sx,sy,transfer,siting};
+                                {v.data,v.size,cw*bytes,cw,ch}},width,height,depth,matrix,uint32_t(full),sx,sy,transfer,siting,1};
         Config config{width,height,1,transfer,255,depth};Encoded out{};char error[256]{};
         auto unused=[](void*,size_t,size_t,size_t,size_t,float*,size_t)->int{return 1;};
         if(hdr_jxl_encode(&config,nullptr,unused,nullptr,&raw,&out,error,sizeof(error))) throw std::runtime_error(error);

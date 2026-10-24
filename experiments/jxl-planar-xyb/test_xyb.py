@@ -36,6 +36,31 @@ class XYBTests(unittest.TestCase):
                     subprocess.check_output([ROOT/'build/oracle/debug/jxl-planar-xyb-oracle',base/'a.jxl',base/'o.f32'])
                     self.assertLess(max(abs(x-y) for x,y in zip(read_floats(base/'a.f32'),read_floats(base/'o.f32'))),1e-4)
 
+    def test_round10_source_primaries(self):
+        import numpy as np
+        from round10.reference import linear,opsin_reference,errors
+        os.environ['JXL_EXPERIMENT_CAPTURE_XYB']='1'
+        os.environ['JXL_EXPERIMENT_OBSERVE_REFERENCE']='1'
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_CAPTURE_XYB',None))
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_OBSERVE_REFERENCE',None))
+        count=0;maximum=0.
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            for primaries in ['bt709','smpte170m','bt470bg','smpte432','bt2020']:
+                for matrix in ['bt709','smpte170m','bt2020-ncl']:
+                    for transfer in ['bt709','iec61966-2-1','linear']:
+                        m,rgb=fixture(base,'I444P10',33,3,'709-srgb',False,matrix=matrix,transfer=transfer)
+                        m['color']['primaries']=primaries
+                        inp,keep=load(m,base);_,a=encode(inp);_,b=encode_rgb(inp,rgb)
+                        e=np.array(rgb).reshape(3,33,3)
+                        _,expected,_,_=opsin_reference(linear(e,transfer),primaries)
+                        actual=np.array(a['xyb']).reshape(3,3,33).transpose(0,2,1)
+                        error=errors(actual,expected)['max'];maximum=max(maximum,error)
+                        self.assertLess(error,3e-6)
+                        self.assertLess(max(abs(x-y) for x,y in zip(a['xyb'],b['xyb'])),3e-6)
+                        self.assertEqual(a['simd_lanes'],4);count+=1
+        print(json.dumps({'round10_source_cases':count,'xyb_max_error':maximum}))
+
     def test_high_depth_low_bits(self):
         import struct
         from proof import create
@@ -188,7 +213,7 @@ class XYBTests(unittest.TestCase):
                             reference,_=encode_rgb(inp,rgb)
                             self.assertEqual(previous,reference,(fmt,profile,w,h,full,"row vs RGB codestream"))
                             changed+=fused!=reference
-                            is_fused=profile in ("709-srgb","601-709")
+                            is_fused=profile in ("709-srgb","601-709","p3")
                             fused_count+=is_fused
                             os.environ["JXL_EXPERIMENT_OBSERVE_REFERENCE"]="1"
                             try: observed,refstats=encode_rgb(inp,rgb)

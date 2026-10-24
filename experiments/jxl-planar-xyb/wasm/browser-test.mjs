@@ -172,13 +172,13 @@ try {
     const pack=bytes=>{let text='';for(let i=0;i<bytes.length;i+=32768)text+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(text);};
     const {createEncoder}=await import('/wasm/api.mjs');const encoder=await createEncoder();
     const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
-    const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,transfer:'hlg'},{...base,primaries:'bt470bg'},{...base,primaries:'smpte170m'},{...base,chromaSiting:'bottom'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
+    const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,transfer:'hlg'},{...base,chromaSiting:'bottom'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
     for(const i of invalid) for(const validation of ['clip','strict']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
     let policyValidationCases=0;
     for(const rgb of [false,true])for(const transfer of [undefined,'srgb','iec61966-2-1','bt709','smpte170m'])for(const bt709Linearization of ['gamma2.4','srgb','inverse-oetf','unknown',null]) {
       const i=rgb?{width:1,height:1,transfer,data:new Float32Array([.5,.5,.5])}:{...base,transfer};
       if(transfer===undefined)delete i.transfer;
-      const shouldReject=!['bt709','smpte170m'].includes(transfer)||!['gamma2.4','srgb','inverse-oetf'].includes(bt709Linearization);
+      const shouldReject=!['bt709','smpte170m',...(!rgb?[undefined]:[])].includes(transfer)||!['gamma2.4','srgb','inverse-oetf'].includes(bt709Linearization);
       let rejected=false;try{(rgb?encoder.encodeRgb:encoder.encodePlanarYuv)(i,{bt709Linearization});}catch{rejected=true;}
       if(rejected!==shouldReject)throw Error('bt709Linearization validation');policyValidationCases++;
     }
@@ -327,3 +327,6 @@ try {
   console.log(`PASS: ${verified.length} VideoFrame fixtures, fused + RGB, independent jxl-oxide decode, native comparison.`);
   for(const r of observations.cases.filter(r=>r.benchmark))console.log(JSON.stringify(r));
 } finally {if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
+
+// Extra source-colour verification owns its browser only after the suite closes.
+if(!benchmark)execFileSync(process.execPath,[path.join(root,'round10/browser-test.mjs')],{stdio:'inherit',env:process.env});
