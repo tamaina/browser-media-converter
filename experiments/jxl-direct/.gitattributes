@@ -1,0 +1,2 @@
+# Unified-diff context has meaningful leading spaces, including empty lines.
+libjxl-yuv.patch -whitespace

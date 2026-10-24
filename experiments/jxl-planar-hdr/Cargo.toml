@@ -1,0 +1,12 @@
+[package]
+name = "jxl-planar-hdr-proof"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 2

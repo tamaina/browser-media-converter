@@ -80,3 +80,10 @@ pnpm --filter @browser-mc/media-container build
 pnpm --filter @browser-mc/media-container typecheck
 pnpm --filter @browser-mc/media-container test
 ```
+
+PNG colour metadata can be read synchronously with
+`readImageColorMetadata(bytes, 'image/png')`. PNG cICP takes precedence over
+iCCP; RGB matrix code 0 and either full/narrow range flag are supported.
+iCCP inflation verifies zlib/Adler-32 and limits the decoded profile to 4 MiB.
+Invalid/truncated colour chunks throw; CRCs and image pixel data are not checked.
+PNG metadata writing throws for non-null metadata (null returns the input).
