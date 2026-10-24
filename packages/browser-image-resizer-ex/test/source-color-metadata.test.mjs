@@ -11,16 +11,17 @@ const png=(...metadata)=>{
  const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(1);ihdr.writeUInt32BE(1,4);ihdr[8]=8;ihdr[9]=2;
  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),...metadata,chunk('IDAT',deflateSync(Buffer.from([0,0,0,0]))),chunk('IEND')]);
 };
-test('PNG iCCP is admitted by the source MIME filter and preserved for compatible AVIF',()=>{
+test('PNG iCCP is admitted by the source MIME filter and preserved for compatible AVIF',async()=>{
  const profile=new Uint8Array([0,1,2,3,4,255]);const input=png(chunk('iCCP',Buffer.concat([Buffer.from('test\0\0'),deflateSync(profile)])));
- const metadata=readSourceColorMetadata(input,'image/png');assert.deepEqual(metadata,{type:'icc',profile});assert.deepEqual(compatibleOutputColorMetadata(metadata,'image/avif'),{metadata});
+ const metadata=await readSourceColorMetadata(input,'image/png');assert.deepEqual(metadata,{type:'icc',profile});assert.deepEqual(compatibleOutputColorMetadata(metadata,'image/avif'),{metadata});
 });
-test('PNG cICP is admitted and preserved for compatible AVIF',()=>{
- const metadata=readSourceColorMetadata(png(chunk('cICP',Buffer.from([12,13,0,1]))),'image/png');
+test('PNG cICP is admitted and preserved for compatible AVIF',async()=>{
+ const metadata=await readSourceColorMetadata(png(chunk('cICP',Buffer.from([12,13,0,1]))),'image/png');
  assert.deepEqual(metadata,{type:'cicp',cicp:{primaries:'smpte432',transfer:'iec61966-2-1',matrix:'rgb',fullRange:true}});assert.deepEqual(compatibleOutputColorMetadata(metadata,'image/avif'),{metadata});
 });
-test('PNG cICP takes priority over iCCP',()=>assert.equal(readSourceColorMetadata(png(chunk('iCCP',Buffer.from([0])),chunk('cICP',Buffer.from([1,13,0,1]))),'image/png').type,'cicp'));
-test('source filter rejects unrelated MIME and tolerates malformed metadata',()=>{for(const mime of ['image/gif','image/svg+xml','image/png','image/jpeg','image/webp','image/avif'])assert.equal(readSourceColorMetadata(new Uint8Array(3),mime),null);});
+test('PNG cICP takes priority over iCCP',async()=>assert.equal((await readSourceColorMetadata(png(chunk('iCCP',Buffer.from([0])),chunk('cICP',Buffer.from([1,13,0,1]))),'image/png')).type,'cicp'));
+test('source filter rejects unrelated MIME and tolerates malformed metadata',async()=>{for(const mime of ['image/gif','image/svg+xml','image/png','image/jpeg','image/webp','image/avif'])assert.equal(await readSourceColorMetadata(new Uint8Array(3),mime),null);
+ const corrupt=png(chunk('iCCP',Buffer.concat([Buffer.from('test\0\0'),deflateSync(Buffer.from([1,2,3])).subarray(0,5)])));assert.equal(await readSourceColorMetadata(corrupt,'image/png'),null);});
 test('Canvas conversion and explicit SDR policy retain existing metadata compatibility rules',()=>{
  const metadata={type:'icc',profile:new Uint8Array([1])};
  assert.deepEqual(compatibleOutputColorMetadata(metadata,'image/avif',{canvasColorSpace:'srgb',preserveInput:true}),{metadata:null,colorSpace:{primaries:'bt709',transfer:'iec61966-2-1'}});

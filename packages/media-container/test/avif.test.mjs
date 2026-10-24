@@ -349,17 +349,17 @@ describe('readAvifColorSpace', () => {
 });
 
 describe('readImageColorMetadata', () => {
-  it('round-trips JPEG APP2 ICC metadata', () => {
+  it('round-trips JPEG APP2 ICC metadata', async () => {
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9]);
     const profile = new Uint8Array([1, 3, 5, 7]);
     const written = writeImageColorMetadata(jpeg, 'image/jpeg', { type: 'icc', profile });
-    assert.deepEqual(readImageColorMetadata(written, 'image/jpeg'), {
+    assert.deepEqual(await readImageColorMetadata(written, 'image/jpeg'), {
       type: 'icc',
       profile,
     });
   });
 
-  it('round-trips WebP ICCP metadata', () => {
+  it('round-trips WebP ICCP metadata', async () => {
     const webp = makeWebp(makeRiffChunk('VP8 ', new Uint8Array([
       0, 0, 0,
       0x9d, 0x01, 0x2a,
@@ -369,7 +369,7 @@ describe('readImageColorMetadata', () => {
     const profile = new Uint8Array([2, 4, 6]);
     const written = writeImageColorMetadata(webp, 'image/webp', { type: 'icc', profile });
     assert.deepEqual([...riffChunks(written)].map((chunk) => chunk.type), ['VP8X', 'ICCP', 'VP8 ']);
-    assert.deepEqual(readImageColorMetadata(written, 'image/webp'), {
+    assert.deepEqual(await readImageColorMetadata(written, 'image/webp'), {
       type: 'icc',
       profile,
     });

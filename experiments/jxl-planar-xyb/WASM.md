@@ -1571,7 +1571,7 @@ is claimed.
 ### API and resolution
 
 ```js
-const metadata = readImageColorMetadata(sourceBytes, 'image/png');
+const metadata = await readImageColorMetadata(sourceBytes, 'image/png'); // async since the post-Round 12 change
 // Pixels must be decoded without browser colour conversion.
 const jxl = encoder.encodeRgb({width, height, data: rgba, colorMetadata: metadata},
                               {distance: .01, iccFallback: 'error'});
@@ -1680,6 +1680,12 @@ superseded profile, per [PNG Third Edition](https://www.w3.org/TR/png-3/#cICP).
 The research memo's claim that PNG cICP has no range byte was incorrect.
 Writing non-null PNG colour metadata explicitly throws an unsupported error;
 null remains a no-op. A minor changeset documents this new published API.
+
+*Superseded after Round 12:* `readImageColorMetadata` (and `readPngColorMetadata`)
+became asynchronous. iCCP now uses the standard `DecompressionStream('deflate')`;
+the hand-written inflater (`src/inflate.ts`) and its 4 MiB cap were removed in
+favour of a 16 MiB `PNG_ICCP_MAX_PROFILE_BYTES` stop-reading guard. See
+`packages/media-container/README.md`.
 browser-image-resizer-ex's MIME filter is unchanged; automatic PNG source-profile
 preservation there remains a follow-up.
 

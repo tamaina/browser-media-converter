@@ -191,7 +191,7 @@ header. `encodeRgb` accepts the same primaries. See the
 ### Source ICC in the experimental WASM RGB API (Round 11)
 
 `encodeRgb({width,height,data,icc})` accepts an ICC `Uint8Array`/`ArrayBuffer`,
-including `colorMetadata: readImageColorMetadata(bytes, mime)` from media-container.
+including `colorMetadata: await readImageColorMetadata(bytes, mime)` from media-container.
 Decode source pixels with `colorSpaceConversion:'none'`. Packed Float32 RGB,
 U8/U8Clamped RGB or opaque RGBA, and full-range U16 RGB/opaque RGBA are accepted.
 `icc` in encode options overrides the input field; explicit primaries/transfer

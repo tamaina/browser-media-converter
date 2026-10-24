@@ -235,7 +235,7 @@ export async function inspectImageInput(
 export async function resizeAndConvertImage(options: BrowserImageResizerOptions): Promise<BrowserImageConversionResult> {
   const inputBytes = await toUint8Array(options.input);
   const inputMime = options.inputMime ?? detectInputMime(inputBytes, options.input);
-  const inputColorMetadata = readSourceColorMetadata(inputBytes, inputMime);
+  const inputColorMetadata = await readSourceColorMetadata(inputBytes, inputMime);
   const inputInfo = await inspectImageTrack(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
     preferAnimation: (options.animation ?? 'preserve') !== 'first-frame',

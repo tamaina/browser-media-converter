@@ -1,10 +1,11 @@
 import { readImageColorMetadata, type ImageColorMetadata } from '@browser-mc/media-container';
 import type { BrowserImageOutputMime } from './index.js';
 
-export function readSourceColorMetadata(data: Uint8Array, mime: string) {
+/** Resolves to null for unsupported MIME types or malformed colour metadata. */
+export async function readSourceColorMetadata(data: Uint8Array, mime: string): Promise<ImageColorMetadata | null> {
   if (mime !== 'image/avif' && mime !== 'image/jpeg' && mime !== 'image/webp' && mime !== 'image/png') return null;
   try {
-    return readImageColorMetadata(data, mime);
+    return await readImageColorMetadata(data, mime);
   } catch {
     return null;
   }

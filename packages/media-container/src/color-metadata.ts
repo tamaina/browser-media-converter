@@ -10,7 +10,11 @@ export type ImageColorMetadata =
 
 export type ImageColorMetadataMime = 'image/avif' | 'image/jpeg' | 'image/webp' | 'image/png';
 
-export function readImageColorMetadata(data: Uint8Array, mime: ImageColorMetadataMime): ImageColorMetadata | null {
+/**
+ * Reads CICP or ICC colour metadata. Asynchronous because PNG iCCP is
+ * decompressed with `DecompressionStream`; malformed input rejects.
+ */
+export async function readImageColorMetadata(data: Uint8Array, mime: ImageColorMetadataMime): Promise<ImageColorMetadata | null> {
   if (mime === 'image/png') return readPngColorMetadata(data);
   if (mime === 'image/avif') return readAvifColorMetadata(data);
   if (mime === 'image/jpeg') {
