@@ -8,8 +8,13 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("{} {:?}", image.image_header().metadata.bit_depth.bits_per_sample(), image.image_header().metadata.bit_depth);
         return Ok(());
     }
-    let cicp = image.rendered_cicp().ok_or("missing rendered CICP")?;
+    // Gamma has no CICP transfer identifier. 65535 is this CLI's GAMMA
+    // sentinel (same as JXL_TRANSFER_FUNCTION_GAMMA), not a CICP tag.
+    let cicp = image.rendered_cicp().map(|v| v.map(u32::from)).unwrap_or([1,65535,0,1]);
     let jxl_oxide::color::ColourEncoding::Enum(original) = &image.image_header().metadata.colour_encoding else { return Err("ICC unsupported".into()); };
+    if args.get(3).is_some_and(|s| s == "--encoding") {
+        println!("{original:?}"); return Ok(());
+    }
     image.request_color_encoding(original.clone());
     let render = image.render_frame(0)?;
     let mut stream = render.stream_no_alpha();

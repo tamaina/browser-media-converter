@@ -174,12 +174,27 @@ try {
     const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
     const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,transfer:'hlg'},{...base,primaries:'bt470bg'},{...base,primaries:'smpte170m'},{...base,chromaSiting:'bottom'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
     for(const i of invalid) for(const validation of ['clip','strict']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
+    let policyValidationCases=0;
+    for(const rgb of [false,true])for(const transfer of [undefined,'srgb','iec61966-2-1','bt709','smpte170m'])for(const bt709Linearization of ['gamma2.4','srgb','inverse-oetf','unknown',null]) {
+      const i=rgb?{width:1,height:1,transfer,data:new Float32Array([.5,.5,.5])}:{...base,transfer};
+      if(transfer===undefined)delete i.transfer;
+      const shouldReject=!['bt709','smpte170m'].includes(transfer)||!['gamma2.4','srgb','inverse-oetf'].includes(bt709Linearization);
+      let rejected=false;try{(rgb?encoder.encodeRgb:encoder.encodePlanarYuv)(i,{bt709Linearization});}catch{rejected=true;}
+      if(rejected!==shouldReject)throw Error('bt709Linearization validation');policyValidationCases++;
+    }
+    console.log('Round 9 policy validation:',policyValidationCases);
     const equal=(a,b)=>a.length===b.length && a.every((v,i)=>v===b[i]);
     const phaseFixture=fixtures.find(f=>f.format==='I420' && f.width===17);
     const left={...phaseFixture,planes:phaseFixture.planes.map(p=>({...p,data:unpack(p.data)})),chromaSiting:'left'};
     const omitted={...left};delete omitted.chromaSiting;
     if(!equal(encoder.encodePlanarYuv(left),encoder.encodePlanarYuv(omitted)))throw Error('default siting is not left');
     for(const transfer of ['srgb','iec61966-2-1'])if(!equal(encoder.encodePlanarYuv({...left,transfer}),encoder.encodePlanarYuv({...left,transfer:'iec61966-2-1'})))throw Error('sRGB alias');
+    for(const transfer of ['bt709','smpte170m']) {
+      const i={...left,transfer};
+      if(!equal(encoder.encodePlanarYuv(i),encoder.encodePlanarYuv(i,{bt709Linearization:'gamma2.4'})))throw Error('gamma default');
+      if(!equal(encoder.encodePlanarYuv(i,{bt709Linearization:'srgb'}),encoder.encodePlanarYuv({...i,transfer:'srgb'})))throw Error('sRGB opt-in');
+      if(equal(encoder.encodePlanarYuv(i),encoder.encodePlanarYuv(i,{bt709Linearization:'inverse-oetf'})))throw Error('inverse709 identical to gamma');
+    }
     for(const matrix of ['bt601','smpte170m','bt470bg'])if(!equal(encoder.encodePlanarYuv({...left,matrix}),encoder.encodePlanarYuv({...left,matrix:'bt601'})))throw Error('BT601 alias');
     for(const format of ['I422','I444']) {
       const f=fixtures.find(f=>f.format===format && f.width===17);

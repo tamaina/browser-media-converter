@@ -40,7 +40,7 @@ index 633a98e..eb3cffc 100644
  
  /**
 diff --git a/lib/jxl/enc_frame.cc b/lib/jxl/enc_frame.cc
-index 66d1a5e..d0f7cfe 100644
+index 66d1a5e..23b1c71 100644
 --- a/lib/jxl/enc_frame.cc
 +++ b/lib/jxl/enc_frame.cc
 @@ -10,6 +10,7 @@
@@ -60,7 +60,7 @@ index 66d1a5e..d0f7cfe 100644
 +      (c_enc.IsSRGB() || (c_enc.GetColorSpace() == ColorSpace::kRGB &&
 +       c_enc.GetWhitePointType() == WhitePoint::kD65 &&
 +       c_enc.GetPrimariesType() == Primaries::kSRGB &&
-+       c_enc.Tf().transfer_function == TransferFunction::k709));
++       (c_enc.Tf().Is709() || c_enc.Tf().have_gamma)));
 +  JXL_ENSURE(!input.experimental_yuv || input.experimental_fill_row || fused_input);
 +  JXL_ENSURE(!(input.experimental_fill_row || fused_input) ||
 +      (frame_header.color_transform == ColorTransform::kXYB &&
@@ -116,20 +116,20 @@ index 66d1a5e..d0f7cfe 100644
        // Nothing to do.
        // RGB or YCbCr: forward YCbCr is not implemented, this is only used when
 diff --git a/lib/jxl/enc_xyb.cc b/lib/jxl/enc_xyb.cc
-index 796855c..8e52064 100644
+index 796855c..cbcbc37 100644
 --- a/lib/jxl/enc_xyb.cc
 +++ b/lib/jxl/enc_xyb.cc
-@@ -221,6 +221,94 @@ void ComputePremulAbsorb(float intensity_target, float* premul_absorb) {
+@@ -221,6 +221,95 @@ void ComputePremulAbsorb(float intensity_target, float* premul_absorb) {
    }
  }
  
 +// Experimental fused SDR kernel. Input samples are gathered scalarly into
-+// bounded YUV vector scratch; interpolation, normalization, matrix, sRGB/709 inverse OETF
++// bounded YUV vector scratch; interpolation, normalization, matrix, sRGB/inverse709/gamma2.4 linearization
 +// and XYB all run in SIMD. RGB exists only in vector registers.
 +Status ExperimentalYuvToXYB(const JxlExperimentalYuv& in, size_t x0,
 +                             size_t y0, float intensity, Image3F* out,
 +                             size_t* lane_count) {
-+  JXL_ENSURE((in.transfer == 1 || in.transfer == 13) && in.siting <= 2);
++  JXL_ENSURE((in.transfer == 1 || in.transfer == 13 || in.transfer == 1001) && in.siting <= 2);
 +  JXL_ENSURE(in.depth == 8 || in.depth == 10 || in.depth == 12);
 +  JXL_ENSURE((in.matrix == 1 || in.matrix == 6) && in.full_range <= 1);
 +  JXL_ENSURE((in.sx == 1 || in.sx == 2) && (in.sy == 1 || in.sy == 2));
@@ -201,7 +201,8 @@ index 796855c..8e52064 100644
 +      // Final XYB may write padding lanes, which Image3F reserves for SIMD.
 +      const auto linearize = [&](auto v) {
 +        const auto clipped = Min(one, Max(Zero(d), v));
-+        return in.transfer == 1 ? TF_709().DisplayFromEncoded(d, clipped) : LinearFromSRGB(clipped);
++        if (in.transfer == 1) return FastPowf(d, clipped, Set(d, 2.4f));
++        return in.transfer == 1001 ? TF_709().DisplayFromEncoded(d, clipped) : LinearFromSRGB(clipped);
 +      };
 +      LinearRGBToXYB(linearize(r), linearize(g), linearize(blue), absorb,
 +                     out->PlaneRow(0,y)+x, out->PlaneRow(1,y)+x,
@@ -214,23 +215,35 @@ index 796855c..8e52064 100644
  // This is different from Butteraugli's OpsinDynamicsImage() in the sense that
  // it does not contain a sensitivity multiplier based on the blurred image.
  Status ToXYB(const ColorEncoding& c_current, float intensity_target,
-@@ -263,6 +351,32 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
+@@ -263,6 +352,44 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
      return true;
    }
  
-+  // Experiment SDR RGB reference: use the same normative 709 inverse OETF
-+  // as fused, rather than platform-dependent ICC/CMS curve approximations.
++  // Experiment SDR RGB reference: built-in gamma and inverse709 avoid
++  // native LCMS / WASM skcms approximations, matching the fused kernel.
 +  if (!black && c_current.GetColorSpace() == ColorSpace::kRGB &&
 +      c_current.GetWhitePointType() == WhitePoint::kD65 &&
-+      c_current.GetPrimariesType() == Primaries::kSRGB && c_current.Tf().Is709()) {
++      c_current.GetPrimariesType() == Primaries::kSRGB &&
++      (c_current.Tf().Is709() || c_current.Tf().have_gamma)) {
++    // Gamma is stored in 1e-7 units (.4166667 for 1/2.4). Use the
++    // intended exponent exactly for this policy, matching fused SIMD.
++    const float exponent = c_current.Tf().have_gamma ?
++        (std::abs(c_current.Tf().GetGamma() - 1.0/2.4) < 0.00000005 ?
++         2.4f : float(1.0/c_current.Tf().GetGamma())) : 0.f;
++    const auto linearize = [&](auto v) {
++      const auto clipped = Min(Set(d,1.f), Max(Zero(d),v));
++      return c_current.Tf().have_gamma ?
++          FastPowf(d, clipped, Set(d, exponent)) :
++          TF_709().DisplayFromEncoded(d,clipped);
++    };
 +    const auto process_row = [&](const uint32_t y, size_t) -> Status {
 +      float* r = image->PlaneRow(0,y);
 +      float* g = image->PlaneRow(1,y);
 +      float* b = image->PlaneRow(2,y);
 +      for (size_t x = 0; x < image->xsize(); x += Lanes(d)) {
-+        const auto lr = TF_709().DisplayFromEncoded(d, Load(d,r+x));
-+        const auto lg = TF_709().DisplayFromEncoded(d, Load(d,g+x));
-+        const auto lb = TF_709().DisplayFromEncoded(d, Load(d,b+x));
++        const auto lr = linearize(Load(d,r+x));
++        const auto lg = linearize(Load(d,g+x));
++        const auto lb = linearize(Load(d,b+x));
 +        if (want_linear) {
 +          Store(lr,d,linear->PlaneRow(0,y)+x);
 +          Store(lg,d,linear->PlaneRow(1,y)+x);
@@ -241,13 +254,13 @@ index 796855c..8e52064 100644
 +      return true;
 +    };
 +    return RunOnPool(pool,0,static_cast<uint32_t>(image->ysize()),
-+                     ThreadPool::NoInit,process_row,"709ToXYB");
++                     ThreadPool::NoInit,process_row,"BuiltinGammaOr709ToXYB");
 +  }
 +
    JXL_RETURN_IF_ERROR(ApplyColorTransform(
        c_current, intensity_target, *image, black, Rect(*image), c_linear_srgb,
        cms, pool, want_linear ? linear : image));
-@@ -370,6 +484,13 @@ void LinearRGBRowToXYB(float* JXL_RESTRICT row0, float* JXL_RESTRICT row1,
+@@ -370,6 +497,13 @@ void LinearRGBRowToXYB(float* JXL_RESTRICT row0, float* JXL_RESTRICT row1,
    (row0, row1, row2, premul_absorb, xsize);
  }
  

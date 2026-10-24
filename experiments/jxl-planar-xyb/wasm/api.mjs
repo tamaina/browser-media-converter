@@ -16,6 +16,7 @@ export async function createEncoder(options = {}) {
       if (k === 'chromaSiting' && !['left','center','topleft'].includes(v)) fail('chromaSiting must be left/center/topleft');
       if (['alpha','icc','origin','color','colorSpace'].includes(k)) fail(`unsupported ${k}`);
     }
+    if (o.bt709Linearization !== undefined && (!['bt709','smpte170m'].includes(i.transfer) || !['gamma2.4','srgb','inverse-oetf'].includes(o.bt709Linearization))) fail('bt709Linearization requires explicit bt709/smpte170m and gamma2.4/srgb/inverse-oetf');
     const distance = o.distance ?? 1, effort = o.effort ?? 3;
     if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
     return {distance,effort};
@@ -42,7 +43,7 @@ export async function createEncoder(options = {}) {
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
-      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort,sourceDepth,outputDepth,({srgb:13,'iec61966-2-1':13,bt709:1,smpte170m:1})[i.transfer??'iec61966-2-1'],({left:0,center:1,topleft:2})[i.chromaSiting??'left']);
+      m._w_init(i.width,i.height,format,matrix,+!!i.fullRange,distance,effort,sourceDepth,outputDepth,(['bt709','smpte170m'].includes(i.transfer)?({'gamma2.4':1,srgb:13,'inverse-oetf':1001})[o.bt709Linearization??'gamma2.4']:13),({left:0,center:1,topleft:2})[i.chromaSiting??'left']);
       let status;
       if (rgb) {
         if (!(i.data instanceof Float32Array) || i.data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array');

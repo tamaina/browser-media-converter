@@ -3,6 +3,7 @@
 #include <hwy/targets.h>
 #include <hwy/detect_targets.h>
 #include <cstdlib>
+// Internal transfer codes: 1 = BT.1886 Lb=0; 13 = sRGB; 1001 = inverse709.
 static PlanarInput input{};
 static PlanarEncoded output{};
 static char error[512]{};

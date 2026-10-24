@@ -111,7 +111,11 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     check(JxlEncoderSetBasicInfo(enc.get(),&info));
     JxlColorEncoding color; JxlColorEncodingSetToSRGB(&color,JXL_FALSE);
     color.primaries=static_cast<JxlPrimaries>(c->primaries);
-    color.transfer_function=static_cast<JxlTransferFunction>(c->transfer);
+    // Internal code 1 is display-referred BT.1886 (Lb=0), not CICP 1.
+    color.transfer_function=c->transfer==1 ? JXL_TRANSFER_FUNCTION_GAMMA :
+        static_cast<JxlTransferFunction>(c->transfer==1001 ? 1 : c->transfer);
+    if(c->transfer==1) color.gamma=1.0/2.4; // encoded = linear^gamma
+    // SetColorEncoding emits enum colour encoding; no SetICCProfile call.
     check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
@@ -145,7 +149,7 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
       input.experimental_conversion_ms=instrumentation?&result->conversion_ms:nullptr;
       input.experimental_simd_lanes=&result->simd_lanes;
       input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
-      if(input.experimental_yuv && c->primaries==1 && (c->transfer==13 || c->transfer==1))
+      if(input.experimental_yuv && c->primaries==1 && (c->transfer==13 || c->transfer==1 || c->transfer==1001))
         input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
       if(source.failed) throw std::runtime_error("planar region conversion failed");

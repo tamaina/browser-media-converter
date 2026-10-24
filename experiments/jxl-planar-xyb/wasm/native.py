@@ -100,7 +100,7 @@ elif sys.argv[1]=='verify':
     def decode(path,w,h):
         out=path.with_suffix('.f32')
         meta=subprocess.check_output([str(root/'build/oracle/debug/jxl-planar-xyb-oracle'),str(path),str(out)],text=True)
-        tf=next((1 if f.get('transfer') in ('bt709','smpte170m') else 13 for f in sorted(fixtures,key=lambda f:-len(f['name'])) if f['name'] in path.name),13)
+        tf=next((65535 if f.get('transfer') in ('bt709','smpte170m') else 13 for f in sorted(fixtures,key=lambda f:-len(f['name'])) if f['name'] in path.name),13)
         assert list(map(int,meta.split()))==[w,h,1,tf,0,1],(path,meta,tf)
         b=out.read_bytes();return (C.c_float*(len(b)//4)).from_buffer_copy(b)
     def compare(a,b):
@@ -116,7 +116,7 @@ elif sys.argv[1]=='verify':
         name=r['name'];src=(work/(name+'.rgb')).read_bytes();source=(C.c_float*(len(src)//4)).from_buffer_copy(src)
         native=decode(work/(name+'.native.jxl'),r['width'],r['height'])
         native_rgb=decode(work/(name+'.native-rgb.jxl'),r['width'],r['height'])
-        r['decodedColorEncoding']={'primaries':1,'transfer':1 if r.get('transfer') in ('bt709','smpte170m') else 13,'matrix':0,'fullRange':True}
+        r['decodedColorEncoding']={'primaries':1,'transfer':65535 if r.get('transfer') in ('bt709','smpte170m') else 13,'matrix':0,'fullRange':True}
         r['nativeQualityVsSource']=compare(native,source)
         for mode in ('fused','rgb'):
             path=work/(name+'.'+mode+'.jxl');decoded=decode(path,r['width'],r['height'])
@@ -130,7 +130,22 @@ elif sys.argv[1]=='verify':
             if r.get('benchmark'):
                 # Real non-inset lossy outputs can cross codec decisions on tiny
                 # native/WASM floating-point differences. Keep both limits explicit.
-                assert agreement['maxError']<0.05 and (agreement['psnr'] is None or agreement['psnr']>70),r
+                maximum=agreement['maxError']
+                if r['decodedColorEncoding']['transfer']==65535:
+                    # Gamma's inverse is steep at black: small lossy linear-light
+                    # differences can exceed the old inverse709 code-domain max.
+                    # Keep raw errors and original-domain PSNR; apply the same
+                    # .05 peak bound in the display sRGB domain for gamma only.
+                    na=np.ctypeslib.as_array(native if mode=='fused' else native_rgb)
+                    wa=np.ctypeslib.as_array(decoded)
+                    maximum=0.0
+                    def display(a):
+                        linear=np.clip(a.astype('float64'),0,1)**2.4
+                        return np.where(linear<=.0031308,12.92*linear,1.055*linear**(1/2.4)-.055)
+                    for at in range(0,len(na),65536):
+                        maximum=max(maximum,float(np.max(np.abs(display(na[at:at+65536])-display(wa[at:at+65536])))))
+                    agreement['displaySrgbMaxError']=maximum
+                assert maximum<0.05 and (agreement['psnr'] is None or agreement['psnr']>70),r
             else:assert agreement['maxError']<0.03,r
             if mode=='fused':fused_decoded=decoded
             else:

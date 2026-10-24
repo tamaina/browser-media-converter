@@ -170,3 +170,7 @@ Relevant pinned libjxl implementation:
 Round 7 WASM accepts WebCodecs sRGB/BT.709/SMPTE170M transfers and defaults to
 left chroma siting. See [WASM.md](WASM.md) for the current API, display-transfer
 caveats, and measured results; older rounds below retain historical context.
+
+Round 9 changes BT.709/SMPTE170M transfer defaults to display-referred BT.1886
+(Lb=0, gamma 2.4). The encode option `bt709Linearization` retains explicit
+`srgb` and `inverse-oetf` policies; see [WASM.md](WASM.md#round-9--bt1886-gamma-24-for-bt709smpte170m).

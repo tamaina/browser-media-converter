@@ -1,4 +1,4 @@
-# SDR planar YUV in WebAssembly — Round 7
+# SDR planar YUV in WebAssembly — Round 9
 
 This experiment links the owned Rust planar session and `bridge.cc` to patched
 libjxl v0.11.1 (794a5dcf0d54f9f0b20d288a12e87afb91d20dfc), with Highway
@@ -63,7 +63,12 @@ BT.601 (`smpte170m` / `bt470bg`, with legacy `bt601` alias), explicit boolean
 'smpte170m'` and `chromaSiting?: 'left' | 'center' | 'topleft'` sit alongside
 `matrix`, `primaries` and `fullRange`. Omitted transfer retains sRGB; omitted
 primaries retains BT.709. `srgb` aliases WebCodecs `iec61966-2-1`.
-`bt709` and `smpte170m` share inverse BT.709 OETF and JXL TF 709 (CICP 1);
+As of Round 9, `bt709` and `smpte170m` default to BT.1886 with Lb=0:
+`linear=clamp(E,0,1)^2.4`, header GAMMA `1/2.4`. The single new encode option
+`bt709Linearization: 'gamma2.4' | 'srgb' | 'inverse-oetf'` selects that default,
+sRGB linearization/header (Round 8 variant d), or the historical inverse709/TF709.
+It rejects unless input transfer is explicitly `bt709` or `smpte170m`; unknown
+and null values reject. Both `encodePlanarYuv` and `encodeRgb` accept it.
 sRGB signals CICP 13. `encodeRgb` also accepts this transfer field, so prepared
 nonlinear RGB can use the matching encoding. PQ/HLG/P3/BT.2020 and unknown or
 null metadata reject; no tone mapping occurs. Historical native-only tests
@@ -751,6 +756,10 @@ Final checks: serial WASM/native rebuilds succeeded; default browser **81/81**, 
 
 ## Round 7 — decoded video transfer and chroma location
 
+Historical measurements: Round 9 changes the BT.709-like default to gamma 2.4.
+The inverse-OETF policy below remains available with `bt709Linearization:
+'inverse-oetf'`.
+
 ### Transfer definition and display implications
 
 The fused SIMD kernel reuses libjxl v0.11.1's `TF_709::DisplayFromEncoded`:
@@ -893,6 +902,9 @@ Native `test_xyb.py` **10/10** (20.715 s; 252 transfer × siting cases, max XYB 
 
 
 ## Round 8 — BT.709 transfer midtone check
+
+Historical policy: Round 9 supersedes this round's recommendation to retain the
+inverse-OETF default. Variant (d) is now the `bt709Linearization: 'srgb'` opt-in.
 
 ### Measured verdict and display policy
 
@@ -1110,3 +1122,181 @@ clips, screenshots, float decodes and PNGs stay under `build/round8/`.
 `wasm-observations.json` remains unchanged at **66939 bytes**; the new compact
 `round8/round8-observations.json` stays below **30 kB**. Final default browser
 suite: **138/138 PASS** (see `build/round8/default-test.log`).
+
+## Round 9 — BT.1886 gamma 2.4 for bt709/smpte170m
+
+### API and header signalling
+
+The owner-selected default for explicit `transfer: 'bt709'` / `'smpte170m'`
+is now display-referred BT.1886 with Lb=0: matrix, clamp each nonlinear channel
+to [0,1], then `linear=E^2.4`. Omitted transfer still means `iec61966-2-1`.
+sRGB input, source-depth handling, siting, distance and effort defaults are unchanged.
+
+Both encode entry points take one new **encode option**:
+
+```js
+encoder.encodePlanarYuv(input); // BT709-like input: gamma2.4
+encoder.encodePlanarYuv(input, {bt709Linearization:'gamma2.4'});
+encoder.encodePlanarYuv(input, {bt709Linearization:'srgb'}); // Round 8 (d)
+encoder.encodePlanarYuv(input, {bt709Linearization:'inverse-oetf'}); // Round 7
+encoder.encodeRgb({width,height,transfer:'bt709',data:rgb},
+                  {bt709Linearization:'gamma2.4'});
+```
+
+The option rejects if transfer is omitted, `srgb`, or `iec61966-2-1`; unknown
+values and null also reject. The inverse-OETF option cheaply retains existing
+TF709 code. The native ABI uses internal transfer codes **1=gamma2.4,
+13=sRGB, 1001=inverse709**, rather than treating every internal number as CICP.
+Python input JSON accepts the same names in `color.bt709Linearization` and maps
+them to that ABI; `wasm/native.py` uses code 1 for the default comparison path.
+Rust `planar_region` and Python reconstruction produce clipped nonlinear RGB;
+the RGB baseline passes those E values to built-in `ToXYB` for linearization.
+
+| Policy | Linearization | JXL enum header |
+| --- | --- | --- |
+| gamma2.4 (default) | E^2.4 | RGB / D65 / sRGB primaries / GAMMA 1/2.4 |
+| srgb | existing inverse sRGB | RGB / D65 / sRGB primaries / sRGB TF |
+| inverse-oetf | existing TF_709 inverse OETF | RGB / D65 / sRGB primaries / TF709 |
+
+Rendering intent remains media-relative (the existing SetToSRGB default). `JxlEncoderSetColorEncoding` is used;
+there is no input ICC, `SetICCProfile`, or embedded ICC colour encoding.
+The independent oxide decoder requires an **Enum** encoding. Libjxl represents
+gamma as encoded=linear^gamma: serialized gamma is 4166667 / 10000000,
+i.e. 0.4166667, a quantized 1/2.4. This is distinct from a CICP 709 tag.
+
+### Built-in conversion and numerical checks
+
+`ExperimentalYuvToXYB` uses Highway `FastPowf(d,E,2.4f)` after clipping.
+The existing sRGB approximation is unchanged. `enc_frame.cc` admits the
+RGB+D65+sRGB-primaries gamma header to the fused route.
+
+The experiment's `ToXYB` branch now accepts **RGB + D65 + sRGB primaries +
+have_gamma**, in addition to the historical TF709 case, before
+`ApplyColorTransform`. It uses built-in Highway power and the existing opsin
+transform, including optional linear output. Gamma 0.4166667 is recognized as
+the gamma2.4 policy and uses exactly 2.4f, matching fused rather than raising
+to the reciprocal of the quantized header. Other admitted gamma values use
+1/GetGamma. Thus the RGB gamma path traverses neither native LCMS nor WASM
+skcms. Other colour profiles retain their previous paths. This is a patch to
+libjxl v0.11.1, not a claim about stock libjxl's have_gamma dispatch.
+
+native: 1,048,577 evenly spaced E samples over [0,1], 4 lanes; max linear error vs double `std::pow(E,2.4)` **3.30210165e-06**, max propagated opsin/XYB error **1.07742458e-06**. The latter isolates power error using the opsin formula with double cube roots on the sweep (RGB proportions 1/.6/.2), not total SIMD cube-root error.
+
+wasm: 1,048,577 evenly spaced E samples over [0,1], 4 lanes; max linear error vs double `std::pow(E,2.4)` **3.30210165e-06**, max propagated opsin/XYB error **1.07742458e-06**. The latter isolates power error using the opsin formula with double cube roots on the sweep (RGB proportions 1/.6/.2), not total SIMD cube-root error.
+
+Actual pre-encoder built-in RGB XYB on a 4096×8 ramp: native/WASM max **0**, mean **0**, across 98,304 floats. Separately, the header's gamma rounding changes ideal linear values by at most **2.94303541e-08** on the sweep.
+
+VarDCT check, distance .1 / effort 3: encode the nonlinear ramp through built-in gamma versus double std::pow-derived linear RGB through libjxl's built-in linear-sRGB path, then independently decode both to sRGB. Max output difference **0.058684051**, MAE **0.000313559249** 8-bit codes; ordinary lossy MAE against the analytic ramp is **0.0247287547** (exact-power path), **0.0247116925** (gamma path). These bound this ramp experiment; they do not promise identical lossy partitions on every image.
+
+### Chrome and independent decoder measurements
+
+Display run 2026-10-24T05:15:38.432891+00:00; Intel(R) Core(TM) i7-10510U CPU @ 1.80GHz; v24.18.0. Chrome **156.0.8078.47**, Playwright `channel:'chrome'`, headless Linux; flags `--no-sandbox, --disable-gpu, --force-color-profile=srgb`. Canvas explicitly requests sRGB, device scale 1. All five lossless VP9 fixtures decode byte-exactly through ffmpeg and WebCodecs. `<video>` and VideoDecoder canvases agree; JXL `<img>` and ImageBitmap agree in every measured fixture/policy. Screenshots also match JXL canvas readback. Distance .1 / effort 3, explicit left siting, source depth preserved. djxl requests `RGB_D65_SRG_Per_SRG`, 8-bit, one thread; jxl-oxide 0.12.6 requests sRGB perceptual float output.
+
+Cells: **displayed sRGB 0…255 code mean (implied inverse-sRGB linear mean)**. The reference is analytic E^2.4 followed by sRGB encoding. Patches use 10-bit limited Y, U/V=512; matching 8-bit pixel measurements remain locally in `build/round9/chrome.json` and PNGs. Exact E=.5 is a separate Y10=502 fixture.
+
+| Y10 / E | BT.1886 ref | Video | gamma Chrome | gamma djxl | gamma oxide | srgb Chrome | srgb djxl | srgb oxide | inverse Chrome | inverse djxl | inverse oxide |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 / 0.000000 | 0.00 (0.0000) | 0.00 (0.0000) | 0.00 (0.0000) | 0.00 (0.0000) | -0.00 (-0.0000) | 0.00 (0.0000) | 0.00 (0.0000) | -0.00 (-0.0000) | 0.00 (0.0000) | 0.00 (0.0000) | -0.00 (-0.0000) |
+| 120 / 0.063927 | 4.48 (0.0014) | 16.00 (0.0052) | 4.67 (0.0014) | 4.00 (0.0012) | 4.46 (0.0014) | 16.67 (0.0055) | 16.00 (0.0052) | 16.33 (0.0053) | 16.67 (0.0055) | 31.00 (0.0137) | 31.70 (0.0142) |
+| 180 / 0.132420 | 21.60 (0.0078) | 34.00 (0.0160) | 22.00 (0.0080) | 21.00 (0.0075) | 21.62 (0.0078) | 34.00 (0.0160) | 33.00 (0.0152) | 33.76 (0.0158) | 34.00 (0.0160) | 49.00 (0.0307) | 49.57 (0.0314) |
+| 240 / 0.200913 | 40.03 (0.0212) | 51.00 (0.0331) | 40.67 (0.0219) | 40.00 (0.0212) | 40.01 (0.0212) | 51.67 (0.0339) | 51.00 (0.0331) | 51.21 (0.0334) | 51.67 (0.0339) | 66.00 (0.0545) | 66.82 (0.0558) |
+| 296 / 0.264840 | 57.22 (0.0412) | 67.00 (0.0561) | 57.67 (0.0418) | 57.00 (0.0409) | 57.21 (0.0412) | 67.67 (0.0572) | 67.00 (0.0561) | 67.50 (0.0570) | 67.67 (0.0572) | 82.00 (0.0844) | 82.63 (0.0857) |
+| 356 / 0.333333 | 75.65 (0.0716) | 85.00 (0.0908) | 76.00 (0.0723) | 75.00 (0.0704) | 75.65 (0.0716) | 85.00 (0.0908) | 84.00 (0.0887) | 84.99 (0.0908) | 85.00 (0.0908) | 99.00 (0.1248) | 99.42 (0.1259) |
+| 416 / 0.401826 | 94.08 (0.1121) | 102.00 (0.1329) | 94.67 (0.1136) | 94.00 (0.1119) | 94.08 (0.1121) | 102.67 (0.1347) | 102.00 (0.1329) | 102.48 (0.1342) | 102.67 (0.1347) | 115.00 (0.1714) | 115.93 (0.1744) |
+| 472 / 0.465753 | 111.27 (0.1598) | 118.00 (0.1812) | 112.00 (0.1620) | 111.00 (0.1590) | 111.27 (0.1598) | 119.00 (0.1845) | 118.00 (0.1812) | 118.76 (0.1837) | 119.00 (0.1845) | 131.00 (0.2270) | 131.20 (0.2277) |
+| 504 / 0.502283 | 121.10 (0.1915) | 128.00 (0.2159) | 121.33 (0.1923) | 121.00 (0.1912) | 121.08 (0.1915) | 128.33 (0.2171) | 128.00 (0.2159) | 128.06 (0.2161) | 128.67 (0.2183) | 139.00 (0.2582) | 139.90 (0.2618) |
+| 532 / 0.534247 | 129.70 (0.2221) | 136.00 (0.2462) | 130.33 (0.2245) | 129.00 (0.2195) | 129.70 (0.2221) | 136.67 (0.2488) | 136.00 (0.2462) | 136.24 (0.2472) | 136.67 (0.2488) | 147.00 (0.2918) | 147.41 (0.2935) |
+| 588 / 0.598174 | 146.90 (0.2913) | 152.00 (0.3140) | 146.67 (0.2903) | 146.00 (0.2874) | 146.86 (0.2912) | 152.67 (0.3170) | 152.00 (0.3140) | 152.54 (0.3164) | 152.67 (0.3170) | 162.00 (0.3613) | 162.50 (0.3638) |
+| 648 / 0.666667 | 165.33 (0.3779) | 169.00 (0.3968) | 165.00 (0.3763) | 165.00 (0.3763) | 165.32 (0.3779) | 170.00 (0.4020) | 169.00 (0.3968) | 169.99 (0.4019) | 170.00 (0.4020) | 178.00 (0.4452) | 178.47 (0.4478) |
+| 708 / 0.735160 | 183.75 (0.4779) | 187.00 (0.4969) | 183.67 (0.4774) | 183.00 (0.4735) | 183.72 (0.4777) | 187.67 (0.5009) | 187.00 (0.4969) | 187.47 (0.4997) | 187.67 (0.5009) | 194.00 (0.5395) | 194.38 (0.5418) |
+| 764 / 0.799087 | 200.95 (0.5837) | 203.00 (0.5972) | 201.00 (0.5841) | 200.00 (0.5776) | 200.94 (0.5837) | 204.00 (0.6038) | 203.00 (0.5972) | 203.76 (0.6022) | 204.00 (0.6038) | 209.00 (0.6376) | 209.12 (0.6384) |
+| 824 / 0.867580 | 219.38 (0.7111) | 220.00 (0.7157) | 219.67 (0.7133) | 219.00 (0.7084) | 219.40 (0.7113) | 221.67 (0.7280) | 221.00 (0.7231) | 221.21 (0.7246) | 221.67 (0.7280) | 224.00 (0.7454) | 224.83 (0.7517) |
+| 880 / 0.931507 | 236.57 (0.8434) | 237.00 (0.8469) | 236.67 (0.8442) | 236.00 (0.8388) | 236.57 (0.8434) | 237.67 (0.8523) | 237.00 (0.8469) | 237.52 (0.8511) | 237.67 (0.8523) | 239.00 (0.8632) | 239.41 (0.8665) |
+| 940 / 1.000000 | 255.00 (1.0000) | 254.00 (0.9911) | 255.00 (1.0000) | 255.00 (1.0000) | 255.06 (1.0005) | 255.00 (1.0000) | 255.00 (1.0000) | 255.06 (1.0005) | 255.00 (1.0000) | 255.00 (1.0000) | 255.06 (1.0005) |
+| 502 / 0.500000 | 120.49 (0.1895) | 127.00 (0.2122) | 120.33 (0.1889) | 120.00 (0.1878) | 120.50 (0.1895) | 127.33 (0.2134) | 127.00 (0.2122) | 127.47 (0.2139) | 127.33 (0.2134) | 139.00 (0.2582) | 139.36 (0.2596) |
+
+At **E=.5**, reference **120.487500** (linear **0.189465**); Chrome video **127.00**. Gamma JXL: Chrome **120.33**, djxl **120.00**, oxide **120.499023**. Chrome therefore honors the gamma-tagged JXL on this path; it does not substitute the sRGB/video result. The srgb opt-in instead gives Chrome **127.33**.
+
+Local jxl-image source returns no CICP transfer for `TransferFunction::Gamma`,
+and jxl-color synthesizes a parametric ICC gamma using its reciprocal when
+`inverted:true`. That mechanism is consistent with the measurement; the
+installed Chrome executable's internal ICC/CICP selection was not traced.
+TF709 still exhibits Round 8's Chrome substitution behavior.
+
+### PierSeaside 720p real10
+
+Reference: independent bilinear left-sited YUV reconstruction, matrix and [0,1] clipping, E^2.4, sRGB encoding. Errors are RGB-channel MAE in 8-bit sRGB units, against the unquantized reference and actual Chrome video canvas. Fixed midtone ROI x=[480,800), y=[280,480). Chroma interpolation, video rendering and lossy error remain in these comparisons.
+
+| Decoder / policy | MAE vs BT.1886 | ROI MAE vs BT.1886 | MAE vs video | ROI MAE vs video |
+| --- | ---: | ---: | ---: | ---: |
+| chrome / gamma2.4 | 0.614542 | 0.655891 | 6.206957 | 7.976203 |
+| chrome / srgb | 6.830106 | 8.572231 | 1.857659 | 1.777062 |
+| djxl / gamma2.4 | 0.556839 | 0.612778 | 6.203881 | 7.977745 |
+| djxl / srgb | 6.830042 | 8.572785 | 1.859156 | 1.779484 |
+| oxide / gamma2.4 | 0.431531 | 0.499839 | 6.207736 | 7.980412 |
+| oxide / srgb | 6.826024 | 8.570028 | 1.855536 | 1.777187 |
+
+Netflix raw frames, VP9/JXL, decoded pixels and comparison PNGs stay **only in ignored build/** (CC BY-NC-ND). The committed JSON contains aggregate errors, not Netflix pixels.
+
+### Serial Aerial timing
+
+Aerial 1280×720 I420P10 BT709/limited/**left**, same frame, distance 1 / effort 3. One warmup + five timed runs per policy, fixed gamma / inverse / sRGB order, serial. Timing-only wrapper reuses Round 8 instrumentation: conversion timer enabled, XYB observer disabled; planes are preloaded, total includes Rust copy/validation, encode/output/free, excludes initial JS plane upload. No thermal control, randomized order or statistical speed guarantee.
+
+| Policy | Median conversion ms | Median total ms |
+| --- | ---: | ---: |
+| gamma2.4 | 40.000 | 81.400 |
+| inverse-oetf | 41.900 | 82.700 |
+| srgb | 33.900 | 74.300 |
+
+Gamma conversion was cheaper than inverse709 in this run (40.000 vs 41.900 ms). Encoding and machine noise can dominate total time; do not infer a universal speedup.
+
+### Final sequential checks and changed expectations
+
+Final builds passed in order: `bash build-wasm.sh`, `CMAKE=~/opt/cmake-3.31.6-linux-x86_64/bin/cmake bash build.sh`. Then, strictly serial: `node wasm/browser-test.mjs` **138/138**, `node wasm/browser-test.mjs --benchmark --real10` **148/148**, `PYTHONPATH=build/python python3 test_xyb.py` **11/11**, `build/tail-guard`: **28512 4-lane Highway guard-page tail encodes passed**. All native/CMake/Cargo builds use one job.
+
+Both browser runs also verify 50 policy validation combinations across planar
+and RGB entry points, default/explicit gamma equality, transfer aliases,
+sRGB opt-in equivalence and inverse-policy distinction. Python adds six valid
+transfer/policy combinations with XYB/header/decoder checks and fourteen invalid
+option combinations. Original-domain PSNR limits remain unchanged; the gamma-only peak agreement gate is evaluated in display sRGB, as explained below.
+
+Expected header checks change from TF709=1 to GAMMA=65535 for the new default.
+The original-domain oxide CLI uses 65535 as a **JXL enum sentinel**, not an
+invented CICP tag, because Gamma has no CICP transfer identifier. Both independent
+decoders still request original encoding for the existing quality comparisons;
+the separate Round 9 display oracle explicitly requests sRGB. Default gamma
+changes lossy sizes/quality/timings legitimately; fresh observations replace
+historical default results in `wasm-observations.json`.
+
+The first real10 runs caught an Aerial RGB native/WASM maximum of 0.0752166
+in original gamma-coded floats (PSNR 76.1545 dB): thirteen of 2,764,800 channel
+samples exceed .05, with the largest pair 0 versus .0752166 near black.
+The same output difference is at most .00301469 in clipped linear light and
+.03535568 in display sRGB. Gamma's inverse is steep at zero, so the peak gate
+now evaluates gamma benchmark agreement in display sRGB with the existing
+.05 bound; raw max errors remain recorded and original-domain PSNR >70 stays.
+Other transfer gates retain their original domain. This is the sole numeric
+criterion domain change, not a claim that the original .05 gamma-code gate
+passed. The exact-2.4 exponent alignment alone did not remove that failure.
+Final suite logs and measurements use the rebuilt implementation.
+
+Reproduction: run `bash round9/run-checks.sh`, then
+`bash round9/run-measurements.sh`, with no overlapping heavy processes.
+Scripts under `round9/` include `prepare.py`, `measure.mjs`,
+`display.mjs`, `analyze.py`, `build-accuracy.sh`, `ramp-native.py`,
+`build-bench.sh`, `benchmark.mjs`, `write-report.py`, and the sRGB oxide oracle.
+The first four reuse/adapt Round 8 without changing its files.
+
+Committed observations: `round9/round9-observations.json` **18,718 bytes**; `wasm-observations.json` **67,298 bytes** (limits 30 kB / 100 kB).
+
+Local-only comparison images:
+
+- [Ramp: BT.1886 / video / gamma JXL / sRGB opt-in](build/round9/ramp-compare.png).
+- [PierSeaside frame and midtone crops](build/round9/netflix-frame-compare.png).
+
+Caveats: measured software/headless Chrome on this machine only; physical
+screens, GPU overlays, other browsers/OSes and HDR were not tested. BT.1886 here
+assumes zero display black; no nonzero-Lb compensation, tone mapping or ambient
+adaptation is performed. sRGB opt-in deliberately chooses Chrome-video-like
+appearance rather than the owner's BT.1886 interpretation. Enum gamma precision,
+8-bit readback, compression and chroma interpolation leave small residuals.

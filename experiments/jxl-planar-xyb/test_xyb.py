@@ -14,6 +14,28 @@ import validation as prior
 tempfile.tempdir = str(ROOT / 'build/tmp')
 
 class XYBTests(unittest.TestCase):
+    def test_bt709_linearization(self):
+        os.environ['JXL_EXPERIMENT_CAPTURE_XYB']='1'
+        os.environ['JXL_EXPERIMENT_OBSERVE_REFERENCE']='1'
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_CAPTURE_XYB',None))
+        self.addCleanup(lambda:os.environ.pop('JXL_EXPERIMENT_OBSERVE_REFERENCE',None))
+        with tempfile.TemporaryDirectory(dir=ROOT/'build') as tmp:
+            base=Path(tmp)
+            for tf in ['bt709','smpte170m','srgb','iec61966-2-1']:
+                m,ref=fixture(base,'I444P12',33,3,'709-srgb',False,transfer=tf)
+                for policy in ['gamma2.4','srgb','inverse-oetf','unknown',None]:
+                    m['color']['bt709Linearization']=policy
+                    if tf in ('srgb','iec61966-2-1') or policy not in ('gamma2.4','srgb','inverse-oetf'):
+                        with self.assertRaises(ValueError):load(m,base)
+                        continue
+                    inp,keep=load(m,base);a,sa=encode(inp);b,sb=encode_rgb(inp,ref)
+                    self.assertLess(max(abs(x-y) for x,y in zip(sa['xyb'],sb['xyb'])),3e-6)
+                    (base/'a.jxl').write_bytes(a)
+                    meta=json.loads(subprocess.check_output([ROOT/'build/decode-float',base/'a.jxl',base/'a.f32'],text=True))
+                    self.assertEqual(meta['transfer'],{'gamma2.4':65535,'srgb':13,'inverse-oetf':1}[policy])
+                    subprocess.check_output([ROOT/'build/oracle/debug/jxl-planar-xyb-oracle',base/'a.jxl',base/'o.f32'])
+                    self.assertLess(max(abs(x-y) for x,y in zip(read_floats(base/'a.f32'),read_floats(base/'o.f32'))),1e-4)
+
     def test_high_depth_low_bits(self):
         import struct
         from proof import create
@@ -186,10 +208,10 @@ class XYBTests(unittest.TestCase):
                             peak=max(peak,stats["peak_rgb_bytes"])
                             (base/"fused.jxl").write_bytes(fused)
                             meta=json.loads(subprocess.check_output([ROOT/"build/decode-float",base/"fused.jxl",base/"stock.f32"],text=True,env={**os.environ,"LD_LIBRARY_PATH":""}))
-                            self.assertEqual((meta["width"],meta["height"],meta["primaries"],meta["transfer"],meta["intensity"]),(w,h,inp.primaries,inp.transfer,inp.intensity))
+                            self.assertEqual((meta["width"],meta["height"],meta["primaries"],meta["transfer"],meta["intensity"]),(w,h,inp.primaries,65535 if inp.transfer==1 else inp.transfer,inp.intensity))
                             cicp=list(map(int,subprocess.check_output([ROOT/"build/oracle/debug/jxl-planar-xyb-oracle",base/"fused.jxl",base/"oxide.f32"],text=True).split()))
-                            self.assertEqual(cicp,[w,h,inp.primaries,inp.transfer,0,1])
-                            self.assertEqual((meta["dataPrimaries"],meta["dataTransfer"]),(inp.primaries,inp.transfer))
+                            self.assertEqual(cicp,[w,h,inp.primaries,65535 if inp.transfer==1 else inp.transfer,0,1])
+                            self.assertEqual((meta["dataPrimaries"],meta["dataTransfer"]),(inp.primaries,65535 if inp.transfer==1 else inp.transfer))
                             # Both decoders are explicitly asked for original color encoding.
                             stock=read_floats(base/"stock.f32");oxide=read_floats(base/"oxide.f32")
                             (base/"row.jxl").write_bytes(previous)

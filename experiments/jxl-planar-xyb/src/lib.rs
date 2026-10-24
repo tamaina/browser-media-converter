@@ -56,6 +56,8 @@ pub struct Encoded {
     conversion_ms: f64,
     simd_lanes: usize,
 }
+// Internal transfer code 1 = gamma2.4 (BT.1886 Lb=0), 13 = sRGB,
+// 1001 = inverse BT.709 OETF. Shared by Config, KernelYuv and bridge.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct KernelPlane {
@@ -122,7 +124,7 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
 fn check_config(c: &Config) -> Result<(), String> {
     need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
     #[cfg(target_arch = "wasm32")]
-    need(c.primaries == 1 && matches!(c.transfer, 1 | 13), "WASM requires BT.709 primaries and sRGB/709 transfer (SDR only)")?;
+    need(c.primaries == 1 && matches!(c.transfer, 1 | 13 | 1001), "WASM requires BT.709 primaries and sRGB/gamma2.4/inverse709 transfer (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -134,7 +136,7 @@ fn check_config(c: &Config) -> Result<(), String> {
     need(
         matches!(
             (c.primaries, c.transfer),
-            (1, 1 | 13) | (11, 13) | (9, 16 | 18)
+            (1, 1 | 13 | 1001) | (11, 13) | (9, 16 | 18)
         ),
         "unsupported primaries/transfer pair",
     )?;
@@ -262,7 +264,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
-            strict: option == 1 || config.primaries != 1 || !matches!(config.transfer, 1 | 13),
+            strict: option == 1 || config.primaries != 1 || !matches!(config.transfer, 1 | 13 | 1001),
             config,
             depth: i.depth,
             storage: i.storage,
