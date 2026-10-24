@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from fixtures import fixture,read_floats
-from proof import ROOT,library,load,encode,encode_rgb
+from proof import ROOT,LIBJXL,library,load,encode,encode_rgb
 import validation as prior
 
 # Keep inherited validation fixtures and cleanup inside this experiment.
@@ -31,7 +31,7 @@ class XYBTests(unittest.TestCase):
                     inp,keep=load(m,base);a,sa=encode(inp);b,sb=encode_rgb(inp,ref)
                     self.assertLess(max(abs(x-y) for x,y in zip(sa['xyb'],sb['xyb'])),3e-6)
                     (base/'a.jxl').write_bytes(a)
-                    meta=json.loads(subprocess.check_output([ROOT/'build/decode-float',base/'a.jxl',base/'a.f32'],text=True))
+                    meta=json.loads(subprocess.check_output([LIBJXL/'decode-float',base/'a.jxl',base/'a.f32'],text=True))
                     self.assertEqual(meta['transfer'],{'gamma2.4':65535,'srgb':13,'inverse-oetf':1}[policy])
                     subprocess.check_output([ROOT/'build/oracle/debug/jxl-planar-xyb-oracle',base/'a.jxl',base/'o.f32'])
                     self.assertLess(max(abs(x-y) for x,y in zip(read_floats(base/'a.f32'),read_floats(base/'o.f32'))),1e-4)
@@ -232,7 +232,7 @@ class XYBTests(unittest.TestCase):
                             self.assertEqual(stats["peak_rgb_bytes"],0 if is_fused else w*24)
                             peak=max(peak,stats["peak_rgb_bytes"])
                             (base/"fused.jxl").write_bytes(fused)
-                            meta=json.loads(subprocess.check_output([ROOT/"build/decode-float",base/"fused.jxl",base/"stock.f32"],text=True,env={**os.environ,"LD_LIBRARY_PATH":""}))
+                            meta=json.loads(subprocess.check_output([LIBJXL/"decode-float",base/"fused.jxl",base/"stock.f32"],text=True,env={**os.environ,"LD_LIBRARY_PATH":""}))
                             self.assertEqual((meta["width"],meta["height"],meta["primaries"],meta["transfer"],meta["intensity"]),(w,h,inp.primaries,65535 if inp.transfer==1 else inp.transfer,inp.intensity))
                             cicp=list(map(int,subprocess.check_output([ROOT/"build/oracle/debug/jxl-planar-xyb-oracle",base/"fused.jxl",base/"oxide.f32"],text=True).split()))
                             self.assertEqual(cicp,[w,h,inp.primaries,65535 if inp.transfer==1 else inp.transfer,0,1])
@@ -240,7 +240,7 @@ class XYBTests(unittest.TestCase):
                             # Both decoders are explicitly asked for original color encoding.
                             stock=read_floats(base/"stock.f32");oxide=read_floats(base/"oxide.f32")
                             (base/"row.jxl").write_bytes(previous)
-                            subprocess.check_output([ROOT/"build/decode-float",base/"row.jxl",base/"row.f32"],env={**os.environ,"LD_LIBRARY_PATH":""})
+                            subprocess.check_output([LIBJXL/"decode-float",base/"row.jxl",base/"row.f32"],env={**os.environ,"LD_LIBRARY_PATH":""})
                             row_pixels=read_floats(base/"row.f32")
                             max_vs_row=max(max_vs_row,max(abs(a-b) for a,b in zip(stock,row_pixels)))
                             self.assertTrue(all(math.isfinite(x) for x in stock+oxide))
@@ -325,7 +325,7 @@ class XYBTests(unittest.TestCase):
                 inp,keep=load(m,base);encoded,_=encode(inp)
                 reference,_=encode_rgb(inp,rgb);self.assertEqual(encoded,reference)
                 (base/"a.jxl").write_bytes(encoded)
-                subprocess.check_output([ROOT/"build/decode-float",base/"a.jxl",base/"s.f32"],env={**os.environ,"LD_LIBRARY_PATH":""})
+                subprocess.check_output([LIBJXL/"decode-float",base/"a.jxl",base/"s.f32"],env={**os.environ,"LD_LIBRARY_PATH":""})
                 subprocess.check_output([ROOT/"build/oracle/debug/jxl-planar-xyb-oracle",base/"a.jxl",base/"o.f32"])
                 outputs=[read_floats(base/"s.f32"),read_floats(base/"o.f32")]
                 transform=pq_nits if profile=="pq" else hlg_scene

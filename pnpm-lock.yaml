@@ -89,6 +89,8 @@ importers:
         specifier: workspace:^
         version: link:../media-container
 
+  packages/libjxl-wasm: {}
+
   packages/media-container:
     dependencies:
       '@browser-mc/binary':

@@ -1,5 +1,5 @@
 // MIT. Narrow JS-facing ABI; the existing Rust session owns/validates the planes.
-#include "../proof.h"
+#include "planar_session.h"
 #include <hwy/targets.h>
 #include <hwy/detect_targets.h>
 #include <cstdlib>

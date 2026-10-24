@@ -6,10 +6,11 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
+import {libjxlBuild,servedPath} from '../libjxl-package.mjs';
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url))),work=path.join(root,'build/round10');
 await mkdir(work,{recursive:true});
-const python=mode=>execFileSync('python3',[path.join(root,'round10/verify.py'),mode],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(root,'build/native/lib'),OPENBLAS_NUM_THREADS:'1'}});
-const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=path.resolve(root,'.'+req.url);if(!p.startsWith(root+'/'))throw Error('path');res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
+const python=mode=>execFileSync('python3',[path.join(root,'round10/verify.py'),mode],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(libjxlBuild,'native/lib'),OPENBLAS_NUM_THREADS:'1'}});
+const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=servedPath(root,req.url);res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://127.0.0.1:${server.address().port}`;
 const launch=()=>chromium.launch({channel:'chrome',args:['--no-sandbox','--disable-gpu']});
 let browser;
@@ -71,10 +72,10 @@ try {
  await writeFile(path.join(work,'fixtures.json'),JSON.stringify(fixtures));python('prepare');
  browser=await launch();page=await browser.newPage();await page.goto(origin);
  const encoded=await page.evaluate(async()=>{
-  const {createEncoder}=await import('/wasm/api.mjs');
+  const {createEncoder}=await import('/libjxl-wasm/src/api.mjs');
   const encoder=await createEncoder();
   // Use a dedicated module instance for diagnostic XYB captures.
-  const module=(await import('/build/wasm/codec.mjs')).default;
+  const module=(await import('/libjxl-wasm/build/wasm/codec.mjs')).default;
   const raw=await module();raw._w_diagnostics(1);
   const fixtures=(await(await fetch('/build/round10/fixtures.json')).json()).cases;
   const unpack=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));

@@ -3,6 +3,7 @@ import os,sys,json,ctypes as C,subprocess,hashlib,struct
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];WORK=ROOT/'build/round12'
 sys.path[:0]=[str(ROOT/'round11'),str(ROOT/'round10'),str(ROOT)]
+from proof import LIBJXL
 import numpy as np
 import lcms as l
 import proof
@@ -33,7 +34,7 @@ def inverse_xyb(a):
  return ((mixed+np.cbrt(.0037930732552754493))**3-.0037930732552754493)@np.linalg.inv(o).T
 def capture(path):return np.fromfile(path,dtype='<f4').reshape(H,3,W).transpose(0,2,1)
 def decode(file,backend,mode='linear709'):
- out=WORK/(file+'.'+backend+'.'+mode+'.f32');tool=ROOT/('build/decode-float' if backend=='libjxl' else 'build/oracle/debug/jxl-planar-xyb-oracle')
+ out=WORK/(file+'.'+backend+'.'+mode+'.f32');tool=(LIBJXL/'decode-float' if backend=='libjxl' else ROOT/'build/oracle/debug/jxl-planar-xyb-oracle')
  subprocess.run([str(tool),str(WORK/(file+'.jxl')),str(out),'--'+mode],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  return np.fromfile(out,dtype='<f4').reshape(H,W,3)
 def metric(a,b,mask=None):
@@ -68,7 +69,7 @@ else:
   for backend in ['libjxl','oxide']:
    decoded=decode(name,backend);m=errors(decoded,reference);assert m['max']<.003,(name,backend,m);decoders[backend]=m
   # Header extraction checks num_color_channels=1 using independent decoder output.
-  extracted=WORK/(name+'.extracted.icc');subprocess.run([str(ROOT/'build/decode-float'),str(WORK/(name+'.jxl')),str(extracted),'--icc'],check=True,stdout=subprocess.DEVNULL)
+  extracted=WORK/(name+'.extracted.icc');subprocess.run([str(LIBJXL/'decode-float'),str(WORK/(name+'.jxl')),str(extracted),'--icc'],check=True,stdout=subprocess.DEVNULL)
   assert extracted.read_bytes()[16:20]==b'GRAY'
   if row['colorResolved']['header']=='icc':assert extracted.read_bytes()==icc
   canvases=[]
@@ -96,7 +97,7 @@ else:
    decoded[backend]={'linear709VsLCMS':errors(value,reference),'afterAbsorbanceClamp':m,'sourceSpaceRoundtripLinear709':errors(relinear,reference),'canvasesViaSourceICC':{cs:errors(np.clip(transform(icc,source,dest)*255,0,255),np.clip(transform(icc,a,dest)*255,0,255)) for cs,dest in [('srgb',srgb),('display-p3',p3)]}}
   # Actual djxl, with original-profile float output before independent LCMS.
   data_icc=WORK/(file+'.djxl-data.icc')
-  pfm=WORK/(file+'.djxl.pfm');subprocess.run([str(ROOT/'build/native/tools/djxl'),str(WORK/(file+'.jxl')),str(pfm),'--icc_out='+str(data_icc),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  pfm=WORK/(file+'.djxl.pfm');subprocess.run([str(LIBJXL/'native/tools/djxl'),str(WORK/(file+'.jxl')),str(pfm),'--icc_out='+str(data_icc),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   with pfm.open('rb') as f:
    assert f.readline().strip()==b'PF';w,h=map(int,f.readline().split());scale=float(f.readline());original=np.frombuffer(f.read(),dtype='<f4' if scale<0 else '>f4').reshape(h,w,3)[::-1]
   # Default djxl does not install a CMS for arbitrary ICC; use its actual DATA profile.
@@ -107,7 +108,7 @@ else:
   # Explicit libjxl CMS destination demonstrates true source-ICC output independently.
   source_pixels=decode(file,'libjxl','source-icc')
   target=WORK/(file+'.target.icc')
-  subprocess.run([str(ROOT/'build/decode-float'),str(WORK/(file+'.jxl')),str(target),'--icc'],check=True,stdout=subprocess.DEVNULL)
+  subprocess.run([str(LIBJXL/'decode-float'),str(WORK/(file+'.jxl')),str(target),'--icc'],check=True,stdout=subprocess.DEVNULL)
   if row['colorResolved']['header']=='icc':assert target.read_bytes()==icc,(file,'ICC bytes changed')
   decoded['libjxl']['directHeaderICCThenLCMS']=errors(transform(target.read_bytes(),source_pixels),reference)
   canvases=[]
@@ -125,7 +126,7 @@ else:
   headers.append({'name':name,'strategy':row['header'],'header':row['colorResolved']['header'],'XYBVsLCMS':errors(xyb,expected),'inGamutPixels':int(in_gamut.sum()),'outOfGamutPixels':int(out_gamut.sum()),'canvases':canvases,'video':video,'decoders':decoded})
  l.close(p3);l.close(srgb);l.close(linear709)
  ingestion=json.loads((WORK/'ingestion.json').read_text()) if (WORK/'ingestion.json').exists() else None
- sizes=json.loads((ROOT/'build/wasm/sizes.json').read_text())['codec.wasm']
+ sizes=json.loads((LIBJXL/'wasm/sizes.json').read_text())['codec.wasm']
  native_headers={name:('icc' if subprocess.check_output([str(ROOT/'build/oracle/debug/jxl-planar-xyb-oracle'),str(WORK/(name+'.native.jxl')),str(WORK/'unused'),'--encoding'],text=True).strip()=='ICC' else 'enum') for name in NAMES}
  result={'chromeVersion':browser['version'],'apiChecks':browser['apiChecks'],'nativeHeaders':native_headers,'gray':gray,'headers':headers,'integerIngestion':ingestion and {'integerFloatParityCases':len(ingestion['cases']),'timings':ingestion['timings'],'pixels':4194304,'warmups':1,'runs':5},'wasm':sizes}
  text=json.dumps(result,separators=(',',':'))+'\n'

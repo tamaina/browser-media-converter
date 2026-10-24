@@ -1,6 +1,6 @@
 // MIT Linux-only guard-page test for the experimental source callback ABI.
 // Each raw YUV plane ends immediately before PROT_NONE. No Rust compact copy.
-#include "bridge.cc"
+#include "../src/bridge.cc"
 #include <sys/mman.h>
 #include <unistd.h>
 struct Guard {

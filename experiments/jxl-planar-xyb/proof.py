@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 import time
 ROOT=Path(__file__).resolve().parent
+# Patched libjxl build outputs (libjxl.so, djxl, decode-float, Wasm) live in packages/libjxl-wasm.
+LIBJXL=ROOT.parents[1]/'packages/libjxl-wasm/build'
 class Plane(C.Structure):
     _fields_=[("data",C.POINTER(C.c_uint8))]+[(x,C.c_size_t) for x in ("size","offset","stride","width","height")]
 class Input(C.Structure):

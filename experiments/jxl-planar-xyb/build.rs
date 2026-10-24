@@ -11,6 +11,9 @@ fn main() {
     let library =
         env::var("JXL_LIBRARY").unwrap_or("/usr/lib/x86_64-linux-gnu/libjxl.so.0.11".into());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let src =
+        PathBuf::from(env::var("LIBJXL_WASM_DIR").unwrap_or("../../packages/libjxl-wasm".into()))
+            .join("src");
     assert!(
         Command::new(env::var("CXX").unwrap_or("/usr/bin/g++".into()))
             .args([
@@ -25,9 +28,9 @@ fn main() {
                 "-I",
                 &format!("{include}/../../../native/lib/include"),
                 "-c",
-                "bridge.cc",
-                "-o"
             ])
+            .arg(src.join("bridge.cc"))
+            .arg("-o")
             .arg(out.join("bridge.o"))
             .status()
             .unwrap()
@@ -50,9 +53,13 @@ fn main() {
         "cargo:rustc-link-arg=-Wl,-rpath,{}",
         PathBuf::from(&library).parent().unwrap().display()
     );
-    println!("cargo:rerun-if-changed=bridge.cc");
-    println!("cargo:rerun-if-changed=source_icc.h");
+    println!("cargo:rerun-if-changed={}", src.join("bridge.cc").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        src.join("source_icc.h").display()
+    );
     println!("cargo:rerun-if-changed={include}/jxl/encode.h");
     println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
     println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
+    println!("cargo:rerun-if-env-changed=LIBJXL_WASM_DIR");
 }

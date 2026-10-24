@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 from lcms import WORK,ROOT,generate,transform,rgb_profile,bytes_of,close,table_reference
 sys.path.insert(0,str(ROOT));import proof
+LIBJXL=proof.LIBJXL
 sys.path.insert(0,str(ROOT/'round10'))
 from reference import opsin_reference,errors,delinear
 NAMES=['srgb-para','srgb-table','p3','adobe','prophoto','lut']
@@ -27,7 +28,7 @@ def native(name):
 def run(cmd):return subprocess.check_output([str(x) for x in cmd],text=True)
 def decode(name,backend,mode):
  out=WORK/(name+'.'+backend+'.'+mode+'.f32')
- tool=ROOT/('build/decode-float' if backend=='libjxl' else 'build/oracle/debug/jxl-planar-xyb-oracle')
+ tool=(LIBJXL/'decode-float' if backend=='libjxl' else ROOT/'build/oracle/debug/jxl-planar-xyb-oracle')
  metadata=run([tool,WORK/(name+'.jxl'),out,'--'+mode]);return np.fromfile(out,dtype='<f4').reshape(H,W,3),metadata
 if sys.argv[1]=='prepare':
  generate();os.environ['JXL_EXPERIMENT_CAPTURE_XYB']='1';os.environ['JXL_EXPERIMENT_OBSERVE_REFERENCE']='1';os.environ['JXL_EXPERIMENT_DISTANCE']='0.01'
@@ -62,7 +63,7 @@ elif sys.argv[1]=='verify':
    decoded[backend]=per
   # Actual djxl original-profile PFM. Convert those pixels independently by LCMS.
   pfm=WORK/(name+'.djxl.pfm')
-  subprocess.run([str(ROOT/'build/native/tools/djxl'),str(WORK/(name+'.jxl')),str(pfm),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  subprocess.run([str(LIBJXL/'native/tools/djxl'),str(WORK/(name+'.jxl')),str(pfm),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   with pfm.open('rb') as f:
    assert f.readline().strip()==b'PF';w,h=map(int,f.readline().split());scale=float(f.readline());dj=np.frombuffer(f.read(),dtype='<f4' if scale<0 else '>f4').reshape(h,w,3)[::-1]
   djlinear=transform(icc,dj)
@@ -70,17 +71,17 @@ elif sys.argv[1]=='verify':
   # Explicit destination avoids a coarse fixture B2A LUT when evaluating the
   # encoded XYB itself. Retain the original-profile roundtrip diagnostic above.
   linear_pfm=WORK/(name+'.djxl-linear709.pfm')
-  subprocess.run([str(ROOT/'build/native/tools/djxl'),str(WORK/(name+'.jxl')),str(linear_pfm),'--num_threads=1','--bits_per_sample=32','--color_space=RGB_D65_SRG_Rel_Lin','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  subprocess.run([str(LIBJXL/'native/tools/djxl'),str(WORK/(name+'.jxl')),str(linear_pfm),'--num_threads=1','--bits_per_sample=32','--color_space=RGB_D65_SRG_Rel_Lin','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   with linear_pfm.open('rb') as f:
    assert f.readline().strip()==b'PF';w,h=map(int,f.readline().split());scale=float(f.readline());dj=np.frombuffer(f.read(),dtype='<f4' if scale<0 else '>f4').reshape(h,w,3)[::-1]
   decoded['djxl'].update({'linear709':errors(dj,reference),'linear709AfterAbsorbanceClamp':errors(dj,effective)})
   assert decoded['djxl']['linear709AfterAbsorbanceClamp']['max']<.04,(name,decoded['djxl'])
   srgb_png=WORK/(name+'.djxl-srgb.png')
-  subprocess.run([str(ROOT/'build/native/tools/djxl'),str(WORK/(name+'.jxl')),str(srgb_png),'--num_threads=1','--bits_per_sample=8','--color_space=RGB_D65_SRG_Rel_SRG','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+  subprocess.run([str(LIBJXL/'native/tools/djxl'),str(WORK/(name+'.jxl')),str(srgb_png),'--num_threads=1','--bits_per_sample=8','--color_space=RGB_D65_SRG_Rel_SRG','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   from PIL import Image
   decoded['djxl']['srgb8']=errors(np.asarray(Image.open(srgb_png).convert('RGB')),expected_srgb*255)
   assert decoded['djxl']['srgb8']['max']<12,(name,decoded['djxl'])
-  extracted=WORK/(name+'.decoded.icc');run([ROOT/'build/decode-float',WORK/(name+'.jxl'),extracted,'--icc'])
+  extracted=WORK/(name+'.decoded.icc');run([LIBJXL/'decode-float',WORK/(name+'.jxl'),extracted,'--icc'])
   row=next(c for c in browser['cases'] if c['name']==name)
   header=row['colorResolved']['header']
   if header=='icc':assert extracted.read_bytes()==icc,(name,'ICC not retained exactly')
@@ -92,7 +93,7 @@ elif sys.argv[1]=='verify':
   wasm_encoding=run([oracle,WORK/(name+'.jxl'),WORK/'unused','--encoding']).strip()
   assert ('icc' if wasm_encoding=='ICC' else 'enum')==header,(name,'header report mismatch')
   if native_header=='icc':
-   run([ROOT/'build/decode-float',WORK/(name+'.native.jxl'),extracted,'--icc'])
+   run([LIBJXL/'decode-float',WORK/(name+'.native.jxl'),extracted,'--icc'])
    assert extracted.read_bytes()==icc,(name,'native ICC retention')
   row['nativeHeader']=native_header
   cases.append({**row,'header':header,'sourceIccRetained':header=='icc','iccBytes':len(icc),'iccSha256':hashlib.sha256(icc).hexdigest(),'wasmXYBVsLCMS':arithmetic,'nativeXYBVsLCMS':native_arithmetic,'tableReference':table_checks,'preEncoderLinear709VsLCMS':prelinear,'nativeVsWasmXYB':parity,'nativeWasmXYBBitExact':bool(np.array_equal(wasm,nat)),'nativeWasmDecodedLinear709':decoded_parity,'nativeWasmByteExact':(WORK/(name+'.native.jxl')).read_bytes()==(WORK/(name+'.jxl')).read_bytes(),'outOfGamut':{'referenceMin':float(reference.min()),'referenceMax':float(reference.max()),'preEncoderReconstructedMin':float(inverse_xyb(wasm).min()),'absorbanceClampSamples':clamps,'irreversibleLinearError':errors(effective,reference)},'decoded':decoded})
@@ -109,7 +110,7 @@ elif sys.argv[1]=='verify':
   assert metric['max']<12 and metric['mean']<2,(r['name'],r['colorSpace'],metric)
   chrome.append({**r,'jxlVsLCMS8':metric})
  close(p3)
- sizes=json.loads((ROOT/'build/wasm/sizes.json').read_text())['codec.wasm']
+ sizes=json.loads((LIBJXL/'wasm/sizes.json').read_text())['codec.wasm']
  result={'chromeVersion':browser['version'],'distance':.01,'effort':3,'reference':'system LCMS2 TYPE_RGB_FLT, relative colorimetric, NOOPTIMIZE; independently specified D65 BT709 gamma1 destination','wasm':sizes,'apiChecks':browser['apiChecks'],'forcedIccDiagnostic':json.loads((WORK/'forced-icc-diagnostic.json').read_text()) if (WORK/'forced-icc-diagnostic.json').exists() else None,'profiles':cases,'chrome':chrome,'timings':{'pixels':2048*2048,'warmups':1,'runs':5,'distance':1,'results':browser['timings']}}
  text=json.dumps(result,separators=(',',':'))+'\n';assert len(text)<30000
  (WORK/'observations.json').write_text(text)

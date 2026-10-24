@@ -8,22 +8,23 @@ published packages depends on this directory.
 
 - **[WASM.md](WASM.md)**: the browser API, colour rules, ICC handling, key
   measurements, limitations, and build/test commands. Start here.
-- libjxl is pinned to
+- Everything that depends on libjxl (the pinned
   [v0.11.1 / 794a5dcf](https://github.com/libjxl/libjxl/tree/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc)
-  and patched with `libjxl-xyb.patch`. `skcms-xyb.patch` fixes skcms XYZ-PCS A2B
-  scaling. The patched chunked-input ABI is **not** binary compatible with stock
-  libjxl.
+  checkout, `libjxl-xyb.patch`, `skcms-xyb.patch`, the C++ bridge, the Wasm
+  exports and the JS API) lives in
+  **[`packages/libjxl-wasm`](../../packages/libjxl-wasm)** (`@browser-mc/libjxl-wasm`,
+  private). This directory keeps the Rust session and the verification suites.
+  The patched chunked-input ABI is **not** binary compatible with stock libjxl.
 
 ## Layout
 
 | Path | Role |
 | --- | --- |
-| `src/lib.rs`, `proof.h` | Rust planar session: validation, owned planes, C ABI |
-| `bridge.cc`, `source_icc.h` | C++ bridge to patched libjxl; bounded matrix/TRC ICC reader |
-| `wasm/entry.cc`, `wasm/api.mjs` | Emscripten exports and the JS API (`createEncoder`) |
-| `build*.sh`, `build.rs`, `Cargo.*` | Native, Rust and WASM builds |
+| `src/lib.rs` | Rust planar session: validation, owned planes, the C ABI in `packages/libjxl-wasm/src/planar_session.h` |
+| `build*.sh`, `build.rs`, `Cargo.*` | Rust builds; `build.sh` / `build-wasm.sh` call `packages/libjxl-wasm/scripts/build-{native,wasm}.sh` |
+| `libjxl-package.mjs` | Package paths for the runners; test servers map `/libjxl-wasm/` to the package |
 | `oracle/` | Independent jxl-oxide decoder (Rust) used by the tests |
-| `decode_float.cc`, `tail_guard.cc`, `wasm/range-scan.cc` | Native test tools (stock-libjxl float decoder, kernel tail guard, range scan) |
+| `wasm/range-scan.cc` | Native range-scan diagnostic (no libjxl) |
 | `test_xyb.py`, `fixtures.py`, `validation.py`, `proof.py` | Native tests and the `proof.py input.json out.jxl` CLI |
 | `wasm/browser-test.mjs`, `wasm/native.py`, `wasm/reference.py` | Main Chrome suite with a native-parity and float64 reference |
 | `round10/` | Colour resolution (matrices, primaries, transfers, siting) vs an independent NumPy reference |
@@ -33,7 +34,7 @@ published packages depends on this directory.
 
 ## Native path
 
-The native C ABI (`proof.h`) accepts U8 I420/I422/I444/NV12 and LE U16 10/12-bit
+The native C ABI (`planar_session.h`) accepts U8 I420/I422/I444/NV12 and LE U16 10/12-bit
 I420/I422/I444. It supports BT.601/709 NCL, full and limited range, and
 left/center/topleft siting, with BT.709 or P3 primaries and sRGB/BT.709
 transfer. Separately, BT.2020 PQ/HLG is supported through the row path plus the
@@ -43,11 +44,13 @@ spans.
 ```sh
 cd experiments/jxl-planar-xyb
 CC=/usr/bin/gcc CXX=/usr/bin/g++ bash build.sh
-export LD_LIBRARY_PATH="$PWD/build/native/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$PWD/../../packages/libjxl-wasm/build/native/lib:${LD_LIBRARY_PATH:-}"
 python3 test_xyb.py
-./build/tail-guard
+../../packages/libjxl-wasm/build/tail-guard
 ```
 
-`build.sh` verifies the libjxl revision, applies the patches, and builds libjxl,
-the Rust adapter, the stock-libjxl decoder, and the jxl-oxide oracle. It uses
-one job to limit memory. Everything it builds stays in the ignored `build/`.
+`build.sh` runs the package's `build-native.sh` (verifies the libjxl revision,
+applies the patches, builds libjxl, `djxl`, the stock-libjxl decoder and the tail
+guard into `packages/libjxl-wasm/build/`), then the Rust adapter and the
+jxl-oxide oracle into this directory's ignored `build/`. It uses one job to
+limit memory.

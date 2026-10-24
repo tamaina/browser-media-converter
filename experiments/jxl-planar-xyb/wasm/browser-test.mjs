@@ -5,13 +5,14 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
+import {libjxlBuild,servedPath} from '../libjxl-package.mjs';
 import os from 'node:os';
 const root=path.resolve(fileURLToPath(new URL('../',import.meta.url)));
 const work=path.join(root,'build/browser');await mkdir(work,{recursive:true});
 const benchmark=process.argv.includes('--benchmark');
 const real10=process.argv.includes('--real10') || process.env.REAL10==='1';
 const observationsSampleKeys=['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'];
-const python=mode=>execFileSync('python3',[path.join(root,'wasm/native.py'),mode],{stdio:'inherit',env:{...process.env,LD_LIBRARY_PATH:path.join(root,'build/native/lib'),PYTHONPATH:[path.join(root,'build/python'),process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)},maxBuffer:16*1024*1024});
+const python=mode=>execFileSync('python3',[path.join(root,'wasm/native.py'),mode],{stdio:'inherit',env:{...process.env,LD_LIBRARY_PATH:path.join(libjxlBuild,'native/lib'),PYTHONPATH:[path.join(root,'build/python'),process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)},maxBuffer:16*1024*1024});
 const repo=path.resolve(root,'../..');
 // Generate tiny repo-owned clips only under ignored build/, with single-thread ffmpeg.
 // IVF has a 32-byte file header and 12-byte per-frame headers; one key frame suffices.
@@ -62,8 +63,7 @@ if(benchmark && real10) {
 const server=createServer(async(req,res)=> {
   try {
     const url=new URL(req.url,'http://localhost');
-    const file=path.resolve(root,'.'+decodeURIComponent(url.pathname));
-    if(file!==root && !file.startsWith(root+path.sep)) throw Error('path');
+    const file=servedPath(root,decodeURIComponent(url.pathname));
     if(url.pathname==='/') {res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>JXL WASM proof</title>');return;}
     res.setHeader('Content-Type',file.endsWith('.wasm')?'application/wasm':file.endsWith('.mjs')?'text/javascript':'application/octet-stream');
     res.end(await readFile(file));
@@ -170,7 +170,7 @@ try {
     const probes=await (await fetch('/build/browser/probes.json')).json();
     const unpack=data=>Uint8Array.from(atob(data),c=>c.charCodeAt(0));
     const pack=bytes=>{let text='';for(let i=0;i<bytes.length;i+=32768)text+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(text);};
-    const {createEncoder}=await import('/wasm/api.mjs');const encoder=await createEncoder();
+    const {createEncoder}=await import('/libjxl-wasm/src/api.mjs');const encoder=await createEncoder();
     const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
     const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,transfer:'hlg'},{...base,chromaSiting:'bottom'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
     for(const i of invalid) for(const validation of ['clip','strict']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
@@ -307,7 +307,7 @@ try {
   python('verify');
   const verified=JSON.parse(await readFile(path.join(work,'verified.json')));
   const native=JSON.parse(await readFile(path.join(work,'native.json')));
-  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},measurement:{sampleFields:['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'],warmups:1,timedRuns:5,order:['fused','rgb','rgbE2e'],instrumentation:'off for every benchmark mode; on for test fused',clock:'emscripten_get_now inside WASM; performance.now including JS marshaling/free for total',rgbE2e:'same VideoFrame.copyTo planes -> owned Rust session -> clipped planar_region -> round to source depth scale -> float RGB encode; no RGB preflight during create',copyMs:'Rust metadata/layout checks plus owned plane copy; excludes JS-to-WASM copy',sampleCheckMs:'stored sample depth check only; subset of preflightMs',preflightMs:'stored sample depth check (U8 needs no scan); default clips inside conversion/kernel',nativeTotal:'same boundaries excluding JS-to-WASM and output-to-JS copies; includes output copy/free and session destroy'},fixturePreparation:{realSize:'513x257 plus native-size bbb 1280x720; native-size fujioka range analysis only',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:null,reference:'clamp reconstructed nonlinear RGB to [0,1], round to nearest source-depth integer, divide by (2^depth-1); decoded floats are not clipped',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,videoDecoder:preparation.decoderSanity,formatSupport:preparation.support,depthVerification:JSON.parse(await readFile(path.join(work,'depth-verification.json'))),rangeAnalysis,rejectionProbes:probeResults,nativeRejectionProbes:JSON.parse(await readFile(path.join(work,'native-probes.json'))),caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(root,'build/wasm/sizes.json'))),cases:verified.map((r,i)=>{
+  const observations={date:new Date().toISOString(),host:{platform:os.platform(),release:os.release(),cpu:os.cpus()[0].model,node:process.version,chrome:version},toolchain:{rust:execFileSync('rustc',['--version'],{encoding:'utf8'}).trim(),ffmpeg:benchmark?execFileSync('/usr/bin/ffmpeg',['-version'],{encoding:'utf8'}).split('\n')[0]:null,libjxl:'v0.11.1 / 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc'},measurement:{sampleFields:['sampleCheckMs','copyMs','preflightMs','createMs','conversionMs','encodeMs','totalMs'],warmups:1,timedRuns:5,order:['fused','rgb','rgbE2e'],instrumentation:'off for every benchmark mode; on for test fused',clock:'emscripten_get_now inside WASM; performance.now including JS marshaling/free for total',rgbE2e:'same VideoFrame.copyTo planes -> owned Rust session -> clipped planar_region -> round to source depth scale -> float RGB encode; no RGB preflight during create',copyMs:'Rust metadata/layout checks plus owned plane copy; excludes JS-to-WASM copy',sampleCheckMs:'stored sample depth check only; subset of preflightMs',preflightMs:'stored sample depth check (U8 needs no scan); default clips inside conversion/kernel',nativeTotal:'same boundaries excluding JS-to-WASM and output-to-JS copies; includes output copy/free and session destroy'},fixturePreparation:{realSize:'513x257 plus native-size bbb 1280x720; native-size fujioka range analysis only',bbbTimestampSeconds:10,bbbInputColor:'bt709 matrix/primaries/transfer (confirmed with ffprobe)',bbbOutputTransfer:'srgb',contrastInset:null,reference:'clamp reconstructed nonlinear RGB to [0,1], round to nearest source-depth integer, divide by (2^depth-1); decoded floats are not clipped',outputMatrix:'bt709',outputRange:'full',format:'I420'},benchmark,videoDecoder:preparation.decoderSanity,formatSupport:preparation.support,depthVerification:JSON.parse(await readFile(path.join(work,'depth-verification.json'))),rangeAnalysis,rejectionProbes:probeResults,nativeRejectionProbes:JSON.parse(await readFile(path.join(work,'native-probes.json'))),caseCount:verified.length,sizes:JSON.parse(await readFile(path.join(libjxlBuild,'wasm/sizes.json'))),cases:verified.map((r,i)=>{
     if(r.benchmark) {
       const compact={...r,native:native[i].native};
       // Full raw timing samples remain in ignored build/browser/{browser,native}.json.

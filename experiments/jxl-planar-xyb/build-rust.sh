@@ -6,12 +6,9 @@ export TMPDIR="$PWD/build/tmp"
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER:-/usr/bin/gcc}"
 export CARGO_TARGET_DIR="$PWD/build/target"
 if [[ -z ${JXL_INCLUDE:-} ]]; then
-  echo 'Set JXL_INCLUDE to matching libjxl >= 0.11 development headers.' >&2
+  echo 'Set JXL_INCLUDE to the patched libjxl headers (run build.sh).' >&2
   exit 2
 fi
+# build.rs compiles packages/libjxl-wasm/src/bridge.cc and links JXL_LIBRARY.
 cargo build --release --locked --jobs 1
-"${CXX:-/usr/bin/g++}" -std=c++17 -O2 -Wall -Wextra -Werror -I"$JXL_INCLUDE" -Ibuild/native/lib/include decode_float.cc \
-  "${SYSTEM_JXL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl.so.0.11}" "${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.11}" -o build/decode-float
 CARGO_TARGET_DIR="$PWD/build/oracle" cargo build --manifest-path oracle/Cargo.toml --locked --jobs 1
-"${CXX:-/usr/bin/g++}" -std=c++17 -O1 -Wall -Wextra -Werror -I"$JXL_INCLUDE" -Ibuild/native/lib/include tail_guard.cc \
-  "$JXL_LIBRARY" -Wl,-rpath,"$PWD/build/native/lib" -o build/tail-guard

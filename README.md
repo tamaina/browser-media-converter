@@ -12,6 +12,7 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
 - `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware CPU preserve resize.
 - `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware CPU preserve resize, scene-keyframe forcing, and stream-only HLS output.
+- `@browser-mc/libjxl-wasm` (private, experimental): patched libjxl v0.11.1 native/Wasm builds, the C++ bridge, and the `createEncoder` JS API used by `experiments/jxl-planar-xyb`.
 
 ## Commands
 

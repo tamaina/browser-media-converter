@@ -3,20 +3,21 @@ import {chromium} from 'playwright';
 import {createServer} from 'node:http';
 import {readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {libjxlBuild,servedPath} from '../libjxl-package.mjs';
 import {execFileSync} from 'node:child_process';
 const root=path.resolve(import.meta.dirname,'..'),work=path.join(root,'build/round12');
-for(const script of [['round12/prepare.py'],['round12/verify.py','prepare']])execFileSync('python3',script.map(s=>s.endsWith('.py')?path.join(root,s):s),{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(root,'build/native/lib')}});
-const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=path.resolve(root,'.'+req.url);if(!p.startsWith(root+'/'))throw Error('path');res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':p.endsWith('.png')?'image/png':p.endsWith('.jpg')?'image/jpeg':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
+for(const script of [['round12/prepare.py'],['round12/verify.py','prepare']])execFileSync('python3',script.map(s=>s.endsWith('.py')?path.join(root,s):s),{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(libjxlBuild,'native/lib')}});
+const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=servedPath(root,req.url);res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':p.endsWith('.png')?'image/png':p.endsWith('.jpg')?'image/jpeg':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try {
  browser=await chromium.launch({channel:'chrome',args:['--no-sandbox','--disable-gpu']});const version=browser.version();
  const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}`);
  const result=await page.evaluate(async()=>{
-  const {createEncoder}=await import('/wasm/api.mjs'),e=await createEncoder();
+  const {createEncoder}=await import('/libjxl-wasm/src/api.mjs'),e=await createEncoder();
   const bytes=async n=>new Uint8Array(await(await fetch(n)).arrayBuffer()),width=256,height=32;
   const pack=a=>{let s='';for(let i=0;i<a.length;i+=32768)s+=String.fromCharCode(...a.subarray(i,i+32768));return btoa(s);};
   const u8=await bytes('/build/round11/patches.u8'),cases=[],gray=[];let apiChecks=0;
-  const raw=await(await import('/build/wasm/codec.mjs')).default();raw._w_diagnostics(1);
+  const raw=await(await import('/libjxl-wasm/build/wasm/codec.mjs')).default();raw._w_diagnostics(1);
   async function capture(data,icc,header){
    const ptr=[],alloc=a=>{const p=raw._malloc(a.byteLength);ptr.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    try{
@@ -81,4 +82,4 @@ try {
 }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 // Integer/Float32 parity (own browser), then the independent LCMS/native verifier.
 execFileSync(process.execPath,[path.join(root,'round12/ingestion.mjs'),...process.argv.slice(2).filter(a=>a==='--quick')],{stdio:'inherit',env:process.env});
-execFileSync('python3',[path.join(root,'round12/verify.py'),'verify'],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(root,'build/native/lib')}});
+execFileSync('python3',[path.join(root,'round12/verify.py'),'verify'],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(libjxlBuild,'native/lib')}});

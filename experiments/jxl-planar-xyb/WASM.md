@@ -2,14 +2,16 @@
 
 Patched libjxl v0.11.1 (794a5dcf), Highway four-lane SIMD, Emscripten `-O2 -msimd128`.
 The API is synchronous, SDR-only, and produces lossy XYB/VarDCT. Builds,
-fixtures, logs and codestreams stay in the ignored `build/`. The full
+fixtures, logs and codestreams stay in the ignored `build/`. The libjxl build,
+bridge, Wasm exports and JS API are in `packages/libjxl-wasm` (its own ignored
+`build/`); this directory holds the Rust session and the suites. The full
 round-by-round history (Rounds 4–12, with per-round reports and observation
 JSON) is in git at `ed28b03`; see "History" below.
 
 ## API
 
 ```js
-import {createEncoder} from './wasm/api.mjs';
+import {createEncoder} from '@browser-mc/libjxl-wasm'; // packages/libjxl-wasm/src/api.mjs
 const encoder = await createEncoder();
 
 // Planar YUV straight from VideoFrame.copyTo (offsets/strides in bytes).
@@ -205,16 +207,16 @@ Set `TMPDIR` etc. to `build/tmp` if you want temporary files kept in the tree;
 
 ```sh
 cd experiments/jxl-planar-xyb
-bash build.sh                  # clones/patches libjxl, native libs, Rust adapter, oracles
-bash build-wasm.sh             # build/wasm/codec.{mjs,wasm}
+bash build.sh                  # package: clone/patch libjxl, native libs, djxl, tools; then Rust adapter, oracle
+bash build-wasm.sh             # Rust session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
 node wasm/browser-test.mjs     # main suite, then round10 → round11 → round12 (each closes Chrome first)
 node wasm/browser-test.mjs --benchmark [--real10]   # timings → build/browser/benchmark-observations.json
-python3 test_xyb.py && ./build/tail-guard           # native (LD_LIBRARY_PATH=build/native/lib)
+python3 test_xyb.py && ../../packages/libjxl-wasm/build/tail-guard   # native (LD_LIBRARY_PATH=../../packages/libjxl-wasm/build/native/lib)
 node round12/png-avif.mjs      # PNG iCCP/cICP → AVIF in browser-image-resizer-ex
 ```
 
 The Python verifiers need `PYTHONPATH=build/python` and
-`LD_LIBRARY_PATH=build/native/lib`; the runners set these themselves.
+`LD_LIBRARY_PATH=../../packages/libjxl-wasm/build/native/lib`; the runners set these themselves.
 
 What the suites check:
 - **Main suite.** Every format, depth and siting combination, plus validation and ownership. Output is decoded by jxl-oxide and stock libjxl and compared with the native build and `wasm/reference.py`.

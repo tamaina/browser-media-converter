@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from reference import reconstruct,linear,delinear,to709,opsin_reference,errors,rgb_xyz,oxide_gamut_policy
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT));import proof
+LIBJXL=proof.LIBJXL
 WORK=ROOT/'build/round10'
 fixtures=json.loads((WORK/'fixtures.json').read_text())['cases']
 def prep(f):
@@ -21,7 +22,7 @@ def xyb_read(path,f):return np.fromfile(path,dtype='<f4').reshape(f['height'],3,
 def floats(path,f):return np.fromfile(path,dtype='<f4').reshape(f['height'],f['width'],3)
 def decode(path,f,backend,mode):
     out=WORK/(path.stem+'.'+backend+'.'+mode+'.f32')
-    cmd=[str(ROOT/('build/decode-float' if backend=='libjxl' else 'build/oracle/debug/jxl-planar-xyb-oracle')),str(path),str(out)]
+    cmd=[str((LIBJXL/'decode-float' if backend=='libjxl' else ROOT/'build/oracle/debug/jxl-planar-xyb-oracle')),str(path),str(out)]
     if mode!='source':cmd.append('--'+mode)
     metadata=subprocess.check_output(cmd,text=True)
     return floats(out,f),metadata
@@ -80,7 +81,7 @@ elif sys.argv[1]=='verify':
         header=decoded['libjxl']['header'];assert header['primaries']=={'bt709':1,'smpte170m':2,'bt470bg':2,'smpte432':11,'bt2020':9}[f['primaries']],(name,header)
         # Actual djxl CLI, source-profile PFM float output. PFM uses bottom-up rows.
         pfm=WORK/(name+'.djxl.pfm')
-        subprocess.run([str(ROOT/'build/native/tools/djxl'),str(WORK/(name+'.jxl')),str(pfm),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run([str(LIBJXL/'native/tools/djxl'),str(WORK/(name+'.jxl')),str(pfm),'--num_threads=1','--bits_per_sample=32','--quiet'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         with pfm.open('rb') as stream:
             assert stream.readline().strip()==b'PF';w,h=map(int,stream.readline().split());scale=float(stream.readline());a=np.frombuffer(stream.read(),dtype='<f4' if scale<0 else '>f4').reshape(h,w,3)[::-1]
         # djxl's PFM defaults to linear source primaries; establish explicitly below.

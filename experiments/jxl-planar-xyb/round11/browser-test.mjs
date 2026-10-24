@@ -4,21 +4,22 @@ import {createServer} from 'node:http';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
+import {libjxlBuild,servedPath} from '../libjxl-package.mjs';
 const root=path.resolve(import.meta.dirname,'..'),work=path.join(root,'build/round11');
 await mkdir(work,{recursive:true});
-const python=mode=>execFileSync('python3',[path.join(root,'round11/verify.py'),mode],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(root,'build/native/lib')}});
+const python=mode=>execFileSync('python3',[path.join(root,'round11/verify.py'),mode],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(libjxlBuild,'native/lib')}});
 python('prepare');
-const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=path.resolve(root,'.'+req.url);if(!p.startsWith(root+'/'))throw Error('path');res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':p.endsWith('.png')?'image/png':p.endsWith('.jpg')?'image/jpeg':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
+const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=servedPath(root,req.url);res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':p.endsWith('.png')?'image/png':p.endsWith('.jpg')?'image/jpeg':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try {
  browser=await chromium.launch({channel:'chrome',args:['--no-sandbox','--disable-gpu']});const version=browser.version();
  const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}`);
  const results=await page.evaluate(async()=>{
-  const {createEncoder}=await import('/wasm/api.mjs');const encoder=await createEncoder();
+  const {createEncoder}=await import('/libjxl-wasm/src/api.mjs');const encoder=await createEncoder();
   const bytes=async name=>new Uint8Array(await(await fetch('/build/round11/'+name)).arrayBuffer());
   const pack=a=>{let s='';for(let i=0;i<a.length;i+=32768)s+=String.fromCharCode(...a.subarray(i,i+32768));return btoa(s);};
   const u8=await bytes('patches.u8'),rgb=new Float32Array((await bytes('patches.f32')).buffer),width=256,height=32;
-  const raw=await(await import('/build/wasm/codec.mjs')).default();raw._w_diagnostics(1);
+  const raw=await(await import('/libjxl-wasm/build/wasm/codec.mjs')).default();raw._w_diagnostics(1);
   const cases=[],options={distance:.01,observe:true};
   for(const name of ['srgb-para','srgb-table','p3','adobe','prophoto','lut']) {
    const icc=await bytes(name+'.icc');const data=encoder.encodeRgb({width,height,data:u8,icc},options);
