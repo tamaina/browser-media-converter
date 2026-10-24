@@ -1,7 +1,10 @@
 # Experimental planar YUV → XYB → JPEG XL
 
 The SDR WebAssembly build, browser API, verification and benchmarks are documented
-in [WASM.md](WASM.md).
+in [WASM.md](WASM.md). Round 12 adds true gray ICC input, borrowed U8/U16
+ingestion and explicit ICC header targets; its Chrome compatibility measurements
+and remaining decoder limits are in the Round 12 chapter.
+
 
 The current version adds a **fused Highway SIMD SDR path**, retaining the prior
 row implementation for HDR/wide-gamut fallback and comparison. Start with

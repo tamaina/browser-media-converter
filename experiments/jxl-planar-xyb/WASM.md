@@ -1822,3 +1822,256 @@ accuracy. It also measures native/WASM decoded output parity. This changes no
 encoder output or prior regression gate. The compact JSON is 14,702 bytes;
 wasm-observations.json is 80,112 bytes (<100 kB).
 No commits or staging were performed.
+
+## Round 12 — gray ICC, Chrome ICC headers, PNG metadata, fast integer input
+
+### API and gray source conversion
+
+`encodeRgb` now accepts gray ICC profiles with its existing packed RGB/RGBA
+integer input or packed Float32 RGB input. It requires **exact R=G=B** (and
+fully opaque RGBA). A mismatch raises `ICC: Gray profile requires R=G=B`;
+`iccFallback:'srgb'` deliberately retries those original RGB samples as untagged
+sRGB and returns the reason in warnings. One-channel `gray`/`L` input is not
+implemented; callers still supply browser-decoded RGB. Existing finite nominal
+Float32 input validation and the 4 MP limit are unchanged.
+
+This produces a **true grayscale JXL**, `num_color_channels=1`,
+`uses_original_profile=false`, ordinary lossy XYB/VarDCT. The bridge supplies
+one channel to the frame adapter, which replicates it for the three internal
+XYB planes. It does not fabricate an RGB ICC. `colorResolved.iccModel='gray'`
+and `header='enum'|'icc'` report the actual gray encoding decision.
+Gamma-2.2 and parametric sRGB fixtures use gray enum headers on WASM; the table
+fixture keeps the original gray ICC. Extracting each output profile independently
+confirms `GRAY`, and the table ICC bytes are preserved exactly.
+
+`source_icc.h` evaluates `kTRC` using the same bounded `curv`/`para` reader and
+256-entry U8 curve tables as RGB. Gray PCS is achromatic D50 (.9642,1,.8249)
+times the linearized Y. The same Bradford-adapted D50 PCS → BT.709/D65 inverse
+matrix used for RGB is folded into opsin. No RGB/output-range clipping is added.
+Unsupported gray LUT/curve forms reject clearly rather than silently using an
+RGB approximation. RGB matrix/TRC and LUT conversion semantics are unchanged.
+
+Generated profiles live under `build/round12`; none of those binary profiles
+are committed. Independent system LCMS2 uses TYPE_GRAY_FLT → TYPE_RGB_FLT,
+relative colorimetric, NOOPTIMIZE and a separately specified linear709 target.
+Distance .01, effort 3, 256×32 ramps:
+
+| Gray profile | Header | Captured XYB vs LCMS max | Exact table XYB max | libjxl / oxide decoded linear709 max |
+| --- | --- | ---: | ---: | ---: |
+| gamma 2.2 | gray enum | 1.78814e-7 | — | 1.30653e-4 / 1.31130e-4 |
+| sRGB parametric | gray enum | 1.63851e-7 | — | 1.49190e-4 / 1.49488e-4 |
+| 1024-entry table | gray ICC | 9.07471e-5 | 2.12122e-7 | 1.28090e-4 / 1.28627e-4 |
+
+All three native/WASM captured XYB arrays are bit-exact. As in Round 11,
+LCMS quantizes table-curve interpolation to 16-bit steps. The raw error remains
+reported, while exact independent float64 interpolation must pass the unchanged
+3e-6 XYB arithmetic gate and LCMS linear disagreement must stay below 1/65535.
+Native headers agree with the WASM choices for all three gray fixtures.
+Reconstructed pre-encoder gray Y max errors are 7.24731e-7, 6.03837e-7 and
+7.72006e-6 respectively. The JSON also records pre-encoder linear709 errors;
+inverting approximate float XYB introduces a few e-6 of additional arithmetic
+error. Integer/Float32 equality is checked for U8/U16 RGB/RGBA for every gray
+fixture (12 pairs); gray had no successful Round 11 output to compare against.
+
+Chrome 156.0.8078.47, one `channel:'chrome'` instance at a time:
+all gray JXL vs same-ICC PNG/JPEG comparisons have max **3 levels on sRGB** and
+**2 on display-p3**, at distance .01. Worst LCMS differences are 3.00936 / 2.00937
+levels respectively. `ImageDecoder` with `colorSpaceConversion:'none'` followed
+by RGBA `copyTo` produces exact R=G=B for all six gray PNG/JPEG fixtures.
+Default color conversion has a one-level channel discrepancy for gamma-gray;
+the API's equal-channel requirement applies to the unconverted source samples.
+
+### Why Chrome's exact ICC header loses wide-gamut color
+
+The research memo's older Blink/C API source is not the implementation in this
+Chrome binary. The matching Chromium **156.0.8078.47** source uses the jxl-rs
+**0.7** wrapper, vendor upstream revision
+`624ce908afcf8eb0dc2585a671535eaabb5d88cc`:
+
+- [jxl `can_output_to`](https://chromium.googlesource.com/chromium/src/+/156.0.8078.47/third_party/rust/chromium_crates_io/vendor/jxl-v0_7/src/api/color.rs): arbitrary ICC returns false; supported simple RGB encodings return true.
+- [default XYB output selection](https://chromium.googlesource.com/chromium/src/+/156.0.8078.47/third_party/rust/chromium_crates_io/vendor/jxl-v0_7/src/api/inner/codestream_parser/image_info.rs): an unsupported embedded output profile falls back to sRGB for integers, linear sRGB for float output.
+- [Blink decoder](https://chromium.googlesource.com/chromium/src/+/156.0.8078.47/third_party/blink/renderer/platform/image-decoders/jxl/jxl_image_decoder.cc) chooses Bgra8/Rgba8 or RgbaF16, then attaches the wrapper's output ICC. [The wrapper](https://chromium.googlesource.com/chromium/src/+/156.0.8078.47/third_party/rust/jxl/v0_7/wrapper/lib.rs) obtains `output_color_profile()`, not the original embedded ICC.
+
+Thus the measured U8 path reconstructs into a narrow, quantized sRGB
+intermediate before display-p3 canvas conversion. It is not a global wrong
+source TRC or a second application of the source ICC. Exact ICC examples:
+
+| Profile | sRGB canvas max vs LCMS | P3 canvas: in sRGB gamut max | P3 canvas: outside sRGB gamut max | P3 vs independently predicted sRGB8 intermediate max |
+| --- | ---: | ---: | ---: | ---: |
+| P3 | 1.003 | 1.003 | 117 | 1.384 |
+| Adobe | .994 | 1.024 | 117 | 1.290 |
+| ProPhoto D50 | 1.008 | 1.285 | 117 | 1.361 |
+| synthetic LUT | 1.006 | 1.135 | 117 | 1.290 |
+| odd primaries / unequal TRCs | 1.013 | 1.395 | 39.688 | 1.490 |
+
+In/out classification uses independent LCMS linear709 with a 1e-4 tolerance
+around [0,1]. Direct ImageDecoder → VideoFrame and createImageBitmap →
+VideoFrame RGBA copyTo diagnostics are retained in `build/round12/browser.json`
+and `verified-full.json`. RGBAF16 is not an accepted VideoPixelFormat in this
+Chrome, so no pre-canvas float readback is claimed. `none` ImageDecoder results
+are BGRX; the committed compact summary retains their sRGB reference errors.
+
+WASM skcms still canonicalizes ProPhoto to an enum; native LCMS retains its ICC.
+The odd unequal-TRC profile and LUT are non-enum on both. The LUT PNG itself has
+a separate browser/skcms source-conversion discrepancy (up to 68 levels vs JXL),
+so LCMS, rather than that PNG, is the accuracy oracle. This does not explain the
+117-level JXL clipping: its sRGB result agrees with LCMS to approximately 1 level.
+
+### Header strategy and independent decoder destinations
+
+`iccHeader:'auto'|'exact'|'bt2020'|'p3'` is now available for ICC RGB input.
+`auto` preserves Round 11 policy and bytes: use enum when representable,
+otherwise exact source ICC. `exact` forces the original ICC bytes. The other two
+select an **output target** with D65 and sRGB transfer, keeping original ICC
+conversion internally but omitting it from the JXL. They do not assert that the
+source samples were originally in P3/BT.2020. Gray supports auto/exact and rejects
+RGB header targets. No approximate nearest-enum relabeling is used.
+
+The measured Chrome maximum LCMS errors below are **sRGB / display-p3**, in
+8-bit levels, with identical captured XYB across all header choices:
+
+| Source | auto | exact | BT.2020 target | P3 target |
+| --- | ---: | ---: | ---: | ---: |
+| P3 | 1.564 / 1.008 | 1.003 / 117 | 4 / 15 | 1.564 / 1.008 |
+| Adobe | 1.993 / 1.714 | .994 / 117 | 9.974 / 7.999 | 19 / .999 |
+| ProPhoto | 3.520 / 2.529 | 1.008 / 117 | 9.008 / 4.224 | 8.008 / .986 |
+| LUT | 1.006 / 117 | 1.006 / 117 | 6 / 2 | 19 / .999 |
+| odd unequal-TRC | 1.013 / 39.688 | 1.013 / 39.688 | 7.965 / 3.822 | 2.965 / 1.031 |
+
+Wide enum targets improve the non-enum P3-canvas cases but can increase sRGB
+errors or clip at their own gamut boundary. Therefore **auto remains default**:
+there is no candidate clearly better across all destinations/decoders, and
+changing the default would discard arbitrary source metadata. Explicit target
+options make the trade-off available to callers; they are not a universal cure.
+
+The independent libjxl and oxide explicit linear709 outputs retain the same
+accuracy under all four strategies. ProPhoto retains the Round 11 opsin
+absorbance-clamp error (~.01109 linear); its post-clamp error is ~.000119.
+LUT direct linear error is ~.0004945; odd matrix/TRC ~.0006941.
+Actual djxl default DATA-space roundtrips expose the target gamut cost too:
+P3-target Adobe max linear error is .143428, ProPhoto .426971 and odd primaries
+.031097. The explicit linear709 decoder outputs remain accurate; these larger
+errors occur when converting to the narrower signaled target. The new Round 12
+.004 post-absorbance-clamp gate applies to explicit linear709 for **all** header
+strategies, and to actual default DATA output for auto/exact. Optional-target
+roundtrips are measured instead of assuming their gamut includes every source
+color. No Round 9/10/11 gate changed. Source-space roundtrips use independent
+LCMS and retain the generated LUT's coarse B2A error separately (direct
+source-ICC CMS roundtrip max .050761, rather than the historically mislabeled
+.28251 default-PFM diagnostic). Oxide's minimal helper has no arbitrary-ICC CMS,
+so its linear output is transformed externally into the source ICC and back.
+
+A correction to the historical Round 11 PFM diagnostic: **default djxl PFM
+samples are not necessarily in the embedded ICC space**. Without installing a
+CMS the libjxl decoder also falls back for arbitrary ICC. Round 12 obtains
+`djxl --icc_out` for the actual DATA space before LCMS conversion. The independent
+`decode-float --source-icc` additionally installs system libjxl's default CMS and
+requests the original ICC with `JxlDecoderSetOutputColorProfile`; these source
+samples are then transformed by independent LCMS. Historical Round 11 JSON is
+preserved, but its `originalProfileRoundtripLinear709` label/interpretation must
+not be used as a decoder accuracy claim. Explicit linear709 Round 11 results
+are unaffected. No encoder gate is relaxed by this oracle correction.
+
+### PNG sources in browser-image-resizer-ex
+
+`readSourceColorMetadata` now admits `image/png`, using media-container's
+existing iCCP/cICP reader. The source-independent AVIF compatibility rules pass
+through either metadata type when source samples survive the conversion.
+Same-size packed RGB PNG → AVIF preserves the original ICC bytes or CICP values.
+Canvas resizing uses the existing canvas-color-space override. JPEG/WebP
+Canvas output still does not reattach source ICC. No PNG metadata writer or
+JPEG/WebP behavior expansion is included.
+
+The Electron smoke test adds valid-CRC PNG fixtures containing generated sRGB
+iCCP and display-P3 cICP. `xvfb-run` is not installed on the development
+machine, so the implementation run could not start it. The final verification
+instead ran the unchanged `test/electron-smoke.mjs` against the machine's
+existing X display (`DISPLAY=:0`, hidden `show:false` window, no Xvfb) and it
+**passed**, including the PNG iCCP/cICP → AVIF assertions. The node unit tests
+also check real MIME admission, metadata parsing, precedence and AVIF/Canvas
+compatibility (5 tests), and `node round12/png-avif.mjs` executes the two PNG
+fixture assertions in Chrome, checking actual AVIF output and exact ICC byte
+equality. Existing Electron-specific color-space expectations are unchanged.
+
+### Integer ingestion and final sequential verification
+
+U8/U16 now copy their original bytes directly into WASM. The borrowed C++ region
+source expands only requested regions using 256/65536-entry normalization LUTs;
+the source adapter no longer makes a full-frame float copy. U16's LUT initializes
+at runtime, avoiding a 262 kB constant blob in the WASM binary. Each LUT entry is
+`float(double(sample)/maximum)`, exactly matching JS Float32Array assignment.
+ICC U8 then uses the existing exact normalized-code curve LUT; U16 curves use
+exact evaluation. No extra sample quantization or RGB range clipping is added.
+The encoder still owns its normal working/XYB allocations; this is not a claim
+of bounded-memory streaming for the whole codec.
+
+The pre-change binary captured JXL and actual XYB SHA-256 for **32 cases**:
+U8 RGB/RGBA and arbitrary full-range U16 RGB/RGBA under untagged, numeric CICP,
+sRGB para/table, P3, Adobe, ProPhoto and LUT interpretations. The final runner
+requires both hashes to match. Original fixture bytes are frozen under
+`build/round12/ingestion-source` so regenerated ICC timestamps cannot invalidate
+a byte-identity claim. The compact observations retain all 64 hashes.
+
+Final timings, heap capacities, size and regression counts are recorded below
+from the final sequential run. Heap is the peak monotonic WASM memory capacity,
+not a live-allocation profiler. Performance uses the same repository photograph,
+2048×2048, distance 1, effort 3, observer off, one warmup and five measured runs.
+The pre/post harness includes the same separately timed `Float32Array.from`
+diagnostic; that slow diagnostic is outside encode timing and is not the
+Round 11 normalization loop. A standalone flat loop performing equivalent float32 division is measured
+separately after the change and labeled explicitly in JSON; it is not a timer
+inside the old nested-loop API implementation.
+
+For reproduction, source `build/r12-env.sh` (or set the temporary/cache variables
+described above) before every command. The new runners are `round12/prepare.py`,
+`browser-test.mjs`, `ingestion.mjs`, `verify.py`, and `png-avif.mjs`.
+`wasm/browser-test.mjs` invokes Round 12 after Round 10/11, with all Chrome
+instances closed between phases. `ingestion.mjs before` must run on the baseline
+binary before changes, and its original fixture bytes must be retained for the
+`after` comparison. Complete diagnostics stay in ignored `build/round12`; the
+committed JSON rounds metrics to seven significant digits, uses `[max,mean]`
+error arrays and includes `metricKeyAliases` for the compact decoder keys.
+
+| Profile interpretation | Round 11 U8 median ms | Round 12 U8 median ms | Reduction | WASM capacity before / after (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| untagged | 390.3 | 261.8 | 32.9% | 370,737,152 / 249,102,336 |
+| sRGB para | 448.3 | 329.7 | 26.5% | 370,737,152 / 249,102,336 |
+| P3 | 443.1 | 328.1 | 26.0% | 370,737,152 / 298,975,232 |
+| Adobe | 443.6 | 336.1 | 24.2% | 370,802,688 / 299,368,448 |
+| LUT | 637.3 | 484.9 | 23.9% | 370,933,760 / 300,154,880 |
+
+The standalone equivalent JS normalization assignment loop takes **46.5 ms** median on
+the same RGB photograph; it is eliminated from the new encode path. Reported
+heap capacities include the integer input and the encoder's working storage.
+These are observed memory-growth capacities, not precise live heap peaks.
+
+Final WASM: **2,314,280 raw bytes / 871,270 gzip bytes** (mtime=0), versus
+Round 11's 2,309,799 / 868,586: **+4,481 raw / +2,684 gzip**.
+
+Final regression was strictly sequential: WASM build, native build with CMake
+3.31.6, Round 11 preparation, browser **138/138**, Round 10 **9 cases + 18 API
+checks**, Round 11 **6 profiles + 24 API checks**, Round 12 **20 header cases +
+3 gray profiles + 27 API checks**, independent LCMS/native verifiers, then
+benchmark/real10 **148/148** (four local real10 fixtures), Python **12 methods**,
+tail guard **28,512/28,512**, media-container **44/44**, dependency builds/resizer
+typecheck, resizer node tests **5/5**, Chrome PNG→AVIF **2/2**, and the Electron
+smoke test on the existing X display (pass). All builds use one job; no pnpm
+command or installation was performed (Electron's binary was fetched into the
+ignored `build/tmp` cache by Playwright).
+
+`round12/finalize.py` rechecks the complete run and the artifact hashes after
+the benchmark: **692 existing JXL files remain byte-identical** to the pre-change
+snapshot. The aggregate manifest SHA-256 is in `legacyArtifacts`; the complete
+per-file before manifest stays under `build/round12/legacy-before.json`.
+All **32 old integer-input JXL and XYB hash pairs** also match, plus **12 new gray
+integer/Float32 JXL and XYB pairs**. Historical Round 10/11 JSON files were
+restored byte-for-byte; current measurements stay in Round 12 and ignored logs.
+The final Round 12 JSON is **29,188 bytes**, and `wasm-observations.json` is
+**80,089 bytes**. Error-array rounding affects reporting only; every gate runs
+against full-precision values before compact serialization.
+
+Remaining limits: Chrome's default exact-ICC U8 path still cannot retain
+out-of-sRGB gamut for P3 canvases; the explicit enum targets have measured gamut
+trade-offs and do not replace the default. One-channel gray API input and
+unsupported gray LUT/curve forms remain unsupported. Electron smoke was run on
+an existing X display rather than Xvfb/CI. These limitations are not reported as passes.

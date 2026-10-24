@@ -62,6 +62,7 @@ export async function createEncoder(options = {}) {
   }
   function run(i,o,rgb) {
     const start=performance.now();
+    if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
     if (metadata != null && !['icc','cicp'].includes(metadata.type)) fail('unsupported colorMetadata type');
@@ -123,22 +124,19 @@ export async function createEncoder(options = {}) {
       m._w_init(i.width,i.height,format,matrix,+i.fullRange,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8})[i.linearization],({left:0,center:1,topleft:2})[i.chromaSiting],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9})[i.primaries]);
       let status;
       if (rgb) {
-        let data=i.data;
+        const data=i.data;
+        if(icc)m._w_icc(alloc(icc),icc.length);
+        m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
         if(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) {
-          const channels=data.length/(i.width*i.height), maximum=data instanceof Uint16Array?65535:255;
+          const channels=data.length/(i.width*i.height);
           if(![3,4].includes(channels)) fail('RGB integer input requires packed RGB or RGBA');
           if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
-          const normalized=new Float32Array(i.width*i.height*3);
-          for(let p=0;p<i.width*i.height;p++) {
-            if(channels===4 && data[p*4+3]!==maximum)fail('alpha unsupported: RGBA must be fully opaque');
-            for(let c=0;c<3;c++)normalized[p*3+c]=data[p*channels+c]/maximum;
-          }
-          data=normalized;
+          status=m._w_rgb_integer(alloc(data),data.length,data instanceof Uint16Array?16:8,channels);
+        } else {
+          if (!(data instanceof Float32Array) || data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+          status=m._w_rgb(alloc(data),data.length);
         }
-        if (!(data instanceof Float32Array) || data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array or integer RGB/RGBA');
-        if(icc)m._w_icc(alloc(icc),icc.length);
-        status=m._w_rgb(alloc(data),data.length);
-        if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===1?'builtin':'cms',iccModel:m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc'});
+        if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
         if (!Array.isArray(i.planes) || i.planes.length !== (format===3?2:3)) fail('plane count');
         let total=0;

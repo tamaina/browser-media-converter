@@ -1,5 +1,5 @@
 diff --git a/lib/include/jxl/encode.h b/lib/include/jxl/encode.h
-index 633a98e..5928b02 100644
+index 633a98e..a4a3ad2 100644
 --- a/lib/include/jxl/encode.h
 +++ b/lib/include/jxl/encode.h
 @@ -827,6 +827,17 @@ JXL_EXPORT JxlEncoderStatus JxlEncoderFlushInput(JxlEncoder* enc);
@@ -20,7 +20,7 @@ index 633a98e..5928b02 100644
  struct JxlChunkedFrameInputSource {
    /**
     * A pointer to any user-defined data or state. This can be used to pass
-@@ -932,6 +943,18 @@ struct JxlChunkedFrameInputSource {
+@@ -932,6 +943,19 @@ struct JxlChunkedFrameInputSource {
     * `get_extra_channel_data_at`
     */
    void (*release_buffer)(void* opaque, const void* buf);
@@ -28,6 +28,7 @@ index 633a98e..5928b02 100644
 +  // EXPERIMENT ONLY: ABI extension, not an upstream API. Callbacks remain live
 +  // through ProcessOutput. Three aligned planar nonlinear RGB rows are filled
 +  // from the caller's YUV planes; the encoder transforms them immediately.
++  JXL_BOOL experimental_borrowed;
 +  const JxlExperimentalYuv* experimental_yuv;
 +  double* experimental_conversion_ms;
 +  size_t* experimental_simd_lanes;
@@ -39,20 +40,21 @@ index 633a98e..5928b02 100644
  };
  
  /**
-@@ -1149,6 +1172,8 @@ JxlEncoderSetColorEncoding(JxlEncoder* enc, const JxlColorEncoding* color);
+@@ -1149,6 +1173,9 @@ JxlEncoderSetColorEncoding(JxlEncoder* enc, const JxlColorEncoding* color);
   * @return ::JXL_ENC_SUCCESS if the operation was successful, @ref
   * JXL_ENC_ERROR otherwise
   */
 +// Experiment-only: query actual original header choice after SetICCProfile.
 +JXL_EXPORT JXL_BOOL JxlEncoderExperimentalWantICC(const JxlEncoder* enc);
++JXL_EXPORT void JxlEncoderExperimentalICCHeader(JxlEncoder* enc, int mode);
  JXL_EXPORT JxlEncoderStatus JxlEncoderSetICCProfile(JxlEncoder* enc,
                                                      const uint8_t* icc_profile,
                                                      size_t size);
 diff --git a/lib/jxl/color_encoding_internal.h b/lib/jxl/color_encoding_internal.h
-index 73148b4..cd6bb9b 100644
+index 73148b4..67bfed6 100644
 --- a/lib/jxl/color_encoding_internal.h
 +++ b/lib/jxl/color_encoding_internal.h
-@@ -168,6 +168,12 @@ struct ColorEncoding : public Fields {
+@@ -168,6 +168,22 @@ struct ColorEncoding : public Fields {
  
    // Returns whether to send the ICC profile in the codestream.
    bool WantICC() const { return want_icc_; }
@@ -61,6 +63,16 @@ index 73148b4..cd6bb9b 100644
 +  const IccBytes& SourceICCBytes() const { return source_icc_bytes_; }
 +  IccBytes source_icc_bytes_;
 +  bool SourceICC() const { return source_icc_; }
++  void ExperimentalICCHeader(int mode) {
++    if(mode==1) { storage_.icc=source_icc_bytes_; want_icc_=true; }
++    if(mode==2 || mode==3) {
++      const auto original=source_icc_bytes_;
++      *this=SRGB(false);
++      if(mode==2) (void)SetPrimariesType(Primaries::k2100);
++      else (void)SetPrimariesType(Primaries::kP3);
++      source_icc_bytes_=original; source_icc_=true; want_icc_=false;
++    }
++  }
 +  bool source_icc_ = false;
  
    // Return whether the direct fields are set, if false but ICC is set, only
@@ -141,7 +153,7 @@ index 66d1a5e..9d42230 100644
        // Nothing to do.
        // RGB or YCbCr: forward YCbCr is not implemented, this is only used when
 diff --git a/lib/jxl/enc_xyb.cc b/lib/jxl/enc_xyb.cc
-index 796855c..75e070b 100644
+index 796855c..28f948b 100644
 --- a/lib/jxl/enc_xyb.cc
 +++ b/lib/jxl/enc_xyb.cc
 @@ -4,6 +4,7 @@
@@ -296,7 +308,7 @@ index 796855c..75e070b 100644
  // This is different from Butteraugli's OpsinDynamicsImage() in the sense that
  // it does not contain a sensitivity multiplier based on the blurred image.
  Status ToXYB(const ColorEncoding& c_current, float intensity_target,
-@@ -238,6 +376,33 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
+@@ -238,6 +376,36 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
  
    const ColorEncoding& c_linear_srgb =
        ColorEncoding::LinearSRGB(c_current.IsGray());
@@ -323,14 +335,17 @@ index 796855c..75e070b 100644
 +      return RunOnPool(pool,0,static_cast<uint32_t>(image->ysize()),ThreadPool::NoInit,process_row,"SourceICCToXYB");
 +    }
 +    // LUTs and unrepresentable TRCs must use the original ICC through the CMS.
-+    JXL_RETURN_IF_ERROR(ApplyColorTransform(c_current,intensity_target,*image,black,Rect(*image),c_linear_srgb,cms,pool,want_linear?linear:image));
++    ColorEncoding original;
++    IccBytes original_bytes=c_current.SourceICCBytes();
++    JXL_RETURN_IF_ERROR(original.SetICC(std::move(original_bytes), &cms));
++    JXL_RETURN_IF_ERROR(ApplyColorTransform(original,intensity_target,*image,black,Rect(*image),c_linear_srgb,cms,pool,want_linear?linear:image));
 +    if(want_linear) JXL_RETURN_IF_ERROR(CopyImageTo(*linear,image));
 +    return LinearSRGBToXYB(premul_absorb,pool,image);
 +  }
    // Linear sRGB inputs are rare but can be useful for the fastest encoders, for
    // which undoing the sRGB transfer function would be a large part of the cost.
    if (c_linear_srgb.SameColorEncoding(c_current)) {
-@@ -263,6 +428,49 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
+@@ -263,6 +431,49 @@ Status ToXYB(const ColorEncoding& c_current, float intensity_target,
      return true;
    }
  
@@ -380,7 +395,7 @@ index 796855c..75e070b 100644
    JXL_RETURN_IF_ERROR(ApplyColorTransform(
        c_current, intensity_target, *image, black, Rect(*image), c_linear_srgb,
        cms, pool, want_linear ? linear : image));
-@@ -370,6 +578,13 @@ void LinearRGBRowToXYB(float* JXL_RESTRICT row0, float* JXL_RESTRICT row1,
+@@ -370,6 +581,13 @@ void LinearRGBRowToXYB(float* JXL_RESTRICT row0, float* JXL_RESTRICT row1,
    (row0, row1, row2, premul_absorb, xsize);
  }
  
@@ -418,19 +433,21 @@ index 37ae66d..79dff99 100644
  
  // Transforms each color component of the given XYB image into the [0.0, 1.0]
 diff --git a/lib/jxl/encode.cc b/lib/jxl/encode.cc
-index 12e6f2b..bbb1782 100644
+index 12e6f2b..abede88 100644
 --- a/lib/jxl/encode.cc
 +++ b/lib/jxl/encode.cc
-@@ -1120,6 +1120,8 @@ JxlEncoderStatus JxlEncoderSetColorEncoding(JxlEncoder* enc,
+@@ -1120,6 +1120,10 @@ JxlEncoderStatus JxlEncoderSetColorEncoding(JxlEncoder* enc,
    return JxlErrorOrStatus::Success();
  }
  
++void JxlEncoderExperimentalICCHeader(JxlEncoder* enc, int mode) { enc->metadata.m.color_encoding.ExperimentalICCHeader(mode); }
++
 +JXL_BOOL JxlEncoderExperimentalWantICC(const JxlEncoder* enc) { return enc->metadata.m.color_encoding.WantICC(); }
 +
  JxlEncoderStatus JxlEncoderSetICCProfile(JxlEncoder* enc,
                                           const uint8_t* icc_profile,
                                           size_t size) {
-@@ -1167,6 +1169,7 @@ JxlEncoderStatus JxlEncoderSetICCProfile(JxlEncoder* enc,
+@@ -1167,6 +1171,7 @@ JxlEncoderStatus JxlEncoderSetICCProfile(JxlEncoder* enc,
    if (!enc->basic_info.uses_original_profile && enc->cms_set) {
      enc->metadata.m.color_encoding.DecideIfWantICC(enc->cms);
    }
@@ -439,7 +456,7 @@ index 12e6f2b..bbb1782 100644
    return JxlErrorOrStatus::Success();
  }
 diff --git a/lib/jxl/encode_internal.h b/lib/jxl/encode_internal.h
-index 16ddd32..03518ca 100644
+index 16ddd32..4450635 100644
 --- a/lib/jxl/encode_internal.h
 +++ b/lib/jxl/encode_internal.h
 @@ -242,6 +242,11 @@ class JxlEncoderChunkedFrameAdapter {
@@ -448,7 +465,7 @@ index 16ddd32..03518ca 100644
    bool CopyBuffers() {
 +    // Experimental synchronous borrowed source; caller retains its owner until
 +    // ProcessOutput completes. Avoid the normal full-frame RGB input copy.
-+    if (has_input_source_ && (input_source_.experimental_yuv || input_source_.experimental_fill_row ||
++    if (has_input_source_ && (input_source_.experimental_borrowed || input_source_.experimental_yuv || input_source_.experimental_fill_row ||
 +                              input_source_.experimental_observe_xyb)) return true;
 +
      if (has_input_source_) {

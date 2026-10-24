@@ -38,7 +38,7 @@ struct Curve {
   }
 };
 struct Profile {
-  bool matrix=false;
+  bool matrix=false, gray=false;
   std::string error;
   std::array<Curve,3> curves;
   std::array<float,9> to709{};
@@ -51,8 +51,8 @@ struct Profile {
     const size_t declared=u32(0);
     if(declared!=length || std::memcmp(bytes+36,"acsp",4))SOURCE_ICC_BAD("Invalid ICC signature/declared size");
     if(std::memcmp(bytes+12,"mntr",4) && std::memcmp(bytes+12,"scnr",4) && std::memcmp(bytes+12,"prtr",4) && std::memcmp(bytes+12,"spac",4))SOURCE_ICC_BAD("Unsupported ICC class (device-link/abstract not accepted)");
-    if(!std::memcmp(bytes+16,"GRAY",4))SOURCE_ICC_BAD("Gray ICC on RGB input is unsupported; supply an RGB profile");
-    if(std::memcmp(bytes+16,"RGB ",4))SOURCE_ICC_BAD("ICC must describe RGB (CMYK/Lab unsupported)");
+    gray=!std::memcmp(bytes+16,"GRAY",4);
+    if(!gray && std::memcmp(bytes+16,"RGB ",4))SOURCE_ICC_BAD("ICC must describe RGB or GRAY (CMYK/Lab unsupported)");
     if(std::memcmp(bytes+20,"XYZ ",4) && std::memcmp(bytes+20,"Lab ",4))SOURCE_ICC_BAD("Unsupported ICC PCS");
     const size_t count=u32(128);
     if(count>(length-132)/12)SOURCE_ICC_BAD("Truncated ICC tag table");
@@ -68,10 +68,17 @@ struct Profile {
     std::array<double,9> xyz{};
     for(size_t c=0;c<3;c++) {
       const uint32_t xt[]={0x7258595a,0x6758595a,0x6258595a},tt[]={0x72545243,0x67545243,0x62545243};
-      if(!tags.count(xt[c]) || !tags.count(tt[c]))return;
-      const auto x=tags.at(xt[c]),t=tags.at(tt[c]);
-      if(x.size<20 || u32(x.offset)!=0x58595a20)SOURCE_ICC_BAD("Invalid ICC XYZ tag");
-      for(size_t r=0;r<3;r++)xyz[r*3+c]=fixed(x.offset+8+r*4);
+      if(!tags.count(gray?0x6b545243:tt[c]) || (!gray && !tags.count(xt[c])))return;
+      const auto t=tags.at(gray?0x6b545243:tt[c]);
+      if(gray) {
+        // Gray PCS is neutral D50, independent of the media white tag.
+        constexpr double white[3]={.9642,1,.8249};
+        xyz[c*3+c]=white[c];
+      } else {
+        const auto x=tags.at(xt[c]);
+        if(x.size<20 || u32(x.offset)!=0x58595a20)SOURCE_ICC_BAD("Invalid ICC XYZ tag");
+        for(size_t r=0;r<3;r++)xyz[r*3+c]=fixed(x.offset+8+r*4);
+      }
       auto& curve=curves[c];
       if(u32(t.offset)==0x63757276) {
         if(t.size<12)SOURCE_ICC_BAD("Truncated ICC curv");

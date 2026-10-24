@@ -16,7 +16,10 @@ extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
 extern "C" int bridge_icc_path();
 extern "C" int bridge_icc_header();
+extern "C" void bridge_icc_header_mode(int);
+extern "C" int bridge_rgb_integer(const PlanarRgbConfig*,const void*,size_t,int,int,PlanarEncoded*,char*,size_t);
 extern "C" {
+void w_icc_header_mode(int mode) {bridge_icc_header_mode(mode);}
 void w_icc(const uint8_t* p,size_t n) {bridge_icc(p,n);}
 int w_icc_path() {return bridge_icc_path();}
 int w_icc_header() {return bridge_icc_header();}
@@ -27,7 +30,7 @@ void w_options(int observe,int option) {planar_instrumentation(observe);validati
 double w_time(int i){return i==6?output.conversion_ms:times[i];}
 void w_init(int w,int h,int format,int matrix,int full,float distance,int effort,int depth,int out_depth,int transfer,int siting,int primaries) {
   planar_free(&output); input={}; error[0]=0;
-  bridge_icc(nullptr,0);
+  bridge_icc(nullptr,0);bridge_icc_header_mode(0);
   input.width=w;input.height=h;input.format=format;input.matrix=matrix;
   input.depth=depth;input.storage=depth==8?0:1;output_depth=out_depth;input.primaries=primaries;input.transfer=transfer;input.intensity=255;
   input.full_range=full;input.siting=siting;wasm_distance=distance;wasm_effort=effort;
@@ -70,6 +73,13 @@ int w_rgb(const float* p,size_t count) {
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
   int status=rgb_encode(&c,p,count,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
+int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
+  PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,255,uint32_t(output_depth)};
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
 const char* w_error(){return error;}
