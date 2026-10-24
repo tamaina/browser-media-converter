@@ -1,9 +1,0 @@
-[package]
-name = "jxl-planar-xyb-oracle"
-version = "0.0.0"
-edition = "2024"
-publish = false
-license = "MIT"
-
-[dependencies]
-jxl-oxide = { version = "=0.12.6", default-features = false }

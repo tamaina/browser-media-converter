@@ -79,3 +79,6 @@ try {
  for(const c of [...result.cases,...result.gray]){const name=c.name+(c.header?'-'+c.header:'');for(const [key,ext] of [['bytes','jxl'],['xyb','wasm.xyb']]){await writeFile(path.join(work,name+'.'+ext),Buffer.from(c[key],'base64'));delete c[key];}}
  await writeFile(path.join(work,'browser.json'),JSON.stringify({version,...result}));console.log('Round12 Chrome:',result.cases.length,'header cases,',result.gray.length,'gray,',result.apiChecks,'API checks');
 }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
+// Integer/Float32 parity (own browser), then the independent LCMS/native verifier.
+execFileSync(process.execPath,[path.join(root,'round12/ingestion.mjs'),...process.argv.slice(2).filter(a=>a==='--quick')],{stdio:'inherit',env:process.env});
+execFileSync('python3',[path.join(root,'round12/verify.py'),'verify'],{stdio:'inherit',env:{...process.env,PYTHONPATH:path.join(root,'build/python'),LD_LIBRARY_PATH:path.join(root,'build/native/lib')}});

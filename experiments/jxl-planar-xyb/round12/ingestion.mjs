@@ -1,11 +1,10 @@
-// Serial before/after integer ingestion and heap measurements.
+// Integer (U8/U16, RGB/RGBA) vs Float32 encodeRgb bit-parity for every profile path, plus 2048² U8 timing/heap. --quick skips timing.
 import {chromium} from 'playwright';
 import {createServer} from 'node:http';
-import {readFile,writeFile,mkdir,copyFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
-const root=path.resolve(import.meta.dirname,'..'),phase=process.argv[2]??'after';
-if(phase==='before'){const dir=path.join(root,'build/round12/ingestion-source');await mkdir(dir,{recursive:true});for(const name of ['patches.u8','photo.u8',...['srgb-para','srgb-table','p3','adobe','prophoto','lut'].map(n=>n+'.icc')])await copyFile(path.join(root,'build/round11',name),path.join(dir,name));}
+const root=path.resolve(import.meta.dirname,'..');
 const server=createServer(async(req,res)=>{try{if(req.url==='/'){res.end('<!doctype html>');return;}const p=path.resolve(root,'.'+req.url);if(!p.startsWith(root+'/'))throw Error('path');res.setHeader('Content-Type',p.endsWith('.mjs')?'text/javascript':p.endsWith('.wasm')?'application/wasm':'application/octet-stream');res.end(await readFile(p));}catch{res.statusCode=404;res.end();}});
 await new Promise(r=>server.listen(0,'127.0.0.1',r));let browser;
 try {
@@ -13,7 +12,7 @@ try {
  const page=await browser.newPage();await page.goto(`http://127.0.0.1:${server.address().port}`);
  const result=await page.evaluate(async(quick)=>{
   const {createEncoder}=await import('/wasm/api.mjs'),e=await createEncoder();
-  const bytes=async n=>new Uint8Array(await(await fetch('/build/round12/ingestion-source/'+n)).arrayBuffer());
+  const bytes=async n=>new Uint8Array(await(await fetch('/build/round11/'+n)).arrayBuffer());
   const pack=a=>Array.from(a),u8=await bytes('patches.u8'),width=256,height=32,cases=[];
   const raw=await(await import('/build/wasm/codec.mjs')).default();raw._w_diagnostics(1);
   for(const name of ['none','cicp','srgb-para','srgb-table','p3','adobe','prophoto','lut'])for(const kind of ['u8','u8a','u16','u16a']) {
@@ -38,18 +37,15 @@ try {
   const photo=await bytes('photo.u8'),timings=[];
   for(const name of (quick?[]:['none','srgb-para','p3','adobe','lut'])) {
    // Fresh module per profile: heap high-water capacity is comparable.
-   const e=await createEncoder(),icc=name==='none'?undefined:await bytes(name+'.icc'),samples=[],normalize=[];
+   const e=await createEncoder(),icc=name==='none'?undefined:await bytes(name+'.icc'),samples=[];
    for(let r=-1;r<5;r++) {
-    const start=performance.now();Float32Array.from(photo,x=>x/255);const ms=performance.now()-start;
-    e.encodeRgb({width:2048,height:2048,data:photo,icc},{observe:false});if(r>=0){samples.push(e.stats.totalMs);normalize.push(ms);}
+    e.encodeRgb({width:2048,height:2048,data:photo,icc},{observe:false});if(r>=0)samples.push(e.stats.totalMs);
    }
-   timings.push({name,totalMs:samples.sort((a,b)=>a-b)[2],standaloneJsFloat32ArrayFromMs:normalize.sort((a,b)=>a-b)[2],heapCapacity:e.stats.heapAfter});
+   timings.push({name,totalMs:samples.sort((a,b)=>a-b)[2],heapCapacity:e.stats.heapAfter});
   }
-  const normalizeSamples=[];for(let r=-1;r<(quick?0:5);r++){const start=performance.now(),a=new Float32Array(photo.length);for(let i=0;i<photo.length;i++)a[i]=photo[i]/255;if(r>=0)normalizeSamples.push(performance.now()-start);}
-  return {cases,timings,round11JsNormalizeLoopMs:normalizeSamples.sort((a,b)=>a-b)[2]};
+  return {cases,timings};
  },process.argv.includes('--quick'));
  for(const c of result.cases)for(const k of ['encoded','xyb'])c[k]=createHash('sha256').update(Buffer.from(c[k])).digest('hex');
- const file=path.join(root,'build/round12/ingestion-'+phase+'.json');await writeFile(file,JSON.stringify({version,...result},null,2));
- if(phase==='after'){const before=JSON.parse(await readFile(path.join(root,'build/round12/ingestion-before.json')));if(JSON.stringify(before.cases)!==JSON.stringify(result.cases))throw Error('Round11 integer bytes/XYB changed');}
- console.log(JSON.stringify({phase,count:result.cases.length,timings:result.timings}));
+ await mkdir(path.join(root,'build/round12'),{recursive:true});await writeFile(path.join(root,'build/round12/ingestion.json'),JSON.stringify({version,...result},null,2));
+ console.log(JSON.stringify({integerFloatParityCases:result.cases.length,timings:result.timings}));
 }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}

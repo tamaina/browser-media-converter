@@ -8,8 +8,6 @@ sys.path.insert(0,str(ROOT/'round10'))
 from reference import opsin_reference,errors,delinear
 NAMES=['srgb-para','srgb-table','p3','adobe','prophoto','lut']
 W,H=256,32
-RECORDED_PATH=ROOT/'round11/round11-observations.json'
-RECORDED=json.loads(RECORDED_PATH.read_text()) if RECORDED_PATH.exists() else {}
 def rgb():return np.fromfile(WORK/'patches.f32',dtype='<f4').reshape(H,W,3)
 def xyb(path):return np.fromfile(path,dtype='<f4').reshape(H,3,W).transpose(0,2,1)
 def inverse_xyb(a):
@@ -111,12 +109,8 @@ elif sys.argv[1]=='verify':
   assert metric['max']<12 and metric['mean']<2,(r['name'],r['colorSpace'],metric)
   chrome.append({**r,'jxlVsLCMS8':metric})
  close(p3)
- baseline_file=ROOT/'build/r11-baseline-size.json'
- baseline=json.loads(baseline_file.read_text()) if baseline_file.exists() else RECORDED['baselineWasm']
- legacy_file=ROOT/'build/r11-compat-before.json'
- legacy=json.loads(legacy_file.read_text()) if legacy_file.exists() else RECORDED.get('legacyRgbHashes',{})
  sizes=json.loads((ROOT/'build/wasm/sizes.json').read_text())['codec.wasm']
- result={'chromeVersion':browser['version'],'distance':.01,'effort':3,'reference':'system LCMS2 TYPE_RGB_FLT, relative colorimetric, NOOPTIMIZE; independently specified D65 BT709 gamma1 destination','baselineWasm':baseline,'finalWasm':sizes,'sizeDelta':{k:sizes[k]-baseline[k] for k in ['raw','gzip']},'apiChecks':browser['apiChecks'],'forcedIccDiagnostic':json.loads((WORK/'forced-icc-diagnostic.json').read_text()) if (WORK/'forced-icc-diagnostic.json').exists() else None,'profiles':cases,'chrome':chrome,'timings':{'pixels':2048*2048,'warmups':1,'runs':5,'distance':1,'results':browser['timings']},'legacyRgbHashes':legacy}
+ result={'chromeVersion':browser['version'],'distance':.01,'effort':3,'reference':'system LCMS2 TYPE_RGB_FLT, relative colorimetric, NOOPTIMIZE; independently specified D65 BT709 gamma1 destination','wasm':sizes,'apiChecks':browser['apiChecks'],'forcedIccDiagnostic':json.loads((WORK/'forced-icc-diagnostic.json').read_text()) if (WORK/'forced-icc-diagnostic.json').exists() else None,'profiles':cases,'chrome':chrome,'timings':{'pixels':2048*2048,'warmups':1,'runs':5,'distance':1,'results':browser['timings']}}
  text=json.dumps(result,separators=(',',':'))+'\n';assert len(text)<30000
- (ROOT/'round11/round11-observations.json').write_text(text)
+ (WORK/'observations.json').write_text(text)
  print(json.dumps(result,indent=2))

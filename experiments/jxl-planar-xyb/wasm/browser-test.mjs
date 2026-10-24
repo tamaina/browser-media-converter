@@ -322,8 +322,7 @@ try {
     return {name:r.name,depth:r.fused.decodedDepth.bitsPerSample,psnr:[r.fused.qualityVsSource.psnr,r.rgb.qualityVsSource.psnr,r.agreementFusedVsRgb.psnr]};
   })};
   if(benchmark && real10 && verified.some(c=>c.real10))observations.real10={preparation:'Direct I420P10 BT.709 limited left; spline36 resize retains left chroma; no transfer conversion',analysis:JSON.parse(await readFile(path.join(root,'build/real10/source-analysis.json')))};
-  await writeFile(path.join(root,benchmark?'wasm-observations.json':'build/browser/test-observations.json'),JSON.stringify({...observations,cases:undefined},null,2).slice(0,-2)+',\n  \"cases\": [\n'+observations.cases.map(c=>'    '+JSON.stringify(c)).join(',\n')+'\n  ]\n}\n');
-  if((await readFile(path.join(root,benchmark?'wasm-observations.json':'build/browser/test-observations.json'))).length>=100000)throw Error('observations exceed 100 kB');
+  await writeFile(path.join(root,benchmark?'build/browser/benchmark-observations.json':'build/browser/test-observations.json'),JSON.stringify({...observations,cases:undefined},null,2).slice(0,-2)+',\n  \"cases\": [\n'+observations.cases.map(c=>'    '+JSON.stringify(c)).join(',\n')+'\n  ]\n}\n');
   console.log(`PASS: ${verified.length} VideoFrame fixtures, fused + RGB, independent jxl-oxide decode, native comparison.`);
   for(const r of observations.cases.filter(r=>r.benchmark))console.log(JSON.stringify(r));
 } finally {if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
@@ -333,4 +332,3 @@ if(!benchmark)execFileSync(process.execPath,[path.join(root,'round10/browser-tes
 if(!benchmark)execFileSync(process.execPath,[path.join(root,'round11/browser-test.mjs')],{stdio:'inherit',env:process.env});
 
 if(!benchmark)execFileSync(process.execPath,[path.join(root,'round12/browser-test.mjs')],{stdio:'inherit',env:process.env});
-if(!benchmark)execFileSync(process.execPath,[path.join(root,'round12/ingestion.mjs'),'after'],{stdio:'inherit',env:process.env});

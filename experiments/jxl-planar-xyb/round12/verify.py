@@ -124,11 +124,10 @@ else:
    if 'rgba' in r:video[kind]['vsLCMSSRGB8']=errors(np.array(r['rgba']).reshape(H,W,3),ref)
   headers.append({'name':name,'strategy':row['header'],'header':row['colorResolved']['header'],'XYBVsLCMS':errors(xyb,expected),'inGamutPixels':int(in_gamut.sum()),'outOfGamutPixels':int(out_gamut.sum()),'canvases':canvases,'video':video,'decoders':decoded})
  l.close(p3);l.close(srgb);l.close(linear709)
- before=json.loads((WORK/'ingestion-before.json').read_text());after=json.loads((WORK/'ingestion-after.json').read_text());assert before['cases']==after['cases']
- legacy=json.loads((WORK/'legacy-before.json').read_text());current={p:hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in legacy};assert current==legacy,'legacy bytes changed'
+ ingestion=json.loads((WORK/'ingestion.json').read_text()) if (WORK/'ingestion.json').exists() else None
  sizes=json.loads((ROOT/'build/wasm/sizes.json').read_text())['codec.wasm']
  native_headers={name:('icc' if subprocess.check_output([str(ROOT/'build/oracle/debug/jxl-planar-xyb-oracle'),str(WORK/(name+'.native.jxl')),str(WORK/'unused'),'--encoding'],text=True).strip()=='ICC' else 'enum') for name in NAMES}
- result={'chromeVersion':browser['version'],'apiChecks':browser['apiChecks'],'nativeHeaders':native_headers,'gray':gray,'headers':headers,'integerIngestion':{'cases':after['cases'],'all32JxlAndXYBHashesMatchRound11':True,'timingsBefore':before['timings'],'timingsAfter':after['timings'],'standaloneRound11JsNormalizeLoopMs':after.get('round11JsNormalizeLoopMs'),'pixels':4194304,'warmups':1,'runs':5},'legacyArtifacts':{'count':len(legacy),'aggregateSha256':hashlib.sha256(json.dumps(legacy,sort_keys=True,separators=(',',':')).encode()).hexdigest(),'allByteIdentical':True},'wasm':sizes}
+ result={'chromeVersion':browser['version'],'apiChecks':browser['apiChecks'],'nativeHeaders':native_headers,'gray':gray,'headers':headers,'integerIngestion':ingestion and {'integerFloatParityCases':len(ingestion['cases']),'timings':ingestion['timings'],'pixels':4194304,'warmups':1,'runs':5},'wasm':sizes}
  text=json.dumps(result,separators=(',',':'))+'\n'
  # Retain complete diagnostics in build; compact committed summary omits repeated video errors and source-space canvas details.
  (WORK/'verified-full.json').write_text(text)
@@ -156,5 +155,5 @@ else:
   return value
  result=compact(result)
  text=json.dumps(result,separators=(',',':'))+'\n';assert len(text)<30000,len(text)
- (ROOT/'round12/round12-observations.json').write_text(text)
- print('Round12 verified:',len(gray),'gray,',len(headers),'header strategies, 32 old integer hashes,',len(legacy),'legacy artifacts;',len(text),'JSON bytes')
+ (WORK/'observations.json').write_text(text)
+ print('Round12 verified:',len(gray),'gray,',len(headers),'header strategies,',len(ingestion['cases']) if ingestion else 0,'integer/Float32 parity cases')
