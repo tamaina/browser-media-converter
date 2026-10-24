@@ -25,17 +25,26 @@ int main(int argc,char** argv) {
         check(JxlDecoderGetBasicInfo(dec.get(),&info));
         if(uint64_t(info.xsize)*info.ysize>4194304 || info.num_color_channels!=3 || info.alpha_bits) throw std::runtime_error("shape");
       } else if(status==JXL_DEC_COLOR_ENCODING) {
+        if(argc==4 && std::strcmp(argv[3],"--icc")==0) {
+          size_t n=0;check(JxlDecoderGetICCProfileSize(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&n));
+          std::vector<uint8_t> icc(n);check(JxlDecoderGetColorAsICCProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,icc.data(),icc.size()));
+          std::ofstream out(argv[2],std::ios::binary);out.write(reinterpret_cast<const char*>(icc.data()),icc.size());
+          if(!out)throw std::runtime_error("ICC output write");
+          return 0;
+        }
         JxlColorEncoding original{},pixels{};
-        check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&original));
+        const bool enum_header=JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&original)==JXL_DEC_SUCCESS;
         JxlColorEncoding desired=original;
         if(argc==4) {
-          if(std::strcmp(argv[3],"--linear-source")==0) desired.transfer_function=JXL_TRANSFER_FUNCTION_LINEAR;
+          if(std::strcmp(argv[3],"--linear-source")==0) {if(!enum_header)throw std::runtime_error("linear-source requires enum header");desired.transfer_function=JXL_TRANSFER_FUNCTION_LINEAR;}
           else if(std::strcmp(argv[3],"--linear709")==0) JxlColorEncodingSetToLinearSRGB(&desired,JXL_FALSE);
           else if(std::strcmp(argv[3],"--srgb")==0) JxlColorEncodingSetToSRGB(&desired,JXL_FALSE);
           else throw std::runtime_error("unknown output encoding");
         }
-        check(JxlDecoderSetPreferredColorProfile(dec.get(),&desired));
-        check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_DATA,&pixels));
+        if(argc==4 || enum_header)check(JxlDecoderSetPreferredColorProfile(dec.get(),&desired));
+        const bool enum_data=JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_DATA,&pixels)==JXL_DEC_SUCCESS;
+        if(!enum_data && argc==4)throw std::runtime_error("requested enum data profile unavailable");
+        if(!enum_header)std::fprintf(stderr,"Original header: ICC\n");
         std::printf("{\"width\":%u,\"height\":%u,\"bits\":%u,\"exponent\":%u,\"primaries\":%d,\"transfer\":%d,\"dataPrimaries\":%d,\"dataTransfer\":%d,\"intensity\":%.9g}\n",info.xsize,info.ysize,info.bits_per_sample,info.exponent_bits_per_sample,int(original.primaries),int(original.transfer_function),int(pixels.primaries),int(pixels.transfer_function),info.intensity_target);
       } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
         size_t size;check(JxlDecoderImageOutBufferSize(dec.get(),&fmt,&size));rgb.resize(size/sizeof(float));

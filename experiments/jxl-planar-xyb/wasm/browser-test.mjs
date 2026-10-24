@@ -330,3 +330,4 @@ try {
 
 // Extra source-colour verification owns its browser only after the suite closes.
 if(!benchmark)execFileSync(process.execPath,[path.join(root,'round10/browser-test.mjs')],{stdio:'inherit',env:process.env});
+if(!benchmark)execFileSync(process.execPath,[path.join(root,'round11/browser-test.mjs')],{stdio:'inherit',env:process.env});

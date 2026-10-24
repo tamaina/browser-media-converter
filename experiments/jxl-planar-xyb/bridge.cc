@@ -24,6 +24,15 @@ extern "C" double planar_clock_ms() {
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include "source_icc.h"
+// Experiment ABI is synchronous, one caller per instance (as with diagnostics).
+static thread_local const uint8_t* source_profile=nullptr;
+static thread_local size_t source_profile_size=0;
+static thread_local int source_profile_path=0;
+static thread_local int source_profile_header=0;
+extern "C" void bridge_icc(const uint8_t* p,size_t n) {source_profile=p;source_profile_size=n;source_profile_path=0;}
+extern "C" int bridge_icc_path() {return source_profile_path;}
+extern "C" int bridge_icc_header() {return source_profile_header;}
 struct Config { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; };
 struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
@@ -123,15 +132,23 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     color.transfer_function=c->transfer==1 ? JXL_TRANSFER_FUNCTION_GAMMA :
         static_cast<JxlTransferFunction>(c->transfer==1001 ? 1 : c->transfer);
     if(c->transfer==1) color.gamma=1.0/2.4; // encoded = linear^gamma
-    // SetColorEncoding emits enum colour encoding; no SetICCProfile call.
-    check(JxlEncoderSetColorEncoding(enc.get(),&color));
+    if(source_profile && rgb) {
+      try {
+        const source_icc::Profile profile(source_profile,source_profile_size);
+        if(!profile.error.empty())throw std::runtime_error(profile.error);
+        source_profile_path=profile.matrix?1:2;
+      } catch(const std::exception& e) {throw std::runtime_error(std::string("ICC: ")+e.what());}
+      if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
+        throw std::runtime_error("ICC: libjxl CMS rejected the profile");
+      source_profile_header=JxlEncoderExperimentalWantICC(enc.get());
+    } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
     #ifdef __EMSCRIPTEN__
     check(JxlEncoderSetFrameDistance(settings,wasm_distance));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
 #else
-    check(JxlEncoderSetFrameDistance(settings,1.0f));
+    check(JxlEncoderSetFrameDistance(settings,std::getenv("JXL_EXPERIMENT_DISTANCE")?std::strtof(std::getenv("JXL_EXPERIMENT_DISTANCE"),nullptr):1.0f));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
 #endif
     bool observed_reference=rgb && (diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));

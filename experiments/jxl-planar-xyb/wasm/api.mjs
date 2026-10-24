@@ -9,14 +9,30 @@ export async function createEncoder(options = {}) {
   const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12','bt470bg'];
   // Read properties, not Object.entries: VideoColorSpace getters live on its prototype.
   function resolveColor(i, o, rgb) {
-    const cs = o.colorSpace ?? i.colorSpace ?? {};
+    const metadata = o.colorMetadata ?? i.colorMetadata;
+    let mc = {};
+    if (rgb && metadata?.type === 'cicp') {
+      const c = metadata.cicp;
+      if (!c || typeof c.fullRange !== 'boolean') fail('CICP fullRange must be boolean');
+      const names = {
+        primaries:{1:'bt709',5:'bt470bg',6:'smpte170m',9:'bt2020',12:'smpte432'},
+        transfer:{1:'bt709',5:'bt470bg',6:'smpte170m',8:'linear',13:'iec61966-2-1',14:'bt2020-10',15:'bt2020-12',16:'pq',18:'hlg'},
+        matrix:{0:'rgb',1:'bt709',5:'bt470bg',6:'smpte170m',9:'bt2020-ncl'}
+      };
+      for (const key of ['primaries','transfer','matrix']) {
+        mc[key] = typeof c[key] === 'number' ? names[key][c[key]] ?? `unknown-${c[key]}` : c[key];
+        if (mc[key] == null) fail(`CICP ${key} required`);
+      }
+      mc.fullRange=c.fullRange;
+    }
+    const cs = o.colorSpace ?? i.colorSpace ?? mc;
     if (typeof cs !== 'object') fail('colorSpace must be a VideoColorSpace or plain object');
     const colorResolved = {source:{}}, warnings = [];
     const defaults = {matrix:'bt709',primaries:'bt709',transfer:rgb?'iec61966-2-1':'bt709',fullRange:false,chromaSiting:'left'};
     for (const [key, fallback] of Object.entries(defaults)) {
       const value = o[key] ?? i[key] ?? cs[key];
       colorResolved[key] = value ?? fallback;
-      colorResolved.source[key] = o[key] != null || i[key] != null ? 'option' : cs[key] != null ? 'colorSpace' : 'default';
+      colorResolved.source[key] = o[key] != null || i[key] != null ? 'option' : cs[key] != null ? (cs===mc?'colorMetadata':'colorSpace') : 'default';
       if (value == null) warnings.push(`Defaulted ${key} to ${fallback}`);
     }
     const tf = colorResolved.transfer;
@@ -38,7 +54,7 @@ export async function createEncoder(options = {}) {
     for (const [k,v] of Object.entries(i)) {
       if (['bitDepth','depth'].includes(k) && ![8,10,12].includes(v)) fail('source depth must be 8/10/12');
       if (k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
-      if (['alpha','icc','origin','color'].includes(k)) fail(`unsupported ${k}`);
+      if (['alpha','origin','color'].includes(k)) fail(`unsupported ${k}`);
     }
     const distance = o.distance ?? 1, effort = o.effort ?? 3;
     if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
@@ -46,10 +62,45 @@ export async function createEncoder(options = {}) {
   }
   function run(i,o,rgb) {
     const start=performance.now();
-    if (o.icc !== undefined) fail('unsupported icc');
+    if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
+    const metadata=o.colorMetadata ?? i.colorMetadata;
+    if (metadata != null && !['icc','cicp'].includes(metadata.type)) fail('unsupported colorMetadata type');
+    const profile=o.icc ?? i.icc ?? (metadata?.type==='icc'?metadata.profile:undefined);
+    if (!rgb && (profile != null || metadata != null)) fail('ICC/colorMetadata is supported only by encodeRgb');
+    if (profile != null && [o.primaries,o.transfer,i.primaries,i.transfer].some(v=>v!=null)) fail('ICC conflicts with explicit primaries/transfer');
+    let icc;
+    if (profile != null) {
+      if (!(profile instanceof Uint8Array) && !(profile instanceof ArrayBuffer)) fail('ICC: icc must be Uint8Array/ArrayBuffer');
+      icc=profile instanceof ArrayBuffer?new Uint8Array(profile):profile;
+      if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
+    }
     const {distance,effort}=config(i,o);
-    const {colorResolved,warnings}=resolveColor(i,o,rgb);
-    i={...i,...colorResolved};
+    const {colorResolved,warnings}=resolveColor(icc?{width:i.width,height:i.height}:i,icc?{}:o,rgb);
+    if(rgb) {
+      Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
+      if(icc) {
+        colorResolved.source.profile=o.icc!=null?'option':i.icc!=null?'input':'colorMetadata';
+        colorResolved.iccClass=String.fromCharCode(...icc.subarray(12,16)).trim();
+        const v=new DataView(icc.buffer,icc.byteOffset,icc.byteLength),n=v.getUint32(128);
+        if(n<=(icc.length-132)/12)for(let k=0;k<n;k++) {
+          const p=132+k*12,offset=v.getUint32(p+4),size=v.getUint32(p+8);
+          if(v.getUint32(p)!==0x64657363 || offset>icc.length || size>icc.length-offset || size<12)continue;
+          const type=v.getUint32(offset);
+          if(type===0x64657363) {
+            const length=v.getUint32(offset+8);
+            if(length>0 && length<=size-12)colorResolved.iccDescription=new TextDecoder('latin1').decode(icc.subarray(offset+12,offset+12+Math.min(length-1,256)));
+          } else if(type===0x6d6c7563 && size>=28 && v.getUint32(offset+8)>0 && v.getUint32(offset+12)===12) {
+            const length=v.getUint32(offset+20),start=v.getUint32(offset+24);
+            if(start<=size && length<=size-start)colorResolved.iccDescription=new TextDecoder('utf-16be').decode(icc.subarray(offset+start,offset+start+Math.min(length,512)));
+          }
+          break;
+        }
+        // Numeric defaults are not an interpretation of ICC pixels.
+        for(const key of ['primaries','transfer','linearization','matrix','fullRange','chromaSiting']) {delete colorResolved[key];delete colorResolved.source[key];}
+        warnings.length=0;
+      } else if(metadata?.type==='cicp' && colorResolved.matrix!=='rgb') warnings.push('CICP matrix describes the pre-decoded source; ignored for already-decoded RGB');
+    }
+    i={...i,...(icc?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)};
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
@@ -72,8 +123,22 @@ export async function createEncoder(options = {}) {
       m._w_init(i.width,i.height,format,matrix,+i.fullRange,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8})[i.linearization],({left:0,center:1,topleft:2})[i.chromaSiting],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9})[i.primaries]);
       let status;
       if (rgb) {
-        if (!(i.data instanceof Float32Array) || i.data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array');
-        status=m._w_rgb(alloc(i.data),i.data.length);
+        let data=i.data;
+        if(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) {
+          const channels=data.length/(i.width*i.height), maximum=data instanceof Uint16Array?65535:255;
+          if(![3,4].includes(channels)) fail('RGB integer input requires packed RGB or RGBA');
+          if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
+          const normalized=new Float32Array(i.width*i.height*3);
+          for(let p=0;p<i.width*i.height;p++) {
+            if(channels===4 && data[p*4+3]!==maximum)fail('alpha unsupported: RGBA must be fully opaque');
+            for(let c=0;c<3;c++)normalized[p*3+c]=data[p*channels+c]/maximum;
+          }
+          data=normalized;
+        }
+        if (!(data instanceof Float32Array) || data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+        if(icc)m._w_icc(alloc(icc),icc.length);
+        status=m._w_rgb(alloc(data),data.length);
+        if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===1?'builtin':'cms',iccModel:m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc'});
       } else {
         if (!Array.isArray(i.planes) || i.planes.length !== (format===3?2:3)) fail('plane count');
         let total=0;
@@ -97,5 +162,13 @@ export async function createEncoder(options = {}) {
       return bytes;
     } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>run(i,o,true),get stats(){return {...stats};}};
+  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+    try{return run(i,o,true);}catch(error){
+      if(o.iccFallback!=='srgb' || !error.message.startsWith('ICC:'))throw error;
+      const clean=object=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
+      const bytes=run(clean(i),clean(o),true);
+      bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
+      return bytes;
+    }
+  },get stats(){return {...stats};}};
 }

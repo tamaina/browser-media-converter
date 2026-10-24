@@ -1,0 +1,58 @@
+diff --git a/skcms.cc b/skcms.cc
+index 5707753..9f72a1d 100644
+--- a/skcms.cc
++++ b/skcms.cc
+@@ -860,7 +860,8 @@ static bool read_tag_mab(const skcms_ICCTag* tag, skcms_A2B* a2b, bool pcs_is_xy
+         if (tag->size < matrix_offset + 12 * SAFE_SIZEOF(uint32_t)) {
+             return false;
+         }
+-        float encoding_factor = pcs_is_xyz ? (65535 / 32768.0f) : 1.0f;
++        float encoding_factor = 1.0f;  // Normalize XYZ after the B curves.
++        (void)pcs_is_xyz;
+         const uint8_t* mtx_buf = tag->buf + matrix_offset;
+         a2b->matrix.vals[0][0] = encoding_factor * read_big_fixed(mtx_buf +  0);
+         a2b->matrix.vals[0][1] = encoding_factor * read_big_fixed(mtx_buf +  4);
+@@ -1131,6 +1132,7 @@ static void canonicalize_identity(skcms_Curve* curve) {
+ }
+ 
+ static bool read_a2b(const skcms_ICCTag* tag, skcms_A2B* a2b, bool pcs_is_xyz) {
++    a2b->pcs_scale = pcs_is_xyz ? (tag->type == skcms_Signature_mft1 ? 255/128.0f : 65535/32768.0f) : 1.0f;
+     bool ok = false;
+     if (tag->type == skcms_Signature_mft1) { ok = read_tag_mft1(tag, a2b); }
+     if (tag->type == skcms_Signature_mft2) { ok = read_tag_mft2(tag, a2b); }
+@@ -2596,8 +2598,8 @@ bool skcms_Transform(const void*             src,
+     }
+     // TODO: more careful alias rejection (like, dst == src + 1)?
+ 
+-    Op          program[32];
+-    const void* context[32];
++    Op          program[33];  // One additional PCS normalization operation.
++    const void* context[33];
+ 
+     Op*          ops      = program;
+     const void** contexts = context;
+@@ -2722,6 +2724,12 @@ bool skcms_Transform(const void*             src,
+                 add_curve_ops(srcProfile->A2B.output_curves, /*numChannels=*/3);
+             }
+ 
++            if (srcProfile->A2B.pcs_scale > 1.0f) {
++                static const float s16 = 65535/32768.0f, s8 = 255/128.0f;
++                static const skcms_Matrix3x3 scale16 = {{{s16,0,0},{0,s16,0},{0,0,s16}}};
++                static const skcms_Matrix3x3 scale8 = {{{s8,0,0},{0,s8,0},{0,0,s8}}};
++                add_op_ctx(Op::matrix_3x3, srcProfile->A2B.pcs_scale == s8 ? &scale8 : &scale16);
++            }
+             if (srcProfile->pcs == skcms_Signature_Lab) {
+                 add_op(Op::lab_to_xyz);
+             }
+diff --git a/skcms.h b/skcms.h
+index b5e5818..19c08a0 100644
+--- a/skcms.h
++++ b/skcms.h
+@@ -139,6 +139,7 @@ typedef struct skcms_A2B {
+     // Required: 3 1D "B" curves. Always present, and output_channels must be 3.
+     uint32_t        output_channels;
+     skcms_Curve     output_curves[3];
++    float pcs_scale;  // Experiment: encoded XYZ PCS -> actual XYZ, after B curves.
+ } skcms_A2B;
+ 
+ typedef struct skcms_B2A {

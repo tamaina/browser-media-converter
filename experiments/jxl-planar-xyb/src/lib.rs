@@ -583,6 +583,23 @@ pub unsafe extern "C" fn rgb_encode(
         )
     }
 }
+// Profile bytes are borrowed only for this synchronous call. Same nominal RGB
+// validation and config ABI as rgb_encode; no persistent native profile state.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode_icc(
+    config: *const Config, rgb: *const f32, count: usize,
+    icc: *const u8, icc_size: usize, out: *mut Encoded,
+    error: *mut c_char, n: usize,
+) -> i32 {
+    unsafe extern "C" {fn bridge_icc(p: *const u8, n: usize);}
+    if icc.is_null() || icc_size == 0 { return 1; }
+    unsafe {
+        bridge_icc(icc,icc_size);
+        let status=rgb_encode(config,rgb,count,out,error,n);
+        bridge_icc(std::ptr::null(),0);
+        status
+    }
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_free(out: *mut Encoded) {
     unsafe {

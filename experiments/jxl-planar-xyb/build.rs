@@ -51,6 +51,7 @@ fn main() {
         PathBuf::from(&library).parent().unwrap().display()
     );
     println!("cargo:rerun-if-changed=bridge.cc");
+    println!("cargo:rerun-if-changed=source_icc.h");
     println!("cargo:rerun-if-changed={include}/jxl/encode.h");
     println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
     println!("cargo:rerun-if-env-changed=JXL_LIBRARY");

@@ -7,7 +7,13 @@ export CMAKE_BUILD_PARALLEL_LEVEL=1
 export EM_CACHE="$PWD/build/em-cache"
 export CARGO_TARGET_DIR="$PWD/build/wasm-rust"
 export TMPDIR="$PWD/build/tmp"
-mkdir -p "$TMPDIR" build/wasm
+export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache" npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
+mkdir -p "$TMPDIR" "$EMCC_TEMP_DIR" build/wasm
+if git -C build/libjxl/third_party/skcms apply --check "$PWD/skcms-xyb.patch" 2>/dev/null; then
+  git -C build/libjxl/third_party/skcms apply "$PWD/skcms-xyb.patch"
+else
+  git -C build/libjxl/third_party/skcms apply --reverse --check "$PWD/skcms-xyb.patch"
+fi
 cmake="${CMAKE:-$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake}"
 test "$(git -C build/libjxl rev-parse HEAD)" = 794a5dcf0d54f9f0b20d288a12e87afb91d20dfc
 if git -C build/libjxl apply --check "$PWD/libjxl-xyb.patch" 2>/dev/null; then
@@ -17,7 +23,7 @@ else
 fi
 emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
-  -DCMAKE_CXX_FLAGS_RELEASE='-O2 -DNDEBUG -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions' \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions -I$PWD" \
   -DCMAKE_C_FLAGS_RELEASE='-O2 -DNDEBUG -msimd128' \
   -DJPEGXL_BUNDLE_LIBPNG=OFF -DJPEGXL_ENABLE_WASM_THREADS=OFF -DJPEGXL_ENABLE_TOOLS=OFF \
   -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF \
@@ -33,7 +39,7 @@ em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
   wasm/entry.cc bridge.cc build/wasm/session.a -Wl,--start-group "${libs[@]}" -Wl,--end-group \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
   -sINITIAL_MEMORY=33554432 -sSTACK_SIZE=2097152 -sENVIRONMENT=web \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_w_diagnostics","_w_xyb_data","_w_xyb_count","_w_init","_w_options","_w_time","_w_plane","_w_encode","_w_rgb","_w_error","_w_data","_w_size","_w_free","_w_lanes","_w_target"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_w_diagnostics","_w_xyb_data","_w_xyb_count","_w_init","_w_options","_w_time","_w_plane","_w_encode","_w_rgb","_w_icc","_w_icc_path","_w_icc_header","_w_error","_w_data","_w_size","_w_free","_w_lanes","_w_target"]' \
   -sEXPORTED_RUNTIME_METHODS='["UTF8ToString","HEAPU8"]' -o build/wasm/codec.mjs
 python3 - <<'PY'
 import gzip,json,pathlib

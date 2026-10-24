@@ -11,7 +11,19 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Gamma has no CICP transfer identifier. 65535 is this CLI's GAMMA
     // sentinel (same as JXL_TRANSFER_FUNCTION_GAMMA), not a CICP tag.
     let cicp = image.rendered_cicp().map(|v| v.map(u32::from)).unwrap_or([1,65535,0,1]);
-    let jxl_oxide::color::ColourEncoding::Enum(original) = &image.image_header().metadata.colour_encoding else { return Err("ICC unsupported".into()); };
+    let original = match &image.image_header().metadata.colour_encoding {
+        jxl_oxide::color::ColourEncoding::Enum(original) => original.clone(),
+        _ => {
+            if args.get(3).is_some_and(|s| s == "--encoding") {
+                println!("ICC");
+                return Ok(());
+            }
+            if args.get(3).is_none() || args.get(3).is_some_and(|s| s == "--linear-source") {
+                return Err("ICC original-space output requires a CMS; use --linear709/--srgb".into());
+            }
+            jxl_oxide::EnumColourEncoding::srgb(jxl_oxide::color::RenderingIntent::Relative)
+        }
+    };
     if args.get(3).is_some_and(|s| s == "--encoding") {
         println!("{original:?}"); return Ok(());
     }

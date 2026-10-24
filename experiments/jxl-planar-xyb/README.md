@@ -83,7 +83,7 @@ libjxl behavior, not a new HLG implementation.
 
 Odd dimensions, padded strides and odd byte offsets are supported. Origin must
 be (0,0). Reject unknown/cosited chroma, unknown metadata, BT.2020 constant
-luminance, P010/MSB packing, alpha, ICC, arbitrary intensity targets, depth above
+luminance, P010/MSB packing, alpha, ICC on the planar path, arbitrary intensity targets, depth above
 12. Converted nonlinear RGB outside [0,1] is clipped for BT.709/sRGB by
 default; explicit strict mode and other native profiles reject it. No tone map
 or byte truncation. Bounds: 8192 per axis, 4 megapixels, 64 MiB validated source
@@ -184,3 +184,16 @@ BT.601/709/2020-NCL matrices and BT.709/SMPTE-C/BT.470BG/Display P3/BT.2020
 primaries use fused SDR conversion, with matching source primaries in the JXL
 header. `encodeRgb` accepts the same primaries. See the
 [Round 10 API and measured decoder caveats](WASM.md#round-10--source-colour-handling-in-yuvxyb).
+
+### Source ICC in the experimental WASM RGB API (Round 11)
+
+`encodeRgb({width,height,data,icc})` accepts an ICC `Uint8Array`/`ArrayBuffer`,
+including `colorMetadata: readImageColorMetadata(bytes, mime)` from media-container.
+Decode source pixels with `colorSpaceConversion:'none'`. Packed Float32 RGB,
+U8/U8Clamped RGB or opaque RGBA, and full-range U16 RGB/opaque RGBA are accepted.
+`icc` in encode options overrides the input field; explicit primaries/transfer
+conflict with ICC. Numeric and named SDR CICP reuse Round 10 resolution.
+Malformed/non-RGB/gray profiles reject; `iccFallback:'srgb'` explicitly opts into
+untagged sRGB with a reason in warnings. libjxl selects an enum header when representable, otherwise retains the source ICC.
+See [Round 11](WASM.md#round-11--source-icc-profiles-in-encodergb) for profile
+paths, independent accuracy, decoder caveats and performance measurements.

@@ -1565,3 +1565,260 @@ values; 8-bit canvas readback and browser gamut management add separate error.
 The pinned oxide direct-wide-gamut output limitation is measured above. No
 source YUV sample preservation, lossless colour, or universal timing guarantee
 is claimed.
+
+## Round 11 — source ICC profiles in encodeRgb
+
+### API and resolution
+
+```js
+const metadata = readImageColorMetadata(sourceBytes, 'image/png');
+// Pixels must be decoded without browser colour conversion.
+const jxl = encoder.encodeRgb({width, height, data: rgba, colorMetadata: metadata},
+                              {distance: .01, iccFallback: 'error'});
+encoder.encodeRgb({width, height, data: floatRgb, icc: profile});
+```
+
+`icc` accepts Uint8Array/ArrayBuffer, bounded to 4 MiB. Explicit option `icc`
+overrides input `icc`, which overrides `colorMetadata:{type:'icc',profile}`.
+Explicit `primaries` or `transfer` in either the options or input conflicts with
+an active ICC and rejects even with fallback enabled. ICC supersedes colorSpace;
+it is never interpreted using a leftover colorSpace transfer. With no ICC,
+Round 10 explicit option > input > colorSpace > colorMetadata > defaults applies.
+`colorMetadata` accepts the package's named CICP fields as well as numeric CICP
+primaries/transfer/matrix and boolean fullRange. Supported numeric primaries are
+1/5/6/9/12; transfers 1/5/6/8/13/14/15 (16/18 reject as HDR). CICP 5 retains the
+existing Round 10 bt470bg alias policy. Other transfer/primary codes reject.
+CICP matrix/range describe the pre-decoded source; they are recorded but no YUV
+matrix or range scaling is applied to already-decoded RGB. A nonidentity matrix
+gets an explicit warning. BT-like CICP transfer follows Round 10 gamma 2.4 unless
+bt709Linearization overrides it. This policy does **not** reinterpret ICC curves.
+
+Packed Float32 RGB remains nominal finite [0,1]. Uint8Array/Uint8ClampedArray
+and Uint16Array accept RGB or RGBA by exact length, normalize by 255/65535, and
+require every alpha to be fully opaque. Optional `format:'RGB'|'RGBA'` must agree
+with the length. Float RGBA and premultiplied alpha are unsupported. U16 here
+means full 16 meaningful bits, not the planar low-10/12-bit storage convention.
+The existing 4 megapixel dimension cap is unchanged. No-profile Float32 RGB
+continues through the original path. `colorResolved` adds profile/path/header;
+ICC adds iccModel and omits misleading enum defaults. Untagged defaults and
+warnings still come from the Round 10 resolver.
+
+`iccFallback:'error'` is default. `'srgb'` retries only ICC-specific parse/CMS
+admission failures as untagged sRGB and records the exact reason. It does not
+hide conflicting metadata, alpha, dimension, or pixel validation errors.
+Gray profiles are explicitly rejected: libjxl requires a 1-channel image for a
+Gray ICC, whereas this API's image and header have three color channels. CMYK,
+Lab device models, device-link/abstract classes, invalid signatures/sizes, tag
+bounds and malformed curves reject. This is SDR input; there is no HDR ICC
+luminance/tone-mapping interpretation in this API.
+
+### Conversion, header and CMS decision
+
+The bridge calls JxlEncoderSetICCProfile, so libjxl/CMS must accept the profile.
+A small independent, bounded matrix/TRC reader in source_icc.h evaluates curv
+identity/gamma/tables and para types 0–4 without CMS approximations. Per-channel
+curves need not match. RGB XYZ colorants already contain adaptation to D50 PCS:
+use them directly, then D50 PCS → linear BT.709/D65 via a Bradford-adapted inverse
+BT.709 matrix. Undoing chad and readapting would cancel and add rounding; wtpt
+and chad are not reinterpreted as D65 colorants. This covers arbitrary matrix
+primaries/whitepoints, including D50 ProPhoto, without deriving rounded xy fields.
+The D50 PCS white is (.9642,1,.8249), not a rounded D50 xy converted back to XYZ.
+The resulting matrix is folded into opsin, with no post-primary RGB clipping.
+Exactly normalized U8 values use precomputed 256-entry per-channel curve tables;
+other Float32 values evaluate the exact stored parametric/table curve.
+Curve table domains remain [0,1], as required by their finite tables. The existing
+mixed-absorbance nonnegative clamp in libjxl still applies; its irreversible
+error is reported separately for extreme ProPhoto patches.
+
+A2B/D2B LUT tags take priority over fallback matrix tags. These profiles and
+unsupported curve forms use libjxl ApplyColorTransform to linear sRGB (native
+LCMS2 / WASM skcms), followed by the original opsin conversion. CMS float outputs
+are not explicitly clipped by the adapter. LUT domain limitations and CMS
+interpolation can impose bounds; measurements below distinguish this from
+matrix-path gamut preservation.
+
+Why not rely on HaveFields? libjxl's CMS field detection estimates table TRCs and
+gamma, quantizes gamma to 1e-7, and reconstructs primaries differently in skcms
+and LCMS. For example Adobe gamma is encoded as 563/256. Exact source tags avoid
+those approximations and allow unequal/table TRCs. The original ICC remains the conversion source internally in a separate
+nonserialized byte vector: libjxl regenerates its ordinary ICC storage while
+serializing an enum header, so retaining only that ordinary storage would lose
+the exact original tags. DecideIfWantICC
+selects enum headers for representable profiles and embeds the original ICC
+byte-for-byte otherwise. This also avoids Chrome 156's measured clipping when
+an enum-representable P3/Adobe profile is forced into an ICC header. The
+experiment marks only SetICCProfile inputs; ordinary SetColorEncoding/Round 10
+paths are unchanged. The internal marker is copied with ColorEncoding and never
+serialized. colorResolved.header is queried from the actual encoder decision. ICC TF709-like
+curves are evaluated as stored; no gamma-2.4 snapping is done on this path.
+
+skcms was already linked into WASM. A generated XYZ-PCS A2B LUT exposed a
+bug in this pinned version: white transformed to approximately .5 instead of 1.
+Its XYZ normalization was folded into an optional mAB matrix, and was missing
+when that matrix was absent (as well as being placed before B curves).
+The small skcms-xyb.patch records tag-dependent PCS scaling and applies it after
+B curves for XYZ A2B sources, with room for the extra operation. This follows the
+[ICC PCS encoding factor](https://www.color.org/icc1v42_2006-05.pdf):
+65535/32768 for 16-bit/mAB and 255/128 for LUT8 XYZ. Lab is unchanged.
+Both build scripts keep the libjxl patch idempotent; build-wasm.sh additionally
+applies/checks the pinned skcms patch. The corrected LUT path is measured below.
+With that targeted correction skcms remains the general-profile CMS; no lcms2
+WASM build is introduced. Native LCMS is the independent reference and the
+native general-profile implementation. Generated profiles and temporary images
+live only under build/round11. The local colord Adobe-compatible profile is used
+from its installed path; /usr/share/doc/colord-data/copyright assigns
+`data/profiles/*` CC0-1.0. No proprietary profile or Netflix derivative is added.
+
+### PNG package support
+
+media-container now synchronously reads PNG iCCP and cICP. The dependency-free
+RFC1950/1951 inflater handles stored/fixed/dynamic Huffman blocks, checks Adler32
+and limits output to 4 MiB. PNG signature, chunk lengths, profile name/compression
+and cICP matrix/range fields are checked; CRC/pixel data are outside this reader.
+Malformed metadata throws. Valid cICP overrides iCCP without inflating the
+superseded profile, per [PNG Third Edition](https://www.w3.org/TR/png-3/#cICP).
+The research memo's claim that PNG cICP has no range byte was incorrect.
+Writing non-null PNG colour metadata explicitly throws an unsupported error;
+null remains a no-op. A minor changeset documents this new published API.
+browser-image-resizer-ex's MIME filter is unchanged; automatic PNG source-profile
+preservation there remains a follow-up.
+
+### Measurements and sequential verification
+
+The reproducible runners are round11/browser-test.mjs, round11/verify.py and
+round11/lcms.py; compact measured results are in round11/round11-observations.json.
+
+The reference is system LCMS2 float RGB, relative colorimetric, NOOPTIMIZE, to a
+separately created D65 BT.709 gamma-1 profile. Actual captured XYB is compared to
+independent float64 opsin applied to that reference. For the 1024-entry table,
+LCMS's own cmsEvalToneCurveFloat rounds interpolated outputs to 16-bit steps.
+For example code 4/255 evaluates to .00120546273 in LCMS vs .00121264357 by
+float64 interpolation of the stored ICC table. The raw LCMS-vs-encoder XYB error
+(8.18453e-5) remains in JSON. The new table check was corrected to compare exact
+float64 table interpolation at the **3e-6 XYB gate**, and separately require
+LCMS-vs-float64 linear error below 1/65535. Other matrix profiles use the same
+3e-6 arithmetic gate; the CMS LUT gate is .003 XYB. No Round 9/10 or pre-existing
+regression gate was relaxed. This prevents reference-side table quantization
+from being mistaken for an encoder arithmetic failure.
+
+Pre-encoder linear values are reconstructed from actual XYB; cube-root
+approximation/cancellation adds a few e-6 to these inverse measurements even
+when forward XYB agrees to e-7. ProPhoto's extreme blue/green patches exceed the
+frozen XYB absorbance gamut: the standard nonnegative mixed-absorbance clamp
+causes an irreversible error. Both raw LCMS error and the separately modelled
+clamp contribution are retained, rather than reporting a clamp-adjusted value
+as source accuracy.
+
+The CLI decoder helper now accepts ICC headers and explicit linear709/sRGB
+output. The pinned oxide helper requests linear709/sRGB for ICC images; direct
+ICC original-space output still requires an external CMS and is explicitly
+unsupported by this minimal helper. Actual djxl is measured in explicit
+linear709 PFM and explicit 8-bit sRGB PNG. Its default original-profile PFM
+roundtrip is also retained as a diagnostic: the synthetic 17³ LUT fixture's
+coarse B2A inverse introduces large extra errors there, unrelated to the
+encoder's forward A2B or its linear709 decode. The original LUT ICC is retained
+byte-for-byte in the JXL header; no profile bytes are rewritten to hide that.
+
+Chrome uses one Playwright channel-chrome instance, version 156.0.8078.47,
+--no-sandbox/--disable-gpu, srgb/display-p3 canvases with matching readback, and
+P3/Adobe PNG/JPEG carrying the exact same source ICC as the encoder input.
+The forced-ICC-header diagnostic (before the final enum policy) is retained in
+JSON separately from final results. Its P3-canvas max difference was 117 code
+levels, whereas final enum profiles preserve wide-gamut canvas colours.
+Arbitrary non-enum ICC headers in Chrome remain a compatibility caveat; the
+final P3/Adobe comparison verifies the enum-representable photo profiles.
+
+Performance uses the repository photograph resized to 2048×2048 (4,194,304
+pixels), constrained by the unchanged public 4 MP cap; this is not a 12 MP test.
+The same pixel bytes are reinterpreted under each profile for a timing control,
+not claimed as separately mastered images. One warmup + five measured runs,
+median total ms, distance 1, effort 3, observer off. Integer normalization is
+included. Standard packed RGB ingestion does not expose a conversion-only
+timer, so conversionMs is null rather than a spurious zero measurement.
+
+Measured WASM size: **2,294,145 → 2,309,799 raw bytes** (+15,654),
+**861,457 → 868,586 gzip bytes** (+7,129), reproducible gzip mtime=0.
+No lcms2 WASM build was needed after the targeted skcms correction.
+
+All accuracy pairs below are **max / mean** absolute error vs LCMS,
+distance .01, effort 3. Linear values are unit linear BT.709.
+
+| Profile | Conversion / WASM header / native header | Pre-encoder linear709 | djxl linear709 | oxide linear709 |
+| --- | --- | ---: | ---: | ---: |
+| srgb-para | builtin / enum / enum | 9.37641e-06 / 5.74216e-07 | 0.000162721 / 2.57192e-05 | 0.000162721 / 2.57251e-05 |
+| srgb-table | builtin / enum / enum | 1.22373e-05 / 3.18128e-06 | 0.000160873 / 2.5975e-05 | 0.000160873 / 2.59868e-05 |
+| p3 | builtin / enum / enum | 9.20566e-06 / 4.83713e-07 | 0.000166416 / 2.5404e-05 | 0.000166416 / 2.54009e-05 |
+| adobe | builtin / enum / icc | 8.25008e-06 / 4.99069e-07 | 0.000187695 / 2.63463e-05 | 0.000187695 / 2.6334e-05 |
+| prophoto | builtin / enum / icc | 0.011051 / 0.00013512 | 0.0110937 / 0.000158047 | 0.011094 / 0.00015806 |
+| lut | cms / icc / icc | 0.000445003 / 6.66042e-05 | 0.000494361 / 6.86591e-05 | 0.00049448 / 6.86694e-05 |
+
+ProPhoto includes the real absorbance-clamp error above; after independently
+accounting for that clamp, djxl max linear error is 0.000118613.
+
+| Profile | libjxl sRGB, 8-bit scale | oxide sRGB, 8-bit scale | actual djxl sRGB PNG8 |
+| --- | ---: | ---: | ---: |
+| srgb-para | 0.287907 / 0.0112585 | 0.287785 / 0.0136363 | 1.00836 / 0.0134758 |
+| srgb-table | 0.287907 / 0.0119991 | 0.287785 / 0.0140023 | 1.0068 / 0.0174726 |
+| p3 | 0.043044 / 0.00592144 | 0.043044 / 0.00824751 | 1.00193 / 0.0584778 |
+| adobe | 0.158258 / 0.00711424 | 0.15831 / 0.00929331 | 0.983201 / 0.267626 |
+| prophoto | 0.0251261 / 0.0042047 | 0.0354664 / 0.00689709 | 0.979919 / 0.263852 |
+| lut | 0.218412 / 0.0217792 | 0.218372 / 0.0237469 | 0.99847 / 0.276527 |
+
+All five matrix/TRC profiles have **bit-exact native/WASM pre-encoder XYB**
+and identical decoded linear709 floats. Complete JXL bytes are identical for
+sRGB para, sRGB table and P3. Adobe/ProPhoto bytes differ: skcms canonicalizes their headers to enum, whereas
+native LCMS retains the original ICC (byte-for-byte checked). Retained-source XYB
+and preferred-linear709 output are exactly equal. The oracle --encoding helper
+now reports ICC explicitly instead of printing a placeholder sRGB enum. LUT uses different CMSs:
+XYB max/mean 0.000229627 / 1.26778e-05; decoded linear709
+max/mean 0.000181764 / 1.41693e-05.
+
+Actual reconstructed pre-encoder minima: p3 -0.224947, adobe -0.398115, prophoto -0.728556, lut -0.398139.
+Negative and >1 linear RGB survive the primary conversion/CMS; no post-primary
+RGB clamp was added. The LUT still clamps its finite input domain (skcms uses
+an explicit clamp before the CLUT); this fixture preserves negative output RGB.
+
+| Source | Canvas | JXL vs PNG | JXL vs JPEG100 | JXL vs LCMS reference |
+| --- | --- | ---: | ---: | ---: |
+| p3 | srgb | 2 / 0.00581868 | 3 / 0.0883382 | 1.56385 / 0.0498084 |
+| p3 | display-p3 | 1 / 0.0116781 | 2 / 0.114461 | 1.00801 / 0.0142113 |
+| adobe | srgb | 2 / 0.0169271 | 2 / 0.0777181 | 1.99346 / 0.214874 |
+| adobe | display-p3 | 2 / 0.0140788 | 2 / 0.0748698 | 1.71432 / 0.233557 |
+
+Timings below are from the final sequential verification rerun (same as the committed JSON).
+
+| Profile interpretation | U8 total median ms | Float32 total median ms |
+| --- | ---: | ---: |
+| none | 399.7 | 283.1 |
+| srgb-para | 418.3 | 339.1 |
+| p3 | 410.9 | 343.4 |
+| adobe | 409.0 | 344.5 |
+| lut | 581.3 | 497.2 |
+
+Final sequential regression: WASM build and native build pass; browser **138/138**,
+Round 10 **9 cases + 18 API checks**, Round 11 **6 profiles + 24 API checks**;
+benchmark/real10 **148/148** (all four local real10 fixtures); Python **12 methods**
+(including 45 Round 10 cases and 252 transfer/siting cases); tail guard
+**28,512/28,512**; media-container **44/44** (13 PNG/inflate additions), rerun with
+`--test-concurrency=1`; all three importing packages typecheck with noEmit.
+Since workspace dependencies were unbuilt, binary generation went into build/deps
+and the dependent check used a temporary source-path-mapped tsconfig under build/.
+No pnpm/install or external store writes were used.
+
+Before/after SHA-256 matched for **four freshly captured RGB cases** and **21
+pre-existing Round 10/planar JXL artifacts**. All hashes are in the compact JSON.
+The four fresh RGB hashes are:
+
+| Input | SHA-256 before = after |
+| --- | --- |
+| untagged | `d11952ba5d4a7697382a81ae1dce5618015b43d7c3805b8b29f68b135c216565` |
+| smpte432 | `c2f240f4badc1e850a3a765520bfb5be624bb8a94c350f83950eb80b75832668` |
+| smpte170m | `0e08e23b67a8ac0302c87f4b3bf5832b1425816029692505ee554703ed5af3e6` |
+| bt2020 | `d86127fe2d8eff6964ccdc8dd7bba682b321ae78cd88ccb404b8d03ad76dc917` |
+
+The supplemental final verifier explicitly requests djxl linear709 PFM and sRGB
+PNG8, avoiding the synthetic inverse-LUT diagnostic when testing forward colour
+accuracy. It also measures native/WASM decoded output parity. This changes no
+encoder output or prior regression gate. The compact JSON is 14,702 bytes;
+wasm-observations.json is 80,112 bytes (<100 kB).
+No commits or staging were performed.

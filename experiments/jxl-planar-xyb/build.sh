@@ -4,6 +4,7 @@ cd "$(dirname "$0")"
 revision=794a5dcf0d54f9f0b20d288a12e87afb91d20dfc
 mkdir -p build/tmp
 export TMPDIR="$PWD/build/tmp"
+export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache" npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
 if [[ ! -d build/libjxl/.git ]]; then
   git clone --depth 1 --branch v0.11.1 https://github.com/libjxl/libjxl build/libjxl
 fi
@@ -17,7 +18,7 @@ else
 fi
 "${CMAKE:-cmake}" -S build/libjxl -B build/native \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="${CXX:-g++}" -DCMAKE_C_COMPILER="${CC:-gcc}" \
-  -DCMAKE_CXX_FLAGS_RELEASE='-O1 -DNDEBUG -march=x86-64-v3 -DHWY_COMPILE_ONLY_STATIC' -DCMAKE_C_FLAGS_RELEASE='-O1 -DNDEBUG' \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG -march=x86-64-v3 -DHWY_COMPILE_ONLY_STATIC -I$PWD" -DCMAKE_C_FLAGS_RELEASE='-O1 -DNDEBUG' \
   -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_BENCHMARK=OFF \
   -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_JNI=OFF \
   -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_SKCMS=OFF \
