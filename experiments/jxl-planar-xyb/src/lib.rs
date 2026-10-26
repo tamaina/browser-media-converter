@@ -6,6 +6,7 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     slice,
 };
+mod cms;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
