@@ -118,13 +118,14 @@ and pass both to `encodeRgb`.
 - The matrix/range are recorded but not applied to RGB that is already decoded.
 
 **Matrix/TRC profiles.**
-- Read exactly by `source_icc.h`: `curv` identity/gamma/table and `para` 0–4.
+- Read exactly by the Rust CMS (`src/cms.rs`, installed with the stock `JxlEncoderSetCms`): `curv` identity/gamma/table and `para` 0–4.
 - Colorants go D50 PCS → Bradford → linear BT.709. That matrix is folded into opsin with no clipping; for example, P3 keeps a minimum of −0.225 and Adobe −0.398.
 - U8 uses exact per-code curve LUTs.
 
 **LUT (A2B) profiles.**
-- Converted through a CMS: skcms in WASM and LCMS natively.
-- `skcms-xyb.patch` fixes the pinned skcms XYZ-PCS A2B scaling, where white came out at about 0.5.
+- Converted by moxcms `=0.9.1` (relative colorimetric, `extended_range`), identically in WASM and natively.
+- moxcms 0.9.1 reads only A2B1 for relative intent; A2B0-only profiles get an A2B1 alias entry first (`moxcms_091_relative_a2b0_alias`, remove after moxcms > 0.9.1; upstream PR #205).
+- Fixture `lut` XYB vs LCMS2: 3.29e-4 max (gate .003; skcms/LCMS before: 2.32e-4 WASM / 1.11e-4 native).
 
 **Gray profiles.**
 - Produce a true one-channel JXL (`num_color_channels=1`).
@@ -142,6 +143,10 @@ and pass both to `encodeRgb`.
 
 `auto` (the default) uses an enum header when libjxl's `DecideIfWantICC` finds
 the profile representable. Otherwise it embeds the original ICC byte-for-byte.
+Exception: ICCs that describe sRGB or linear sRGB (D65) are embedded, because
+stock libjxl converts such an enum with its built-in sRGB fast path instead of
+the CMS (6.4e-6 XYB for an LCMS sRGB `para` profile, over the 3e-6 gate). LUT
+profiles are always embedded.
 The other options:
 - `exact` always embeds the source ICC.
 - `bt2020`/`p3` signal an output target (D65, sRGB transfer). The conversion still uses the original ICC internally, but the ICC is left out of the file.
@@ -180,7 +185,7 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size | 2,314,280 B raw / 871,270 B gzip |
+| WASM size | 2,599,958 B raw / 995,080 B gzip (+285,678 / +123,810 for the Rust CMS with moxcms) |
 
 ## Known limitations
 
@@ -208,7 +213,7 @@ Set `TMPDIR` etc. to `build/tmp` if you want temporary files kept in the tree;
 ```sh
 cd experiments/jxl-planar-xyb
 bash build.sh                  # package: clone/patch libjxl, native libs, djxl, tools; then Rust adapter, oracle
-bash build-wasm.sh             # Rust session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
+bash build-wasm.sh             # cargo (moxcms, Cargo.lock) session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
 node wasm/browser-test.mjs     # main suite, then round10 → round11 → round12 (each closes Chrome first)
 node wasm/browser-test.mjs --benchmark [--real10]   # timings → build/browser/benchmark-observations.json
 python3 test_xyb.py && ../../packages/libjxl-wasm/build/tail-guard   # native (LD_LIBRARY_PATH=../../packages/libjxl-wasm/build/native/lib)

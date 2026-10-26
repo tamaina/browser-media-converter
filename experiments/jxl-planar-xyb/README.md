@@ -10,7 +10,7 @@ published packages depends on this directory.
   measurements, limitations, and build/test commands. Start here.
 - Everything that depends on libjxl (the pinned
   [v0.11.1 / 794a5dcf](https://github.com/libjxl/libjxl/tree/794a5dcf0d54f9f0b20d288a12e87afb91d20dfc)
-  checkout, `libjxl-xyb.patch`, `skcms-xyb.patch`, the C++ bridge, the Wasm
+  checkout, `libjxl-xyb.patch` (input plumbing + fused kernel only), the C++ bridge, the Wasm
   exports and the JS API) lives in
   **[`packages/libjxl-wasm`](../../packages/libjxl-wasm)** (`@browser-mc/libjxl-wasm`,
   private). This directory keeps the Rust session and the verification suites.
@@ -21,6 +21,7 @@ published packages depends on this directory.
 | Path | Role |
 | --- | --- |
 | `src/lib.rs` | Rust planar session: validation, owned planes, the C ABI in `packages/libjxl-wasm/src/planar_session.h` |
+| `src/cms.rs` | Rust CMS for the stock `JxlEncoderSetCms`: bounded matrix/TRC ICC reader, enum transfer/primaries, moxcms (`=0.9.1`) for LUT ICC |
 | `build*.sh`, `build.rs`, `Cargo.*` | Rust builds; `build.sh` / `build-wasm.sh` call `packages/libjxl-wasm/scripts/build-{native,wasm}.sh` |
 | `libjxl-package.mjs` | Package paths for the runners; test servers map `/libjxl-wasm/` to the package |
 | `oracle/` | Independent jxl-oxide decoder (Rust) used by the tests |
@@ -50,7 +51,7 @@ python3 test_xyb.py
 ```
 
 `build.sh` runs the package's `build-native.sh` (verifies the libjxl revision,
-applies the patches, builds libjxl, `djxl`, the stock-libjxl decoder and the tail
-guard into `packages/libjxl-wasm/build/`), then the Rust adapter and the
-jxl-oxide oracle into this directory's ignored `build/`. It uses one job to
+applies the patch, builds libjxl, `djxl` and the stock-libjxl decoder into
+`packages/libjxl-wasm/build/`), then the Rust adapter, the jxl-oxide oracle, and
+a host session staticlib that `build-tail-guard.sh` links into the tail guard. It uses one job to
 limit memory.
