@@ -4,10 +4,9 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 fetch_libjxl
 cmake="${CMAKE:-cmake}"
-# source_icc.h is included by the patched lib/jxl/enc_xyb.cc, hence -I src.
 "$cmake" -S build/libjxl -B build/native \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="${CXX:-g++}" -DCMAKE_C_COMPILER="${CC:-gcc}" \
-  -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG -march=x86-64-v3 -DHWY_COMPILE_ONLY_STATIC -I$PWD/src" -DCMAKE_C_FLAGS_RELEASE='-O1 -DNDEBUG' \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O1 -DNDEBUG -march=x86-64-v3 -DHWY_COMPILE_ONLY_STATIC" -DCMAKE_C_FLAGS_RELEASE='-O1 -DNDEBUG' \
   -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS=ON -DJPEGXL_ENABLE_BENCHMARK=OFF \
   -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_JNI=OFF \
   -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_SKCMS=OFF \
@@ -21,5 +20,4 @@ inc=(-Ibuild/libjxl/lib/include -Ibuild/native/lib/include)
 # Independent decoder: links the unmodified system libjxl 0.11, never the patched build.
 "$cxx" -std=c++17 -O2 -Wall -Wextra -Werror "${inc[@]}" tools/decode_float.cc \
   "${SYSTEM_JXL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl.so.0.11}" "${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.11}" -o build/decode-float
-"$cxx" -std=c++17 -O1 -Wall -Wextra -Werror "${inc[@]}" tools/tail_guard.cc \
-  build/native/lib/libjxl.so -Wl,-rpath,"$PWD/build/native/lib" -o build/tail-guard
+# tools/tail_guard.cc needs the Rust CMS: see scripts/build-tail-guard.sh.

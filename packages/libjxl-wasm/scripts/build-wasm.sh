@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Wasm codec: patched libjxl (static, skcms CMS) + bridge + a planar-session staticlib.
+# Wasm codec: patched libjxl (static, stock skcms as fallback CMS) + bridge + a planar-session
+# staticlib (which carries the Rust CMS installed by bridge.cc via JxlEncoderSetCms).
 # PLANAR_SESSION_LIB must point at a wasm32-unknown-emscripten staticlib implementing
 # src/planar_session.h (experiments/jxl-planar-xyb/build-wasm.sh builds it and calls this).
 set -euo pipefail
@@ -10,11 +11,10 @@ export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 export EM_CACHE="${EM_CACHE:-$PWD/build/em-cache}"
 mkdir -p "$EMCC_TEMP_DIR" build/wasm
 fetch_libjxl
-apply_once build/libjxl/third_party/skcms "$PWD/patches/skcms-xyb.patch"
 cmake="${CMAKE:-$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake}"
 emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
-  -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions -I$PWD/src" \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions" \
   -DCMAKE_C_FLAGS_RELEASE='-O2 -DNDEBUG -msimd128' \
   -DJPEGXL_BUNDLE_LIBPNG=OFF -DJPEGXL_ENABLE_WASM_THREADS=OFF -DJPEGXL_ENABLE_TOOLS=OFF \
   -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF \

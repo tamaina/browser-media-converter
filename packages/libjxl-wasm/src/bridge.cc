@@ -1,6 +1,11 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
+// Colour: the Rust CMS (experiments/jxl-planar-xyb/src/cms.rs) is installed
+// through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
+#include <jxl/cms.h>
+#include <jxl/cms_interface.h>
 #include <jxl/encode.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -24,7 +29,14 @@ extern "C" double planar_clock_ms() {
 #include <memory>
 #include <stdexcept>
 #include <vector>
-#include "source_icc.h"
+// Implemented in Rust (cms.rs).
+struct PlanarCms;
+extern "C" PlanarCms* planar_cms_create(const uint8_t* icc,size_t size,int mode,const JxlCmsInterface* fallback,char* error,size_t error_size);
+extern "C" JxlCmsInterface planar_cms_interface(PlanarCms* cms);
+extern "C" int planar_cms_enum_header(const PlanarCms* cms);
+extern "C" int planar_cms_path(const PlanarCms* cms);
+extern "C" int planar_cms_gray(const PlanarCms* cms);
+extern "C" void planar_cms_destroy(PlanarCms* cms);
 // Experiment ABI is synchronous, one caller per instance (as with diagnostics).
 static thread_local const uint8_t* source_profile=nullptr;
 static thread_local size_t source_profile_size=0;
@@ -114,20 +126,24 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
   try {
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     Source source{opaque,fill,*result,false,0,false,{},0,0,{}, {}};
-    std::unique_ptr<source_icc::Profile> profile;
+    // Validates/parses the source ICC (errors are "ICC: ..."), always installed
+    // so enum inputs also use the Rust transfer/primaries path.
+    char cms_error[256]="";
+    std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
+        planar_cms_create(source_profile,source_profile?source_profile_size:0,header_mode,JxlGetDefaultCms(),cms_error,sizeof cms_error),
+        planar_cms_destroy);
+    if(!cms) throw std::runtime_error(cms_error[0]?cms_error:"CMS allocation failed");
     if(source_profile) {
-      profile=std::make_unique<source_icc::Profile>(source_profile,source_profile_size);
-      if(!profile->error.empty())throw std::runtime_error("ICC: "+profile->error);
-      source_profile_path=profile->gray?3:profile->matrix?1:2;
-      source.gray=profile->gray;
-      if(source.gray && header_mode>1)throw std::runtime_error("ICC: Gray profiles cannot select an RGB header target");
-      if(source.gray && !profile->matrix)throw std::runtime_error("ICC: Gray requires a supported kTRC curve");
+      source_profile_path=planar_cms_path(cms.get());
+      source.gray=planar_cms_gray(cms.get())!=0;
       if(source.gray && rgb)for(size_t i=0;i<size_t(c->width)*c->height;i++)
         if(rgb[i*3]!=rgb[i*3+1] || rgb[i*3]!=rgb[i*3+2])throw std::runtime_error("ICC: Gray profile requires R=G=B");
     }
     source.capture_width=c->width;source.capture_height=c->height;
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
+    const JxlCmsInterface interface=planar_cms_interface(cms.get());
+    JxlEncoderSetCms(enc.get(),interface);
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
@@ -148,10 +164,16 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
         static_cast<JxlTransferFunction>(c->transfer==1001 ? 1 : c->transfer);
     if(c->transfer==1) color.gamma=1.0/2.4; // encoded = linear^gamma
     if(source_profile) {
-      if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
+      if(header_mode>=2) {
+        // BT.2100 / P3 header with sRGB transfer. The CMS still converts the
+        // pixels from the source ICC (the header only names the data space).
+        JxlColorEncoding target; JxlColorEncodingSetToSRGB(&target,JXL_FALSE);
+        target.primaries=header_mode==2?JXL_PRIMARIES_2100:JXL_PRIMARIES_P3;
+        check(JxlEncoderSetColorEncoding(enc.get(),&target));
+      } else if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
         throw std::runtime_error("ICC: libjxl CMS rejected the profile");
-      if(header_mode==1 || (header_mode && !source.gray))JxlEncoderExperimentalICCHeader(enc.get(),header_mode);
-      source_profile_header=JxlEncoderExperimentalWantICC(enc.get());
+      // Exact mode (1) always embeds; auto embeds unless the CMS described it.
+      source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
