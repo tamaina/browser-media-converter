@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Wasm codec: patched libjxl (static, stock skcms as fallback CMS) + bridge + a planar-session
-# staticlib (which carries the Rust CMS installed by bridge.cc via JxlEncoderSetCms).
+# Wasm codec: patched libjxl (static, without libjxl_cms/skcms) + bridge + a planar-session
+# staticlib (which carries the Rust CMS installed by bridge.cc via JxlEncoderSetCms;
+# wasm_entry.cc stubs JxlGetDefaultCms).
 # PLANAR_SESSION_LIB must point at a wasm32-unknown-emscripten staticlib implementing
 # src/planar_session.h (experiments/jxl-planar-xyb/build-wasm.sh builds it and calls this).
 set -euo pipefail
@@ -22,7 +23,8 @@ emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DJPEGXL_ENABLE_SKCMS=ON -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
   -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF
 "$cmake" --build build/wasm-codec --target jxl --parallel 1
-mapfile -t libs < <(find build/wasm-codec -name '*.a' | sort)
+# The `jxl` target still builds libjxl_cms.a (skcms); it is deliberately left out.
+mapfile -t libs < <(find build/wasm-codec -name '*.a' ! -name 'libjxl_cms.a' | sort)
 em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
   -Ibuild/libjxl/lib/include -Ibuild/wasm-codec/lib/include -Ibuild/libjxl/third_party/highway \
   src/wasm_entry.cc src/bridge.cc "$PLANAR_SESSION_LIB" -Wl,--start-group "${libs[@]}" -Wl,--end-group \

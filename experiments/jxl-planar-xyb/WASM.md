@@ -121,6 +121,7 @@ and pass both to `encodeRgb`.
 - Read exactly by the Rust CMS (`src/cms.rs`, installed with the stock `JxlEncoderSetCms`): `curv` identity/gamma/table and `para` 0–4.
 - Colorants go D50 PCS → Bradford → linear BT.709. That matrix is folded into opsin with no clipping; for example, P3 keeps a minimum of −0.225 and Adobe −0.398.
 - U8 uses exact per-code curve LUTs.
+- Header choice (`set_fields_from_icc`) is a Rust port of libjxl's skcms variant (white/primaries snapping, gamma and 709/linear/sRGB/DCI candidates via the 252-byte random-pixel comparison, `cicp` tag). No C CMS is used: Wasm does not link `libjxl_cms.a`/skcms; natively `libjxl.so` still loads `libjxl_cms.so` (LCMS2) but never calls it. Without a `cicp` tag, PQ/HLG curves are kept as ICC (the skcms A2B candidates are not ported).
 
 **LUT (A2B) profiles.**
 - Converted by moxcms `=0.9.1` (relative colorimetric, `extended_range`), identically in WASM and natively.
@@ -186,7 +187,7 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size | 2,598,958 B raw / 995,020 B gzip (+284,678 / +123,750 for the Rust CMS with moxcms) |
+| WASM size | 2,513,318 B raw / 967,598 B gzip (+199,038 / +96,328 for the Rust CMS with moxcms; dropping skcms/`libjxl_cms.a` saved 85,640 / 27,422) |
 
 ## Known limitations
 

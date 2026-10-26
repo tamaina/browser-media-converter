@@ -38,8 +38,10 @@ marking/header override in `color_encoding_internal.h` and `encode.cc`
 (`JxlEncoderExperimentalWantICC` / `JxlEncoderExperimentalICCHeader`), the
 `source_icc.h` matrix/TRC path and the built-in gamma/709 path in `ToXYB`, and
 the whole `skcms-xyb.patch` (XYZ-PCS A2B scaling; LUT profiles now go to moxcms).
-skcms (Wasm) and LCMS2 (native) stay linked, unpatched, as the default CMS that
-the Rust CMS delegates to for `set_fields_from_icc` and for PQ/HLG/DCI.
+The Rust CMS is self-contained (`set_fields_from_icc` and PQ/HLG/DCI included):
+the Wasm link leaves out `libjxl_cms.a` (skcms) and `wasm_entry.cc` stubs
+`JxlGetDefaultCms`. Natively `libjxl.so` still depends on `libjxl_cms.so`
+(LCMS2) because `JxlEncoderCreate` references it, but it is never used.
 
 ## Build
 

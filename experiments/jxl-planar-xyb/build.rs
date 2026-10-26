@@ -5,7 +5,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PLANAR_SESSION_ONLY");
     if target == "wasm32-unknown-emscripten" || env::var_os("PLANAR_SESSION_ONLY").is_some() {
         // Session/CMS staticlib only (build-wasm.sh, tail-guard): the C++ side
-        // compiles bridge.cc itself and links libjxl + libjxl_cms.
+        // compiles bridge.cc itself and links libjxl (Wasm: without libjxl_cms).
         return;
     }
     assert_eq!(
@@ -55,13 +55,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=hdr_bridge");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-arg={library}");
-    // JxlGetDefaultCms (fallback of the Rust CMS for PQ/HLG etc.).
-    let cms = env::var("JXL_CMS_LIBRARY").unwrap_or_else(|_| {
-        let lib = PathBuf::from(&library);
-        let name = lib.file_name().unwrap().to_string_lossy().replace("libjxl.", "libjxl_cms.");
-        lib.with_file_name(name).display().to_string()
-    });
-    println!("cargo:rustc-link-arg={cms}");
+    // No JxlGetDefaultCms: the Rust CMS (src/cms.rs) is complete. libjxl.so
+    // itself still needs libjxl_cms.so (LCMS2) for its unused default.
     println!(
         "cargo:rustc-link-arg=-Wl,-rpath,{}",
         PathBuf::from(&library).parent().unwrap().display()
@@ -70,6 +65,5 @@ fn main() {
     println!("cargo:rerun-if-changed={include}/jxl/encode.h");
     println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
     println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
-    println!("cargo:rerun-if-env-changed=JXL_CMS_LIBRARY");
     println!("cargo:rerun-if-env-changed=LIBJXL_WASM_DIR");
 }

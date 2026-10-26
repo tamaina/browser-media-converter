@@ -1,7 +1,6 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
 // Colour: the Rust CMS (experiments/jxl-planar-xyb/src/cms.rs) is installed
 // through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
-#include <jxl/cms.h>
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>
 #include <algorithm>
@@ -31,7 +30,7 @@ extern "C" double planar_clock_ms() {
 #include <vector>
 // Implemented in Rust (cms.rs).
 struct PlanarCms;
-extern "C" PlanarCms* planar_cms_create(const uint8_t* icc,size_t size,int mode,const JxlCmsInterface* fallback,char* error,size_t error_size);
+extern "C" PlanarCms* planar_cms_create(const uint8_t* icc,size_t size,int mode,char* error,size_t error_size);
 extern "C" JxlCmsInterface planar_cms_interface(PlanarCms* cms);
 extern "C" int planar_cms_enum_header(const PlanarCms* cms);
 extern "C" int planar_cms_path(const PlanarCms* cms);
@@ -130,7 +129,7 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
     std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
-        planar_cms_create(source_profile,source_profile?source_profile_size:0,header_mode,JxlGetDefaultCms(),cms_error,sizeof cms_error),
+        planar_cms_create(source_profile,source_profile?source_profile_size:0,header_mode,cms_error,sizeof cms_error),
         planar_cms_destroy);
     if(!cms) throw std::runtime_error(cms_error[0]?cms_error:"CMS allocation failed");
     if(source_profile) {

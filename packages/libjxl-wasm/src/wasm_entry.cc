@@ -3,6 +3,22 @@
 #include <hwy/targets.h>
 #include <hwy/detect_targets.h>
 #include <cstdlib>
+#include <jxl/cms_interface.h>
+// libjxl_cms.a (stock skcms) is not linked: bridge.cc always installs the Rust
+// CMS via JxlEncoderSetCms. JxlEncoderCreate still takes the default CMS, so
+// provide one that rejects every profile instead of linking skcms.
+extern "C" const JxlCmsInterface* JxlGetDefaultCms() {
+  static const JxlCmsInterface none{
+      nullptr,
+      [](void*, const uint8_t*, size_t, JxlColorEncoding*, JXL_BOOL*) -> JXL_BOOL { return 0; },
+      nullptr,
+      [](void*, size_t, size_t, const JxlColorProfile*, const JxlColorProfile*, float) -> void* { return nullptr; },
+      [](void*, size_t) -> float* { return nullptr; },
+      [](void*, size_t) -> float* { return nullptr; },
+      [](void*, size_t, const float*, float*, size_t) -> JXL_BOOL { return 0; },
+      [](void*) {}};
+  return &none;
+}
 // Internal transfer codes: 1 = BT.1886 Lb=0; 13 = sRGB; 1001 = inverse709.
 static PlanarInput input{};
 static PlanarEncoded output{};
