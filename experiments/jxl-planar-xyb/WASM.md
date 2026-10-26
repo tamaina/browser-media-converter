@@ -126,6 +126,7 @@ and pass both to `encodeRgb`.
 - Converted by moxcms `=0.9.1` (relative colorimetric, `extended_range`), identically in WASM and natively.
 - moxcms 0.9.1 reads only A2B1 for relative intent; A2B0-only profiles get an A2B1 alias entry first (`moxcms_091_relative_a2b0_alias`, remove after moxcms > 0.9.1; upstream PR #205).
 - Fixture `lut` XYB vs LCMS2: 3.29e-4 max (gate .003; skcms/LCMS before: 2.32e-4 WASM / 1.11e-4 native).
+- `prefer_fixed_point: false`: moxcms' default `true` stores the f32 LUT grid as Q2.14 with its SIMD LUT features and clips at ~2.0 (HDR/wide LUTs such as AppleHagc reach 10.3; moxcms#208). Our build disables those features, so this changes no output today (same XYB, timing within noise); `lut_values_above_two_are_not_clipped` guards it.
 
 **Gray profiles.**
 - Produce a true one-channel JXL (`num_color_channels=1`).
@@ -185,7 +186,7 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size | 2,599,958 B raw / 995,080 B gzip (+285,678 / +123,810 for the Rust CMS with moxcms) |
+| WASM size | 2,598,958 B raw / 995,020 B gzip (+284,678 / +123,750 for the Rust CMS with moxcms) |
 
 ## Known limitations
 

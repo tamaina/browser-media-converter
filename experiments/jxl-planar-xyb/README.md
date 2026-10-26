@@ -21,7 +21,7 @@ published packages depends on this directory.
 | Path | Role |
 | --- | --- |
 | `src/lib.rs` | Rust planar session: validation, owned planes, the C ABI in `packages/libjxl-wasm/src/planar_session.h` |
-| `src/cms.rs` | Rust CMS for the stock `JxlEncoderSetCms`: bounded matrix/TRC ICC reader, enum transfer/primaries, moxcms (`=0.9.1`) for LUT ICC |
+| `src/cms.rs` | Rust CMS for the stock `JxlEncoderSetCms`: bounded matrix/TRC ICC reader, enum transfer/primaries, moxcms (`=0.9.1`, f32 LUT with `prefer_fixed_point: false`, see moxcms#208) for LUT ICC |
 | `build*.sh`, `build.rs`, `Cargo.*` | Rust builds; `build.sh` / `build-wasm.sh` call `packages/libjxl-wasm/scripts/build-{native,wasm}.sh` |
 | `libjxl-package.mjs` | Package paths for the runners; test servers map `/libjxl-wasm/` to the package |
 | `oracle/` | Independent jxl-oxide decoder (Rust) used by the tests |

@@ -278,6 +278,13 @@ fn moxcms_lut(icc: &[u8]) -> Result<LutTransform, String> {
     let options = TransformOptions {
         rendering_intent: RenderingIntent::RelativeColorimetric,
         allow_extended_range_rgb_xyz: true,
+        // moxcms defaults to true. With its SIMD LUT features (avx_luts /
+        // sse_luts / neon_luts) the f32 LUT grid is then stored as Q2.14 i16
+        // and saturates at ~2.0, silently clipping wide-gamut/HDR LUT profiles
+        // (AppleHagc reaches 10.3 linear): https://github.com/awxkee/moxcms/issues/208
+        // Our Cargo.toml disables those features, so the scalar float path is
+        // used today either way; this keeps it correct if they are enabled.
+        prefer_fixed_point: false,
         ..Default::default()
     };
     source
@@ -737,6 +744,46 @@ mod tests {
         let mut out = [0f32; 3];
         t.transform(&[1.0, 1.0, 1.0], &mut out).unwrap();
         assert!(out.iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
+    }
+    /// Synthetic v4 RGB->XYZ lutAtoBType (linear curves, identity 2^3 CLUT, sRGB
+    /// D50 matrix x`scale`; mAB XYZ PCS units are 1.0 = 65535/32768, so x2
+    /// maps white to ~4.0 linear), like HDR/wide LUT profiles
+    /// (AppleHagc reaches 10.3). With moxcms' default prefer_fixed_point and
+    /// its avx_luts feature the f32 LUT saturates at ~2.0 (moxcms#208;
+    /// verified: this test then gets 1.99988).
+    fn hdr_lut_profile(scale: f64) -> Vec<u8> {
+        let s15 = |v: f64| ((v * 65536.0).round() as i32).to_be_bytes();
+        // Two-entry linear curv (a zero-entry identity curv sends moxcms to its
+        // float "katana" fallback, which does not show the clipping).
+        let curv = || -> Vec<u8> { let mut c = b"curv\0\0\0\0\0\0\0\x02".to_vec(); c.extend([0, 0, 0xff, 0xff]); c };
+        let curves = || -> Vec<u8> { (0..3).flat_map(|_| curv()).collect() };
+        let srgb_d50 = [0.4360747, 0.3850649, 0.1430804, 0.2225045, 0.7168786, 0.0606169, 0.0139322, 0.0971045, 0.7141733];
+        let mut matrix: Vec<u8> = srgb_d50.iter().flat_map(|&v| s15(v * scale)).collect();
+        matrix.extend([0u8; 12]);
+        let mut clut = vec![2u8, 2, 2]; clut.extend([0u8; 13]); clut.push(2); clut.extend([0u8; 3]);
+        for i in 0..8u16 { for c in 0..3 { clut.extend(if i >> (2 - c) & 1 == 1 { [0xffu8, 0xff] } else { [0, 0] }); } }
+        let mut mab = b"mAB \0\0\0\0\x03\x03\0\0".to_vec();
+        let parts = [curves(), matrix, curves(), clut, curves()]; // B, matrix, M, CLUT, A
+        let mut offset = 32u32;
+        for part in &parts { mab.extend(offset.to_be_bytes()); offset += part.len() as u32; }
+        for part in parts { mab.extend(part); }
+        let mut wtpt = b"XYZ \0\0\0\0".to_vec();
+        for v in [0.9642, 1.0, 0.8249] { wtpt.extend(s15(v)); }
+        let mut icc = profile(&[(b"wtpt", wtpt), (b"A2B0", mab)]);
+        icc[8..12].copy_from_slice(&[4, 0x30, 0, 0]);
+        icc[12..24].copy_from_slice(b"mntrRGB XYZ ");
+        icc[36..40].copy_from_slice(b"acsp");
+        icc[84..100].fill(0);
+        for (k, v) in [0.9642, 1.0, 0.8249].into_iter().enumerate() { icc[68 + 4 * k..72 + 4 * k].copy_from_slice(&s15(v)); }
+        icc
+    }
+    #[test]
+    fn lut_values_above_two_are_not_clipped() {
+        let t = moxcms_lut(&hdr_lut_profile(2.0)).expect("synthetic HDR LUT");
+        let mut out = [0f32; 6];
+        t.transform(&[1.0, 1.0, 1.0, 0.25, 0.25, 0.25], &mut out).unwrap();
+        assert!(out[..3].iter().all(|v| (v - 4.0).abs() < 0.02), "white {out:?}");
+        assert!(out[3..].iter().all(|v| (v - 1.0).abs() < 0.02), "quarter {out:?}");
     }
     #[test]
     fn fast_math_matches_reference() {
