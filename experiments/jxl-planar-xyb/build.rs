@@ -55,8 +55,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=hdr_bridge");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-arg={library}");
-    // No JxlGetDefaultCms: the Rust CMS (src/cms.rs) is complete. libjxl.so
-    // itself still needs libjxl_cms.so (LCMS2) for its unused default.
+    // The patched libjxl embeds a rejecting default CMS. bridge.cc always
+    // installs the complete Rust CMS; no external C CMS is linked.
     println!(
         "cargo:rustc-link-arg=-Wl,-rpath,{}",
         PathBuf::from(&library).parent().unwrap().display()

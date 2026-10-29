@@ -24,7 +24,7 @@ prebuilt Rust staticlib.
 ## Patch inventory (libjxl v0.11.1, pin unchanged)
 
 `patches/libjxl-xyb.patch` (303 lines; 473 before the Rust CMS) only adds input
-plumbing. libjxl colour management is stock:
+plumbing; the stock CMS interface is unchanged:
 
 | File | Kept hunk |
 | --- | --- |
@@ -39,14 +39,27 @@ marking/header override in `color_encoding_internal.h` and `encode.cc`
 `source_icc.h` matrix/TRC path and the built-in gamma/709 path in `ToXYB`, and
 the whole `skcms-xyb.patch` (XYZ-PCS A2B scaling; LUT profiles now go to moxcms).
 The Rust CMS is self-contained (`set_fields_from_icc` and PQ/HLG/DCI included):
-the Wasm link leaves out `libjxl_cms.a` (skcms) and `wasm_entry.cc` stubs
-`JxlGetDefaultCms`. Natively `libjxl.so` still depends on `libjxl_cms.so`
-(LCMS2) because `JxlEncoderCreate` references it, but it is never used.
+`patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`. Both encoder
+builds enable it and disable skcms: CMake skips skcms/LCMS2 discovery and compiles
+only a tiny static `jxl_cms` stub whose `JxlGetDefaultCms` rejects all profiles
+and transforms. This replaces the former `wasm_entry.cc` stub. Native
+`libjxl.so` embeds the stub and has no `libjxl_cms.so` or LCMS2 dependency.
+The bridge must install the Rust CMS before encoding. Only Highway and Brotli
+submodules are initialized; neither skcms nor LCMS2 is fetched or compiled.
+
+The separate `build/native-reference` build keeps stock libjxl CMS code linked
+to **system LCMS2**, solely for `djxl` regression comparisons that request
+original-profile, linear BT.709 and sRGB output. It does not compile LCMS2.
+`build/native/tools/djxl` is a wrapper that selects this reference library even
+when the encoder directory is in `LD_LIBRARY_PATH`. This reference decoder is
+not linked into either encoder.
 
 ## Build
 
-Never run builds in parallel; every step uses `--parallel 1` / `EMCC_CORES=1`.
-Temporary files and caches stay in `build/tmp` and `build/em-cache`.
+Run builds sequentially. Native C++ builds use up to six jobs
+(`LIBJXL_BUILD_JOBS` overrides this); Rust and Emscripten builds use one.
+Temporary files respect an existing `TMPDIR` (default `build/tmp`); caches stay
+in ignored build directories (`build/em-cache` for Emscripten).
 
 ```sh
 bash scripts/build-native.sh   # build/native/lib/libjxl.so, build/native/tools/djxl,
@@ -61,8 +74,10 @@ bash ../../experiments/jxl-planar-xyb/build-wasm.sh   # build/wasm/codec.{mjs,wa
 `scripts/build-wasm.sh` alone needs `PLANAR_SESSION_LIB` (a
 `wasm32-unknown-emscripten` staticlib implementing `src/planar_session.h`) and
 emsdk (`EMSDK_ENV`, default `~/emsdk/emsdk_env.sh`). `CMAKE` overrides cmake.
-The native build links system Brotli/LCMS2; `decode-float` links the unmodified
-system `libjxl.so.0.11` so that it stays an independent decoder.
+The native encoder links system Brotli. `decode-float` links the unmodified
+system `libjxl.so.0.11` and its system CMS as a second independent decoder;
+its RPATH takes precedence over the encoder's `LD_LIBRARY_PATH`.
+System LCMS2 is needed only by the reference decoders and Python ICC verifiers.
 
 ## Use
 

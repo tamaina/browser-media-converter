@@ -121,7 +121,7 @@ and pass both to `encodeRgb`.
 - Read exactly by the Rust CMS (`src/cms.rs`, installed with the stock `JxlEncoderSetCms`): `curv` identity/gamma/table and `para` 0–4.
 - Colorants go D50 PCS → Bradford → linear BT.709. That matrix is folded into opsin with no clipping; for example, P3 keeps a minimum of −0.225 and Adobe −0.398.
 - U8 uses exact per-code curve LUTs.
-- Header choice (`set_fields_from_icc`) is a Rust port of libjxl's skcms variant (white/primaries snapping, gamma and 709/linear/sRGB/DCI candidates via the 252-byte random-pixel comparison, `cicp` tag). No C CMS is used: Wasm does not link `libjxl_cms.a`/skcms; natively `libjxl.so` still loads `libjxl_cms.so` (LCMS2) but never calls it. Without a `cicp` tag, PQ/HLG curves are kept as ICC (the skcms A2B candidates are not ported).
+- Header choice (`set_fields_from_icc`) is a Rust port of libjxl's skcms variant (white/primaries snapping, gamma and 709/linear/sRGB/DCI candidates via the 252-byte random-pixel comparison, `cicp` tag). No C CMS is used by either encoder: `JPEGXL_EXTERNAL_CMS=ON` skips skcms/LCMS2 discovery and builds only a static rejecting default-CMS stub; native `libjxl.so` has no `libjxl_cms.so` dependency. Without a `cicp` tag, PQ/HLG curves are kept as ICC (the skcms A2B candidates are not ported).
 
 **LUT (A2B) profiles.**
 - Converted by moxcms `=0.9.1` (relative colorimetric, `extended_range`), identically in WASM and natively.
@@ -187,7 +187,11 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size | 2,513,318 B raw / 967,598 B gzip (+199,038 / +96,328 for the Rust CMS with moxcms; dropping skcms/`libjxl_cms.a` saved 85,640 / 27,422) |
+| WASM size (`codec.wasm`) | 2,513,349 B raw / 967,625 B gzip (Python `gzip.compress(data, compresslevel=9, mtime=0)`; +31 / +27 vs 2,513,318 / 967,598 before removing the C CMS build) |
+
+The C CMS was already absent from the previous WASM link. Removing its build
+and moving the rejecting default CMS into a static stub changes size only
+slightly; the benefit is avoiding CMS fetching, discovery and compilation.
 
 ## Known limitations
 
@@ -205,16 +209,24 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 ## Build and test
 
 Requirements:
-- emsdk (`EMSDK_ENV` or `~/emsdk`), CMake (3.31.6 used), Rust, g++, Python 3 with NumPy, and LCMS2/Brotli dev libraries.
+- emsdk (`EMSDK_ENV` or `~/emsdk`), CMake (3.31.6 used), Rust, g++, Python 3 with NumPy, and Brotli dev libraries. System LCMS2 is required only for the reference `djxl` build and independent Python ICC verifiers.
 - Playwright with Chrome stable.
-- Run everything **sequentially**; all builds use one job.
+- Run everything **sequentially**; native C++ uses up to six jobs (`LIBJXL_BUILD_JOBS` override), Rust and WASM use one.
 
-Set `TMPDIR` etc. to `build/tmp` if you want temporary files kept in the tree;
-`build-wasm.sh` already does this for itself.
+Build scripts respect an existing `TMPDIR`, defaulting to their ignored
+`build/tmp`; caches also remain in ignored build directories. Neither skcms
+nor LCMS2 is fetched. The encoder builds compile neither CMS; a separate
+`native-reference` build compiles stock libjxl CMS glue against system LCMS2
+for decoder comparisons. `native/tools/djxl` selects that reference library
+explicitly, independently of the encoder's `LD_LIBRARY_PATH`.
 
 ```sh
 cd experiments/jxl-planar-xyb
 bash build.sh                  # package: clone/patch libjxl, native libs, djxl, tools; then Rust adapter, oracle
+JXL_INCLUDE="$PWD/../../packages/libjxl-wasm/build/libjxl/lib/include" \
+JXL_LIBRARY="$PWD/../../packages/libjxl-wasm/build/native/lib/libjxl.so" \
+LD_LIBRARY_PATH="$PWD/../../packages/libjxl-wasm/build/native/lib" \
+CARGO_TARGET_DIR="$PWD/build/target" cargo test --lib --locked --jobs 1
 bash build-wasm.sh             # cargo (moxcms, Cargo.lock) session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
 node wasm/browser-test.mjs     # main suite, then round10 → round11 → round12 (each closes Chrome first)
 node wasm/browser-test.mjs --benchmark [--real10]   # timings → build/browser/benchmark-observations.json

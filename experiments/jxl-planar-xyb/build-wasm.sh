@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 source "${EMSDK_ENV:-$HOME/emsdk/emsdk_env.sh}"
-export TMPDIR="$PWD/build/tmp"
+export TMPDIR="${TMPDIR:-$PWD/build/tmp}"
+mkdir -p "$TMPDIR"
 export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache" npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
 mkdir -p "$TMPDIR" build/wasm
 # Cargo (not bare rustc) because the session links moxcms (pinned in Cargo.lock).

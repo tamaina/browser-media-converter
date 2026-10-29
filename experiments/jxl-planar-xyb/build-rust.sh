@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build/tmp
-export TMPDIR="$PWD/build/tmp"
+export TMPDIR="${TMPDIR:-$PWD/build/tmp}"
+mkdir -p "$TMPDIR"
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="${CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER:-/usr/bin/gcc}"
 export CARGO_TARGET_DIR="$PWD/build/target"
 if [[ -z ${JXL_INCLUDE:-} ]]; then

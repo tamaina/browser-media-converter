@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Wasm codec: patched libjxl (static, without libjxl_cms/skcms) + bridge + a planar-session
+# Wasm codec: patched libjxl (static, rejecting CMS stub; no skcms/LCMS2) + bridge + a planar-session
 # staticlib (which carries the Rust CMS installed by bridge.cc via JxlEncoderSetCms;
-# wasm_entry.cc stubs JxlGetDefaultCms).
+# libjxl-external-cms.patch supplies the rejecting JxlGetDefaultCms).
 # PLANAR_SESSION_LIB must point at a wasm32-unknown-emscripten staticlib implementing
 # src/planar_session.h (experiments/jxl-planar-xyb/build-wasm.sh builds it and calls this).
 set -euo pipefail
@@ -20,11 +20,11 @@ emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DJPEGXL_BUNDLE_LIBPNG=OFF -DJPEGXL_ENABLE_WASM_THREADS=OFF -DJPEGXL_ENABLE_TOOLS=OFF \
   -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF \
   -DJPEGXL_ENABLE_JNI=OFF -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF \
-  -DJPEGXL_ENABLE_SKCMS=ON -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
+  -DJPEGXL_EXTERNAL_CMS=ON -DJPEGXL_ENABLE_SKCMS=OFF -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
   -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF
 "$cmake" --build build/wasm-codec --target jxl --parallel 1
-# The `jxl` target still builds libjxl_cms.a (skcms); it is deliberately left out.
-mapfile -t libs < <(find build/wasm-codec -name '*.a' ! -name 'libjxl_cms.a' | sort)
+# jxl_cms is the tiny rejecting stub, with no skcms/LCMS2 sources.
+mapfile -t libs < <(find build/wasm-codec -name '*.a' | sort)
 em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
   -Ibuild/libjxl/lib/include -Ibuild/wasm-codec/lib/include -Ibuild/libjxl/third_party/highway \
   src/wasm_entry.cc src/bridge.cc "$PLANAR_SESSION_LIB" -Wl,--start-group "${libs[@]}" -Wl,--end-group \

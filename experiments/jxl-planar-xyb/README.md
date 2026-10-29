@@ -51,7 +51,14 @@ python3 test_xyb.py
 ```
 
 `build.sh` runs the package's `build-native.sh` (verifies the libjxl revision,
-applies the patch, builds libjxl, `djxl` and the stock-libjxl decoder into
+applies the patches, builds the CMS-free encoder libjxl, reference `djxl` and the stock-libjxl decoder into
 `packages/libjxl-wasm/build/`), then the Rust adapter, the jxl-oxide oracle, and
-a host session staticlib that `build-tail-guard.sh` links into the tail guard. It uses one job to
-limit memory.
+a host session staticlib that `build-tail-guard.sh` links into the tail guard.
+Rust uses one job; native C++ uses up to six (`LIBJXL_BUILD_JOBS` to override).
+
+Both WASM and native encoders use `JPEGXL_EXTERNAL_CMS=ON`: a rejecting default
+CMS stub is embedded, and the bridge installs `src/cms.rs`. Neither encoder
+build discovers or compiles skcms/LCMS2. The separate `build/native-reference`
+`djxl` uses system LCMS2 for decoder colour-conversion comparisons, and
+`round11/lcms.py` uses it as an independent ICC reference. See the package
+[build notes](../../packages/libjxl-wasm/README.md) for details.
