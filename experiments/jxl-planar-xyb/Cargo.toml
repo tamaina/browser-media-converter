@@ -1,0 +1,16 @@
+[package]
+name = "jxl-planar-xyb-proof"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+# Pinned: LUT ICC profiles. See src/cms.rs for the 0.9.1 A2B0 alias workaround.
+moxcms = { version = "=0.9.1", default-features = false, features = ["lut", "extended_range"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 2

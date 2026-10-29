@@ -1,0 +1,22 @@
+{
+  "name": "@browser-mc/libjxl-wasm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Patched libjxl v0.11.1 (planar XYB input, source-ICC policy) built for native tests and WebAssembly, plus the createEncoder JS API.",
+  "type": "module",
+  "exports": {
+    ".": "./src/api.mjs",
+    "./codec.mjs": "./build/wasm/codec.mjs"
+  },
+  "scripts": {
+    "build:native": "bash scripts/build-native.sh",
+    "build:wasm": "bash ../../experiments/jxl-planar-xyb/build-wasm.sh"
+  },
+  "files": [
+    "src",
+    "patches",
+    "build/wasm/codec.mjs",
+    "build/wasm/codec.wasm",
+    "README.md"
+  ]
+}
