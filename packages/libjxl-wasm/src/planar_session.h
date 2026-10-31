@@ -35,6 +35,9 @@ int planar_set_bit_depth(PlanarSession*,uint32_t depth);
 void planar_destroy(PlanarSession*);
 int planar_region(PlanarSession*,size_t x,size_t y,size_t width,size_t height,float* rgb,size_t float_count);
 int planar_encode(PlanarSession*,PlanarEncoded*,char* error,size_t error_size);
+// Alpha plane is full resolution, source-depth, borrowed through encode only.
+int planar_encode_alpha(PlanarSession*,const PlanarPlane* alpha,PlanarEncoded*,char*,size_t);
+int rgb_encode_alpha(const PlanarRgbConfig*,const float*,size_t,const PlanarPlane* alpha,uint32_t alpha_depth,PlanarEncoded*,char*,size_t);
 int rgb_encode(const PlanarRgbConfig*,const float* rgb,size_t float_count,PlanarEncoded*,char* error,size_t error_size);
 // Packed source depth 8/16/32, channels 3/4. Straight alpha bypasses CMS.
 // Source pointers stay valid through the synchronous call; no opacity scan.

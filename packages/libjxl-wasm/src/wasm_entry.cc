@@ -5,6 +5,7 @@
 #include <cstdlib>
 // Internal transfer codes: 1 = BT.1886 Lb=0; 13 = sRGB; 1001 = inverse709.
 static PlanarInput input{};
+static PlanarPlane alpha{};
 static PlanarEncoded output{};
 static char error[512]{};
 float wasm_distance=1;
@@ -29,13 +30,15 @@ size_t w_xyb_count(){return output.xyb_count;}
 void w_options(int observe,int option) {planar_instrumentation(observe);validation=option;}
 double w_time(int i){return i==6?output.conversion_ms:times[i];}
 void w_init(int w,int h,int format,int matrix,int full,float distance,int effort,int depth,int out_depth,int transfer,int siting,int primaries,float intensity) {
-  planar_free(&output); input={}; error[0]=0;
+  planar_free(&output); input={}; alpha={}; error[0]=0;
   bridge_icc(nullptr,0);bridge_icc_header_mode(0);
   input.width=w;input.height=h;input.format=format;input.matrix=matrix;
   input.depth=depth;input.storage=depth==8?0:1;output_depth=out_depth;input.primaries=primaries;input.transfer=transfer;input.intensity=intensity;
   input.full_range=full;input.siting=siting;wasm_distance=distance;wasm_effort=effort;
 }
 void w_plane(int c,const uint8_t* p,size_t size,size_t offset,size_t stride) {
+  if(c==3){alpha={p,size,offset,stride,input.width,input.height};return;}
+  if(c<0 || c>2)return;
   size_t sx=input.format==2?1:2, sy=(input.format==0||input.format==3)?2:1;
   input.planes[c]={p,size,offset,stride,c? (input.width+sx-1)/sx:input.width,
                    c?(input.height+sy-1)/sy:input.height};
@@ -62,8 +65,8 @@ int w_encode(int mode) {
   if(!status) {
     if(mode!=0) {
       PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,input.intensity,uint32_t(output_depth)};
-      status=rgb_encode(&c,rgb,size_t(input.width)*input.height*3,&output,error,sizeof(error));
-    } else status=planar_encode(session,&output,error,sizeof(error));
+      status=rgb_encode_alpha(&c,rgb,size_t(input.width)*input.height*3,alpha.data?&alpha:nullptr,input.depth,&output,error,sizeof(error));
+    } else status=planar_encode_alpha(session,alpha.data?&alpha:nullptr,&output,error,sizeof(error));
   }
   times[4]=planar_clock_ms()-start;
   std::free(rgb);planar_destroy(session);return status;
@@ -87,5 +90,5 @@ const uint8_t* w_data(){return output.data;}
 size_t w_size(){return output.size;}
 size_t w_lanes(){return output.simd_lanes;}
 const char* w_target(){return hwy::TargetName(HWY_STATIC_TARGET);}
-void w_free(){planar_free(&output);bridge_icc(nullptr,0);}
+void w_free(){planar_free(&output);alpha={};bridge_icc(nullptr,0);}
 }

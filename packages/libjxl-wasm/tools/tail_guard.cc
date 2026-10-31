@@ -15,7 +15,7 @@ struct Guard {
 };
 int main() {
   try {
-    size_t cases=0;
+    size_t cases=0,planar_alpha_cases=0;
     setenv("JXL_EXPERIMENT_CAPTURE_XYB","1",1);
     setenv("JXL_EXPERIMENT_OBSERVE_REFERENCE","1",1);
     for(uint32_t depth:{8u,10u,12u}) for(uint32_t sx:{1u,2u}) for(uint32_t sy:{1u,2u}) {
@@ -70,9 +70,22 @@ int main() {
         if(hdr_jxl_encode(&config,nullptr,nullptr,rgb.data(),nullptr,&reference,error,sizeof(error)))throw std::runtime_error(error);
         if(out.xyb_count!=reference.xyb_count || !out.xyb_count)throw std::runtime_error("missing XYB capture");
         for(size_t i=0;i<out.xyb_count;++i)if(std::abs(out.xyb_data[i]-reference.xyb_data[i])>3e-6f)throw std::runtime_error("clipped scalar/SIMD mismatch");
+        if(matrix==1 && full && pattern==2 && siting==0 && transfer==13 && !(sx==1 && sy==2)) {
+          Guard a(width*height*bytes);
+          for(size_t i=0;i<size_t(width)*height;++i) {
+            const unsigned v=(i*193)% (1u<<depth);
+            a.data[i*bytes]=uint8_t(v);if(bytes==2)a.data[i*bytes+1]=uint8_t(v>>8);
+          }
+          Encoded with_alpha{};
+          if(hdr_jxl_encode_alpha(&config,nullptr,unused,nullptr,&raw,&with_alpha,error,sizeof(error),a.data,width*bytes,depth))throw std::runtime_error(error);
+          if(with_alpha.simd_lanes!=4 || with_alpha.callbacks || with_alpha.xyb_count!=out.xyb_count ||
+             std::memcmp(with_alpha.xyb_data,out.xyb_data,out.xyb_count*sizeof(float)))throw std::runtime_error("alpha disabled fused colour or changed XYB");
+          hdr_jxl_free(&with_alpha);++planar_alpha_cases;
+        }
         hdr_jxl_free(&reference);hdr_jxl_free(&out);++cases;
       }
     }
+    std::printf("%zu YUVA fused guard-page tail encodes passed\n",planar_alpha_cases);
     // Packed RGBA ends at the guard page: deinterleaving may not read past alpha.
     size_t alpha_cases=0;
     for(unsigned depth:{8u,16u,32u})for(unsigned width=1;width<=33;++width) {

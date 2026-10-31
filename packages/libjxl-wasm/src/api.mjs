@@ -117,8 +117,8 @@ export async function createEncoder(options = {}) {
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
-    const match=/^(I420|I422|I444)(?:P(10|12))?$/.exec(i.format??'');
-    const sourceDepth=rgb?(i.depth??i.bitDepth??8):(match?Number(match[2]??8):8);
+    const match=/^(I420|I422|I444)(A)?(?:P(10|12))?$/.exec(i.format??'');
+    const sourceDepth=rgb?(i.depth??i.bitDepth??8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization) && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
     const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
@@ -154,11 +154,11 @@ export async function createEncoder(options = {}) {
         }
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
-        if (!Array.isArray(i.planes) || i.planes.length !== (format===3?2:3)) fail('plane count');
+        if (!Array.isArray(i.planes) || i.planes.length !== (format===3?2:match?.[2]?4:3)) fail('plane count');
         let total=0;
         const layouts=i.planes.map((p,c)=> {
-          const w=c?Math.ceil(i.width/(format===2?1:2)):i.width;
-          const h=c?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
+          const w=c!==0&&c!==3?Math.ceil(i.width/(format===2?1:2)):i.width;
+          const h=c!==0&&c!==3?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
           const row=w*(format===3&&c?2:1)*(sourceDepth===8?1:2);
           if (!(p.data instanceof Uint8Array) || !integer(p.offset??0,0,p.data.length) || !integer(p.stride,row,67108864)) fail('plane data/offset/stride');
           const span=(h-1)*p.stride+row;

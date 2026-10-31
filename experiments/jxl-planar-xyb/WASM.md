@@ -16,7 +16,7 @@ const encoder = await createEncoder();
 
 // Planar YUV straight from VideoFrame.copyTo (offsets/strides in bytes).
 const jxl = encoder.encodePlanarYuv({
-  width, height, format: frame.format,           // I420/I422/I444/NV12, I4xxP10/P12
+  width, height, format: frame.format,           // I420/I422/I444/NV12, I4xxP10/P12 and I4xxA/AP10/AP12
   planes: [{data, offset, stride}, ...],
   colorSpace: frame.colorSpace,                  // optional; VideoColorSpace or plain object
   chromaSiting: 'left',                          // not exposed by WebCodecs; pass if known
@@ -307,3 +307,27 @@ to be simplified after conversion; hidden RGB is not guaranteed to survive.
 `node wasm/alpha-test.mjs` runs Chrome encoding then native XYB and independent
 libjxl/jxl-oxide decoding, including non-sRGB ICCs. This does not verify display
 compositing, canvas, real HDR displays, Firefox or Safari.
+
+Planar alpha: I420A/I422A/I444A and I420AP10/I422AP10/I444AP10,
+I420AP12/I422AP12/I444AP12. `planes[3]` has width×height samples and its own byte
+offset/stride. Alpha is full range even with limited-range YUV; its integer
+depth is the source format's 8/10/12 bits. No alpha ICC/CMS or luma/chroma
+range conversion is performed. `bitDepth: 'float32'` changes colour signalling
+without changing alpha depth. The combined 64 MiB span cap includes all four
+planes. The Rust session's original three-plane ABI is unchanged; alpha is
+borrowed through the synchronous extended encode call. `rgbViaPlanar` retains it.
+
+SDR YUVA still uses the four-lane fused colour kernel; PQ/HLG YUVA keeps the
+existing row/CMS colour path. Alpha uses libjxl's standard extra-channel copy
+and modular coding, at default extra-channel distance 0. No opacity scan or
+additional full-frame preflight is introduced.
+
+`node wasm/alpha-yuv.mjs` checks padded/offset odd-size planes, all three
+subsamplings/depths, PQ/HLG and float32 colour output, native/WASM exact XYB and
+codestream agreement, and independent alpha/colour decode.
+[WebCodecs §9.8](https://www.w3.org/TR/2026/WD-webcodecs-20261026/#pixel-format)
+confirms format names, plane order and sample layout; webcodecs-color uses the
+same descriptors. Tested Chrome 156 raw VideoFrame/copyTo accepted 8/10-bit
+alpha in all three layouts and preserved alpha bytes; AP12 enum values were
+rejected. Direct AP12 encoder input passed. WebCodecs association semantics
+are **unconfirmed** here; the caller must provide straight alpha values.

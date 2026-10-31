@@ -44,7 +44,8 @@ export interface ColorResolved extends Omit<ColorOptions, 'intensityTargetNits'>
 export type Encoded = Uint8Array & {colorResolved: ColorResolved; warnings: string[]};
 export interface Dimensions extends ColorOptions {/** Omitted means straight; other explicit modes are rejected. */ alphaMode?: 'straight'; width: number; height: number; depth?: 8 | 10 | 12; bitDepth?: 8 | 10 | 12; storage?: 'u8' | 'u16le-lsb'}
 export interface PlanarInput extends Dimensions {
-  format: 'I420' | 'I422' | 'I444' | 'NV12' | 'I420P10' | 'I422P10' | 'I444P10' | 'I420P12' | 'I422P12' | 'I444P12';
+  format: 'I420A' | 'I422A' | 'I444A' | 'I420AP10' | 'I422AP10' | 'I444AP10' | 'I420AP12' | 'I422AP12' | 'I444AP12' | 'I420' | 'I422' | 'I444' | 'NV12' | 'I420P10' | 'I422P10' | 'I444P10' | 'I420P12' | 'I422P12' | 'I444P12';
+  /** A formats require four planes; planes[3] is full-resolution, full-range alpha. */
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}

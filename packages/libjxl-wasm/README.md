@@ -128,3 +128,16 @@ does not change alpha depth. libjxl's default extra-channel distance is zero,
 so alpha is lossless even with colour distance 1. Fully transparent colour
 may be simplified by the default libjxl `KEEP_INVISIBLE` policy. The fused
 colour and row paths remain available with a separate alpha extra channel.
+
+Planar alpha uses `format: 'I420A' | 'I422A' | 'I444A'` and AP10/AP12 variants,
+with full-resolution `planes[3]`. Alpha uses full range and source depth 8/10/12
+regardless of YUV range or output colour depth. The standard extra-channel path
+copies/quantizes alpha; SDR colour still uses the fused SIMD kernel, and HDR
+keeps its existing row/CMS path. No extra full-image opacity/range scan is added.
+The 64 MiB source-span cap includes the alpha plane.
+
+The names/layouts are confirmed against [WebCodecs §9.8](https://www.w3.org/TR/2026/WD-webcodecs-20261026/#pixel-format)
+and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
+VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
+12-bit plane encoding works. WebCodecs alpha association semantics are
+**unconfirmed** in this work; callers must supply straight samples.

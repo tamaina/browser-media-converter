@@ -104,3 +104,19 @@ pre-scan is performed. Fully transparent colours follow libjxl's default
 
 Run `node wasm/alpha-test.mjs` after native and WASM builds for straight-colour,
 alpha, non-sRGB ICC, native/WASM XYB, decoder and sequential speed checks.
+
+`encodePlanarYuv` also accepts I420A/I422A/I444A and their AP10/AP12 variants.
+`planes[3]` is full-resolution, full-range alpha (even for limited-range YUV),
+with the same 8/10/12-bit source depth; high-bit samples are LE/LSB aligned.
+Alpha is separate from the three owned Rust colour planes and borrowed through
+the synchronous encode. The SDR fused SIMD and existing HDR row path are retained.
+`rgbViaPlanar` also carries alpha. The existing `proof.py` JSON CLI remains
+three-plane; native alpha verification uses the extended synchronous C ABI.
+Run `node wasm/alpha-yuv.mjs` for planar alpha tests and timings.
+
+Format names/order/depth and full-resolution alpha agree with
+[WebCodecs §9.8](https://www.w3.org/TR/2026/WD-webcodecs-20261026/#pixel-format)
+and `packages/webcodecs-color/src/formats.ts`. Chrome 156 accepted/copyTo-preserved
+8/10-bit alpha for all three subsamplings; it rejected all three AP12 enum values.
+Direct AP12 planes encode successfully. WebCodecs association/premultiplication
+semantics remain **unconfirmed** here; this API always requires straight values.

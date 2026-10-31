@@ -291,6 +291,11 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     Encoded* result,char* error,size_t error_size) {
   return encode(c,opaque,fill,rgb,yuv,result,error,error_size,{});
 }
+// Separate full-resolution alpha plane, borrowed through this synchronous call.
+extern "C" int hdr_jxl_encode_alpha(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
+    Encoded* result,char* error,size_t error_size,const uint8_t* alpha,size_t stride,unsigned depth) {
+  return encode(c,opaque,fill,rgb,yuv,result,error,error_size,Alpha{alpha,stride,size_t((depth+7)/8),depth});
+}
 extern "C" void hdr_jxl_free(Encoded* result) { if(result) { std::free(result->data); std::free(result->xyb_data); *result={}; } }
 
 // Source type is selected once per encode, avoiding per-sample type branches.
