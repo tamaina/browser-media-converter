@@ -40,13 +40,15 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Some("--linear-source") => desired.tf=jxl_oxide::color::TransferFunction::Linear,
         Some("--hdr-linear709") => desired=jxl_oxide::EnumColourEncoding::xyb(original.rendering_intent),
         Some("--linear709") => desired=jxl_oxide::EnumColourEncoding::srgb_linear(original.rendering_intent),
+        Some("--rgba") => desired=jxl_oxide::EnumColourEncoding::srgb(original.rendering_intent),
         Some("--srgb") => desired=jxl_oxide::EnumColourEncoding::srgb(original.rendering_intent),
         Some(_) => return Err("unknown output encoding".into()),
         None => (),
     }
     image.request_color_encoding(desired);
     let render = image.render_frame(0)?;
-    let mut stream = render.stream_no_alpha();
+    let rgba=args.get(3).is_some_and(|s| s=="--rgba");
+    let mut stream = if rgba {render.stream()} else {render.stream_no_alpha()};
     println!(
         "{} {} {} {} {} {}",
         stream.width(),
@@ -56,8 +58,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cicp[2],
         cicp[3]
     );
-    let mut pixels = vec![0f32; stream.width() as usize * stream.height() as usize * 3];
-    if stream.channels() != 3 || stream.write_to_buffer(&mut pixels) != pixels.len() {
+    let channels=stream.channels();
+    let mut pixels = vec![0f32; stream.width() as usize * stream.height() as usize * channels as usize];
+    if (!rgba && channels!=3) || (rgba && channels!=3 && channels!=4) || stream.write_to_buffer(&mut pixels) != pixels.len() {
         return Err("shape".into());
     }
     if hdr_linear {
@@ -71,6 +74,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 pixel[i] = (0..3).map(|j| f64::from(inv_mat[i][j]) * lms[j]).sum::<f64>() as f32;
             }
         }
+    }
+    if rgba && channels==3 {
+        pixels=pixels.chunks_exact(3).flat_map(|p| [p[0],p[1],p[2],1.0]).collect();
     }
     let bytes: Vec<u8> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
     std::fs::write(&args[2], bytes)?;

@@ -42,7 +42,7 @@ export interface ColorResolved extends Omit<ColorOptions, 'intensityTargetNits'>
   [key: string]: unknown;
 }
 export type Encoded = Uint8Array & {colorResolved: ColorResolved; warnings: string[]};
-export interface Dimensions extends ColorOptions {width: number; height: number; depth?: 8 | 10 | 12; bitDepth?: 8 | 10 | 12; storage?: 'u8' | 'u16le-lsb'}
+export interface Dimensions extends ColorOptions {/** Omitted means straight; other explicit modes are rejected. */ alphaMode?: 'straight'; width: number; height: number; depth?: 8 | 10 | 12; bitDepth?: 8 | 10 | 12; storage?: 'u8' | 'u16le-lsb'}
 export interface PlanarInput extends Dimensions {
   format: 'I420' | 'I422' | 'I444' | 'NV12' | 'I420P10' | 'I422P10' | 'I444P10' | 'I420P12' | 'I422P12' | 'I444P12';
   planes: {data: Uint8Array; offset?: number; stride: number}[];

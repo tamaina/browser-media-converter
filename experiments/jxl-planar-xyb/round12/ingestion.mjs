@@ -1,4 +1,4 @@
-// Integer (U8/U16, RGB/RGBA) vs Float32 encodeRgb bit-parity for every profile path, plus 2048² U8 timing/heap. --quick skips timing.
+// Integer (U8/U16, RGB/RGBA) vs Float32 encodeRgb colour bit-parity for every profile path, plus 2048² U8 timing/heap. --quick skips timing.
 import {chromium} from 'playwright';
 import {createServer} from 'node:http';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -25,13 +25,21 @@ try {
    const encoded=e.encodeRgb({width,height,data,icc,colorMetadata},{distance:.01,observe:true});
    const f=Float32Array.from({length:width*height*3},(_,i)=>data[Math.floor(i/3)*channels+i%3]/max);
    const floating=e.encodeRgb({width,height,data:f,icc,colorMetadata},{distance:.01,observe:true});
-   if(encoded.length!==floating.length || encoded.some((v,i)=>v!==floating[i]))throw Error('float parity '+name+kind);
+   // Extra-channel headers differ by source alpha depth. Retain exact RGB codestream
+   // parity and separately require RGBA colour XYB equality; alpha-test verifies alpha.
+   const colour=channels===4?e.encodeRgb({width,height,data:data.filter((_,i)=>i%4!==3),icc,colorMetadata},{distance:.01,observe:true}):encoded;
+   if(colour.length!==floating.length || colour.some((v,i)=>v!==floating[i]))throw Error('float parity '+name+kind);
    const ptr=[],alloc=a=>{const p=raw._malloc(a.byteLength);ptr.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    let xyb;
    try{raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,name==='cicp'?11:1,255);if(icc)raw._w_icc(alloc(icc),icc.length);
     const status=raw._w_rgb_integer?raw._w_rgb_integer(alloc(data),data.length,max===255?8:16,channels):raw._w_rgb(alloc(f),f.length);
     if(status)throw Error(raw.UTF8ToString(raw._w_error()));
     xyb=pack(raw.HEAPU8.slice(raw._w_xyb_data(),raw._w_xyb_data()+raw._w_xyb_count()*4));
+    if(channels===4){
+     raw._w_free();raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,name==='cicp'?11:1,255);if(icc)raw._w_icc(alloc(icc),icc.length);
+     if(raw._w_rgb(alloc(f),f.length))throw Error(raw.UTF8ToString(raw._w_error()));
+     if(JSON.stringify(xyb)!==JSON.stringify(pack(raw.HEAPU8.slice(raw._w_xyb_data(),raw._w_xyb_data()+raw._w_xyb_count()*4))))throw Error('RGBA float XYB parity '+name+kind);
+    }
    }finally{raw._w_free();for(const p of ptr)raw._free(p);}
    cases.push({name,kind,encoded:pack(encoded),xyb});
   }

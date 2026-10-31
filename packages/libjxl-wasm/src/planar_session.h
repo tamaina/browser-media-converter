@@ -36,6 +36,10 @@ void planar_destroy(PlanarSession*);
 int planar_region(PlanarSession*,size_t x,size_t y,size_t width,size_t height,float* rgb,size_t float_count);
 int planar_encode(PlanarSession*,PlanarEncoded*,char* error,size_t error_size);
 int rgb_encode(const PlanarRgbConfig*,const float* rgb,size_t float_count,PlanarEncoded*,char* error,size_t error_size);
+// Packed source depth 8/16/32, channels 3/4. Straight alpha bypasses CMS.
+// Source pointers stay valid through the synchronous call; no opacity scan.
+int rgb_encode_packed(const PlanarRgbConfig*,const uint8_t*,size_t,int depth,int channels,PlanarEncoded*,char*,size_t);
+int rgb_encode_packed_icc(const PlanarRgbConfig*,const uint8_t*,size_t,int depth,int channels,const uint8_t* icc,size_t,PlanarEncoded*,char*,size_t);
 void planar_free(PlanarEncoded*);
 #ifdef __cplusplus
 }

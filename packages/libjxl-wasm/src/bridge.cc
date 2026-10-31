@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
@@ -49,10 +50,17 @@ extern "C" int bridge_icc_header() {return source_profile_header;}
 struct Config { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; };
 struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
+// Borrowed only for the synchronous encode. Alpha never enters the CMS.
+struct Alpha {
+  const uint8_t* data=nullptr;
+  size_t stride=0, pixel_stride=0;
+  unsigned depth=0;
+};
 struct Source {
   void* opaque; Fill fill; Encoded& result;
   bool failed=false; size_t live=0;
   bool gray=false;
+  Alpha alpha;
   std::vector<float> captured;
   size_t capture_width=0,capture_height=0;
   std::vector<uint8_t> captured_pixels;
@@ -118,15 +126,15 @@ static void release(void* opaque,const void* p) noexcept {
   auto& s=*static_cast<Source*>(opaque); auto it=s.buffers.find(p);
   if(it!=s.buffers.end()) { s.live-=it->second.size()*sizeof(float); s.buffers.erase(it); }
 }
-extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
-                               Encoded* result,char* error,size_t error_size) {
+static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
+                               Encoded* result,char* error,size_t error_size,const Alpha& alpha) {
   if(!c || !result || (!fill && !rgb)) return 1;
   *result={}; result->xyb_hash=14695981039346656037ULL;
   try {
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
       throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
-    Source source{opaque,fill,*result,false,0,false,{},0,0,{}, {}};
+    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
@@ -149,7 +157,20 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
     info.uses_original_profile=JXL_FALSE; info.intensity_target=c->intensity;
+    if(alpha.data) {
+      info.num_extra_channels=1;
+      info.alpha_bits=alpha.depth;
+      info.alpha_exponent_bits=alpha.depth==32?8:0;
+      info.alpha_premultiplied=JXL_FALSE;
+    }
     check(JxlEncoderSetBasicInfo(enc.get(),&info));
+    if(alpha.data) {
+      JxlExtraChannelInfo ec; JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA,&ec);
+      ec.bits_per_sample=info.alpha_bits;
+      ec.exponent_bits_per_sample=info.alpha_exponent_bits;
+      ec.alpha_premultiplied=JXL_FALSE;
+      check(JxlEncoderSetExtraChannelInfo(enc.get(),0,&ec));
+    }
     JxlColorEncoding color; JxlColorEncodingSetToSRGB(&color,JXL_FALSE);
     color.primaries=static_cast<JxlPrimaries>(c->primaries);
     if(c->primaries==5 || c->primaries==6) {
@@ -185,7 +206,7 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     check(JxlEncoderSetFrameDistance(settings,std::getenv("JXL_EXPERIMENT_DISTANCE")?std::strtof(std::getenv("JXL_EXPERIMENT_DISTANCE"),nullptr):1.0f));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
 #endif
-    bool observed_reference=rgb && (source.gray || diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));
+    bool observed_reference=rgb && (alpha.data || source.gray || diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));
     struct RGB { const float* p;size_t width; } reference{rgb,c->width};
     if(observed_reference) {
       source.opaque=&reference;
@@ -203,6 +224,33 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
       JxlChunkedFrameInputSource input{};
       input.opaque=&source; input.get_color_channels_pixel_format=format;
       input.get_color_channel_data_at=get; input.release_buffer=release;
+      if(alpha.data) {
+        input.get_extra_channel_pixel_format=[](void*,size_t,JxlPixelFormat* f) {
+          *f={1,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};
+        };
+        input.get_extra_channel_data_at=[](void* o,size_t,size_t x,size_t y,size_t w,size_t h,size_t* stride) noexcept -> const void* {
+          auto& s=*static_cast<Source*>(o);
+          try {
+            std::vector<float> values(w*h);
+            const auto& a=s.alpha;
+            for(size_t j=0;j<h;++j)for(size_t i=0;i<w;++i) {
+              const auto* p=a.data+(y+j)*a.stride+(x+i)*a.pixel_stride;
+              float v;
+              if(a.depth==32)std::memcpy(&v,p,4);
+              else {
+                const unsigned n=a.depth==8?p[0]:unsigned(p[0])+(unsigned(p[1])<<8);
+                if(n>((1u<<a.depth)-1))throw std::runtime_error("alpha sample exceeds source depth");
+                v=float(double(n)/double((1u<<a.depth)-1));
+              }
+              if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("alpha must be finite nominal-range");
+              values[j*w+i]=v;
+            }
+            *stride=w*sizeof(float);const void* p=values.data();
+            s.live+=values.size()*sizeof(float);
+            s.buffers.emplace(p,std::move(values));return p;
+          }catch(...){s.failed=true;return nullptr;}
+        };
+      }
       input.experimental_borrowed=true;
       input.experimental_fill_row=(observed_reference || !yuv)?nullptr:row;
       input.experimental_observe_xyb=instrumentation?observe:nullptr;
@@ -239,34 +287,47 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
     return 1;
   }
 }
+extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
+    Encoded* result,char* error,size_t error_size) {
+  return encode(c,opaque,fill,rgb,yuv,result,error,error_size,{});
+}
 extern "C" void hdr_jxl_free(Encoded* result) { if(result) { std::free(result->data); std::free(result->xyb_data); *result={}; } }
 
-// Borrow integer samples through ProcessOutput; no full-frame float allocation.
+// Source type is selected once per encode, avoiding per-sample type branches.
+struct PackedRgb {const void* p;size_t width;int channels;const float* lut;};
+template<unsigned depth>
+static int packed_fill(void* opaque,size_t x,size_t y,size_t w,size_t h,float* out,size_t) {
+  const auto& in=*static_cast<PackedRgb*>(opaque);
+  for(size_t j=0;j<h;j++)for(size_t i=0;i<w;i++)for(size_t k=0;k<3;k++) {
+    const size_t at=((y+j)*in.width+x+i)*in.channels+k;
+    if constexpr(depth==32) {
+      const float v=static_cast<const float*>(in.p)[at];
+      if(!std::isfinite(v) || v<0 || v>1)return 1;
+      out[(j*w+i)*3+k]=v;
+    } else {
+      const unsigned v=depth==8?static_cast<const uint8_t*>(in.p)[at]:static_cast<const uint16_t*>(in.p)[at];
+      out[(j*w+i)*3+k]=in.lut[v];
+    }
+  }
+  return 0;
+}
+// Borrow packed samples through ProcessOutput; no full-frame float allocation.
 extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
     int depth,int channels,Encoded* result,char* error,size_t error_size) {
   auto bad=[&](const char* text){if(error && error_size)std::snprintf(error,error_size,"%s",text);return 1;};
-  if(!c || !data || !result || (depth!=8 && depth!=16) || (channels!=3 && channels!=4) ||
+  if(!c || !data || !result || (depth!=8 && depth!=16 && depth!=32) || (channels!=3 && channels!=4) ||
      !c->width || !c->height || c->width>8192 || c->height>8192 || size_t(c->width)*c->height>4194304 ||
      count!=size_t(c->width)*c->height*channels)return bad("RGB integer layout/dimension limit");
   const bool gray=source_profile && source_profile_size>=20 && !std::memcmp(source_profile+16,"GRAY",4);
-  const auto sample=[&](size_t i)->unsigned{return depth==8?static_cast<const uint8_t*>(data)[i]:static_cast<const uint16_t*>(data)[i];};
-  const unsigned maximum=depth==8?255:65535;
-  if(channels==4 || gray)for(size_t i=0;i<size_t(c->width)*c->height;i++) {
-    if(channels==4 && sample(i*4+3)!=maximum)return bad("alpha unsupported: RGBA must be fully opaque");
+  const auto sample=[&](size_t i)->float{return depth==32?static_cast<const float*>(data)[i]:depth==8?static_cast<const uint8_t*>(data)[i]:static_cast<const uint16_t*>(data)[i];};
+  if(gray)for(size_t i=0;i<size_t(c->width)*c->height;i++) {
     if(gray && (sample(i*channels)!=sample(i*channels+1) || sample(i*channels)!=sample(i*channels+2)))return bad("ICC: Gray profile requires R=G=B");
   }
   // Double division then float cast exactly reproduces JS Float32Array assignment.
   static const auto u8=[] {std::array<float,256> a{};for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/255.0);return a;}();
   static const auto u16=[] {std::vector<float> a(65536);for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/65535.0);return a;}();
-  struct Integer {const void* p;size_t width;int channels,depth;const float* lut;} in{data,c->width,channels,depth,depth==8?u8.data():u16.data()};
-  const auto fill=[](void* opaque,size_t x,size_t y,size_t w,size_t h,float* out,size_t)->int {
-    const auto& in=*static_cast<Integer*>(opaque);
-    for(size_t j=0;j<h;j++)for(size_t i=0;i<w;i++)for(size_t k=0;k<3;k++) {
-      const size_t at=((y+j)*in.width+x+i)*in.channels+k;
-      const unsigned v=in.depth==8?static_cast<const uint8_t*>(in.p)[at]:static_cast<const uint16_t*>(in.p)[at];
-      out[(j*w+i)*3+k]=in.lut[v];
-    }
-    return 0;
-  };
-  return hdr_jxl_encode(c,&in,fill,nullptr,nullptr,result,error,error_size);
+  PackedRgb in{data,c->width,channels,depth==8?u8.data():u16.data()};
+  const Fill fill=depth==8?packed_fill<8>:depth==16?packed_fill<16>:packed_fill<32>;
+  const Alpha alpha=channels==4?Alpha{static_cast<const uint8_t*>(data)+3*(depth/8),size_t(c->width)*4*(depth/8),size_t(4*(depth/8)),unsigned(depth)}:Alpha{};
+  return encode(c,&in,fill,nullptr,nullptr,result,error,error_size,alpha);
 }

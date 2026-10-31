@@ -634,3 +634,36 @@ pub unsafe extern "C" fn planar_set_bit_depth(session: *mut Session, depth: u32)
     unsafe { (*session).config.depth = depth; }
     0
 }
+
+/// Synchronous packed RGB(A) input. Alpha is straight, source-depth, and bypasses CMS.
+/// Pointer/count validity is the same caller obligation as rgb_encode.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode_packed(
+    config: *const Config, data: *const u8, count: usize, depth: i32, channels: i32,
+    out: *mut Encoded, error: *mut c_char, n: usize,
+) -> i32 {
+    let status = guard(|| {
+        need(!config.is_null(), "null RGB config")?;
+        check_config(unsafe { &*config })
+    }, error, n);
+    if status != 0 { return status; }
+    unsafe extern "C" {
+        fn bridge_rgb_integer(config: *const Config, data: *const u8, count: usize,
+            depth: i32, channels: i32, out: *mut Encoded, error: *mut c_char, n: usize) -> i32;
+    }
+    unsafe { bridge_rgb_integer(config, data, count, depth, channels, out, error, n) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode_packed_icc(
+    config: *const Config, data: *const u8, count: usize, depth: i32, channels: i32,
+    icc: *const u8, icc_size: usize, out: *mut Encoded, error: *mut c_char, n: usize,
+) -> i32 {
+    unsafe extern "C" { fn bridge_icc(p: *const u8, n: usize); }
+    unsafe {
+        bridge_icc(icc,icc_size);
+        let status=rgb_encode_packed(config,data,count,depth,channels,out,error,n);
+        bridge_icc(std::ptr::null(),0);
+        status
+    }
+}

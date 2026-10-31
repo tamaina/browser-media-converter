@@ -90,3 +90,17 @@ and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurpos
 XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
 and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
 `build/hdr/numeric.json`. **Real HDR display output is unverified.**
+
+## Straight alpha (D1)
+
+`encodeRgb` accepts packed RGB or straight RGBA in U8, U8Clamped, U16 or
+Float32. Input `alphaMode?: 'straight'` defaults to straight; every other
+explicit value is rejected. Alpha bypasses ICC/CMS and is a separate
+`JXL_CHANNEL_ALPHA`, with source depth 8/16/32 (Float32 has 8 exponent bits),
+independent of colour output `bitDepth`. The extra-channel distance remains
+libjxl's default zero (lossless alpha) even at colour distance 1. No opacity
+pre-scan is performed. Fully transparent colours follow libjxl's default
+`KEEP_INVISIBLE` policy and may be simplified; do not use them as hidden data.
+
+Run `node wasm/alpha-test.mjs` after native and WASM builds for straight-colour,
+alpha, non-sRGB ICC, native/WASM XYB, decoder and sequential speed checks.

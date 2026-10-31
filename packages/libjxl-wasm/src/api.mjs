@@ -63,6 +63,7 @@ export async function createEncoder(options = {}) {
       if (k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
       if (['alpha','origin','color'].includes(k)) fail(`unsupported ${k}`);
     }
+    if (i.alphaMode !== undefined && i.alphaMode !== 'straight') fail("alphaMode must be 'straight' (premultiplied alpha is unsupported)");
     const distance = o.distance ?? 1, effort = o.effort ?? 3;
     if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
     return {distance,effort};
@@ -146,8 +147,10 @@ export async function createEncoder(options = {}) {
           if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
           status=m._w_rgb_integer(alloc(data),data.length,data instanceof Uint16Array?16:8,channels);
         } else {
-          if (!(data instanceof Float32Array) || data.length !== i.width*i.height*3) fail('RGB requires packed Float32Array or integer RGB/RGBA');
-          status=m._w_rgb(alloc(data),data.length);
+          if (!(data instanceof Float32Array) || ![3,4].includes(data.length/(i.width*i.height))) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+          const channels=data.length/(i.width*i.height);
+          if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
+          status=channels===4?m._w_rgb_integer(alloc(data),data.length,32,4):m._w_rgb(alloc(data),data.length);
         }
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {

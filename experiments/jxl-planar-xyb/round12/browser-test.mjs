@@ -63,10 +63,10 @@ try {
     const channels=kind.endsWith('a')?4:3,max=kind.startsWith('u16')?65535:255,a=max===255?new Uint8Array(width*height*channels):new Uint16Array(width*height*channels);
     for(let p=0;p<width*height;p++){const v=max===255?p%256:(p*193)%65536;for(let c=0;c<channels;c++)a[p*channels+c]=c===3?max:v;}
     const f=Float32Array.from({length:width*height*3},(_,i)=>a[Math.floor(i/3)*channels+i%3]/max);
-    const actual=e.encodeRgb({width,height,data:a,icc},{distance:.01,observe:true}),ref=e.encodeRgb({width,height,data:f,icc},{distance:.01,observe:true});if(pack(actual)!==pack(ref))throw Error('gray integer float '+kind);
+    const actual=e.encodeRgb({width,height,data:a,icc},{distance:.01,observe:true}),ref=e.encodeRgb({width,height,data:f,icc},{distance:.01,observe:true});const colour=channels===4?e.encodeRgb({width,height,data:a.filter((_,i)=>i%4!==3),icc},{distance:.01,observe:true}):actual;if(pack(colour)!==pack(ref))throw Error('gray integer float '+kind);
     const actualXYB=await capture(a,icc,'auto'),floatXYB=await capture(f,icc,'auto');if(actualXYB!==floatXYB)throw Error('gray integer float XYB '+kind);
     const hash=async data=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data)),v=>v.toString(16).padStart(2,'0')).join('');
-    row.integerPairs.push({kind,jxl:await hash(actual),xyb:await hash(Uint8Array.from(atob(actualXYB),c=>c.charCodeAt(0))),floatJxlAndXYBIdentical:true});apiChecks++;
+    row.integerPairs.push({kind,jxl:await hash(actual),xyb:await hash(Uint8Array.from(atob(actualXYB),c=>c.charCodeAt(0))),colourJxlAndXYBIdentical:true,alphaStored:channels===4});apiChecks++;
    }
    let rejected=false;try{e.encodeRgb({width,height,data:u8,icc});}catch(err){rejected=/ICC:.*R=G=B/.test(err.message);}if(!rejected)throw Error('gray chromatic admission');apiChecks++;
    const fallback=e.encodeRgb({width,height,data:u8,icc},{iccFallback:'srgb'});if(pack(fallback)!==pack(e.encodeRgb({width,height,data:u8})) || !fallback.warnings.some(s=>s.includes('ICC fallback')))throw Error('gray fallback');apiChecks++;

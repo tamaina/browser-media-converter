@@ -73,6 +73,26 @@ int main() {
         hdr_jxl_free(&reference);hdr_jxl_free(&out);++cases;
       }
     }
+    // Packed RGBA ends at the guard page: deinterleaving may not read past alpha.
+    size_t alpha_cases=0;
+    for(unsigned depth:{8u,16u,32u})for(unsigned width=1;width<=33;++width) {
+      const unsigned height=3,bytes=depth/8;
+      Guard rgba(size_t(width)*height*4*bytes);
+      for(size_t p=0;p<size_t(width)*height;++p)for(unsigned c=0;c<4;++c) {
+        const float value=c==3?float(p%5)/4:.4f;
+        uint8_t* dest=rgba.data+(p*4+c)*bytes;
+        if(depth==32)std::memcpy(dest,&value,4);
+        else {
+          const unsigned v=unsigned(value*((1u<<depth)-1)+.5f);
+          dest[0]=uint8_t(v);if(bytes==2)dest[1]=uint8_t(v>>8);
+        }
+      }
+      Config config{width,height,1,13,255,0};Encoded out{};char error[256]{};
+      if(bridge_rgb_integer(&config,rgba.data,size_t(width)*height*4,depth,4,&out,error,sizeof(error)))throw std::runtime_error(error);
+      if(!out.size || out.xyb_count!=size_t(width)*height*3)throw std::runtime_error("RGBA guard capture");
+      hdr_jxl_free(&out);++alpha_cases;
+    }
+    std::printf("%zu RGBA guard-page tail encodes passed\n",alpha_cases);
     std::printf("%zu 4-lane Highway guard-page tail encodes passed\n",cases);
   } catch(const std::exception& e) { std::fprintf(stderr,"%s\n",e.what());return 1; }
 }

@@ -117,3 +117,14 @@ and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurpos
 XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
 and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
 `build/hdr/numeric.json`. **Real HDR display output is unverified.**
+
+### Straight alpha
+
+`encodeRgb({width, height, data, alphaMode: 'straight'})` accepts RGB/RGBA
+U8/U8Clamped/U16/Float32. Omission means straight; other explicit modes fail.
+Alpha is separate from colour, never passed through ICC/CMS, and retains the
+source type's 8/16/32-bit depth (Float32: 8 exponent bits). Colour `bitDepth`
+does not change alpha depth. libjxl's default extra-channel distance is zero,
+so alpha is lossless even with colour distance 1. Fully transparent colour
+may be simplified by the default libjxl `KEEP_INVISIBLE` policy. The fused
+colour and row paths remain available with a separate alpha extra channel.

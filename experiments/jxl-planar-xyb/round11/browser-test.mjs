@@ -58,8 +58,8 @@ try {
   if(!eq(encoder.encodeRgb({...base,colorMetadata:{type:'cicp',cicp:{primaries:'smpte432',transfer:'iec61966-2-1',matrix:'rgb',fullRange:true}}}),encoder.encodeRgb({...base,colorMetadata:metadata})))throw Error('named CICP');apiChecks++;
   for(const transfer of [16,18])rejects(()=>encoder.encodeRgb({...base,colorMetadata:{...metadata,cicp:{...metadata.cicp,transfer}}}),/encodeRgb HDR is unsupported/);
   const rgba=new Uint8ClampedArray(width*height*4);for(let p=0;p<width*height;p++){rgba.set(u8.subarray(p*3,p*3+3),p*4);rgba[p*4+3]=255;}
-  if(!eq(encoder.encodeRgb({...base,data:rgba,icc:p3}),encoder.encodeRgb({...base,icc:p3})))throw Error('RGBA');apiChecks++;
-  rgba[3]=254;rejects(()=>encoder.encodeRgb({...base,data:rgba}),/alpha unsupported/);
+  if(eq(encoder.encodeRgb({...base,data:rgba,icc:p3}),encoder.encodeRgb({...base,icc:p3})))throw Error('RGBA alpha channel missing');apiChecks++;
+  rgba[3]=254;encoder.encodeRgb({...base,data:rgba});rejects(()=>encoder.encodeRgb({...base,data:rgba,alphaMode:'premultiplied'}),/alphaMode/);
   const u16=Uint16Array.from(u8,x=>x*257);if(!eq(encoder.encodeRgb({...base,data:u16,icc:p3}),encoder.encodeRgb({...base,icc:p3})))throw Error('U16');apiChecks++;
   rejects(()=>encoder.encodeRgb({...base,icc:p3},{iccFallback:'ignore'}),/iccFallback/);
   const displayed=[];

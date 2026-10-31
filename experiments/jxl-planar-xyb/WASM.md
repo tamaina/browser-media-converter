@@ -23,7 +23,7 @@ const jxl = encoder.encodePlanarYuv({
 }, {distance: 1, effort: 3});
 jxl.colorResolved; jxl.warnings;                 // also in encoder.stats
 
-// Packed RGB: Float32 RGB, U8/U8Clamped RGB or opaque RGBA, full-range U16 RGB/RGBA.
+// Packed RGB: Float32 RGB/RGBA, U8/U8Clamped RGB/RGBA, full-range U16 RGB/RGBA.
 const metadata = await readImageColorMetadata(bytes, 'image/png'); // media-container; jpeg/webp/avif/png
 encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'auto'});
 ```
@@ -41,7 +41,7 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 | `rgbViaPlanar`, `observe` | boolean | Test/benchmark: RGB baseline from planar input; XYB capture. |
 
 **Input rules.**
-- U16 input must be LE and low-bit aligned. P010/MSB-aligned storage, alpha, and samples above the declared depth are rejected.
+- U16 input must be LE and low-bit aligned. P010/MSB-aligned storage and samples above the declared depth are rejected.
 - Odd sizes, unaligned offsets, padding and shared buffers all work.
 - Limits: 8192 px per axis, 4,194,304 px, and 64 MiB of validated source spans.
 - The source format determines the source depth.
@@ -241,7 +241,7 @@ What the suites check:
 - **Main suite.** Every format, depth and siting combination, plus validation and ownership. Output is decoded by jxl-oxide and stock libjxl and compared with the native build and `wasm/reference.py`.
 - **round10.** Colour resolution against an independent NumPy reference, plus Chrome display.
 - **round11.** ICC/CICP against LCMS2 (`round11/lcms.py`), with native vs WASM parity.
-- **round12.** Gray ICC, header targets, and integer/Float32 bit-parity for U8/U16 RGB/RGBA × 8 profile paths.
+- **round12.** Gray ICC, header targets, and integer/Float32 colour bit-parity for U8/U16 RGB/RGBA × 8 profile paths.
 
 Measurement JSON goes to `build/*/observations.json` and is never committed.
 `real10/` describes the optional Netflix fixtures. They are CC BY-NC-ND: fetch
@@ -292,3 +292,18 @@ use distance 0.01; saturated gamut probes use the public default distance 1.
 A sharp saturated HDR probe at distance 0.01 currently gives a large decoder
 disagreement (jxl-oxide versus both libjxl decoders), reproducible with native
 and WASM encoders; see `build/hdr/sol-report.md` for the measured limitation.
+
+## Straight alpha (D1)
+
+Input `alphaMode?: 'straight'` defaults to straight and rejects all other explicit
+values. Packed RGBA accepts U8, U8Clamped, U16 and Float32. Alpha is passed as a
+separate `JXL_CHANNEL_ALPHA` without colour conversion or an opacity pre-scan.
+Its depth follows the input type (8/16/32; Float32 exponent 8), independent of
+the colour output `bitDepth`. libjxl initializes extra-channel distance to zero,
+so the alpha coding is lossless at normal colour distance 1. Float input must
+be finite and in [0,1]. Default `KEEP_INVISIBLE` allows fully transparent colour
+to be simplified after conversion; hidden RGB is not guaranteed to survive.
+
+`node wasm/alpha-test.mjs` runs Chrome encoding then native XYB and independent
+libjxl/jxl-oxide decoding, including non-sRGB ICCs. This does not verify display
+compositing, canvas, real HDR displays, Firefox or Safari.
