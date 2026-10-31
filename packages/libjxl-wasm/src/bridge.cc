@@ -124,6 +124,8 @@ extern "C" int hdr_jxl_encode(const Config* c,void* opaque,Fill fill,const float
   *result={}; result->xyb_hash=14695981039346656037ULL;
   try {
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
+    if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
+      throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
     Source source{opaque,fill,*result,false,0,false,{},0,0,{}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.

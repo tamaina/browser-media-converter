@@ -454,7 +454,9 @@ fn linearize(tf: Tf, v: f32) -> f32 {
         }
     }
 }
-/// libjxl ApplyHlgOotf(forward) gamma for the intensity target; None if ~1.
+/// libjxl 0.11.1 cms/jxl_cms.cc ApplyHlgOotf(forward), including its
+/// 295..305-nit shortcut. This peak-dependent approximation differs from
+/// BT.2100's 1.2 + 0.42*log10(Lw/1000); retain decoder-compatible behaviour.
 fn hlg_ootf_gamma(intensity: f32) -> Option<f32> {
     if (295.0..=305.0).contains(&intensity) { return None; }
     Some(1.2f32 * 1.111f32.powf((intensity * 1e-3).log2()))

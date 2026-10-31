@@ -21,7 +21,7 @@ try {
   async function capture(data,icc,header){
    const ptr=[],alloc=a=>{const p=raw._malloc(a.byteLength);ptr.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    try{
-    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1);raw._w_icc(alloc(icc),icc.length);raw._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[header]);
+    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1,255);raw._w_icc(alloc(icc),icc.length);raw._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[header]);
     if(data instanceof Float32Array?raw._w_rgb(alloc(data),data.length):raw._w_rgb_integer(alloc(data),data.length,data instanceof Uint16Array?16:8,data.length/(width*height)))throw Error(raw.UTF8ToString(raw._w_error()));
     return pack(raw.HEAPU8.slice(raw._w_xyb_data(),raw._w_xyb_data()+raw._w_xyb_count()*4));
    }finally{raw._w_free();for(const p of ptr)raw._free(p);}

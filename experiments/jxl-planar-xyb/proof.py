@@ -35,7 +35,7 @@ def load(m,base):
     if type(c["fullRange"]) is not bool or c["chromaSiting"] not in ("left","center","topleft"): raise ValueError("explicit boolean range and valid chroma siting required")
     policy=c.get('bt709Linearization','gamma2.4')
     if 'bt709Linearization' in c and (c['transfer'] not in ('bt709','smpte170m','bt2020-10','bt2020-12','bt470bg') or policy not in ('gamma2.4','srgb','inverse-oetf')): raise ValueError('invalid bt709Linearization')
-    transfer=({'gamma2.4':1,'srgb':13,'inverse-oetf':1001}[policy] if c['transfer'] in ('bt709','smpte170m','bt2020-10','bt2020-12','bt470bg') else {'linear':8,'srgb':13,'iec61966-2-1':13,'pq':16,'hlg':18}[c['transfer']])
+    transfer=({'gamma2.4':1,'srgb':13,'inverse-oetf':1001}[policy] if c['transfer'] in ('bt709','smpte170m','bt2020-10','bt2020-12','bt470bg') else {'linear':8,'srgb':13,'iec61966-2-1':13,'pq':16,'smpte2084':16,'hlg':18,'arib-std-b67':18}[c['transfer']])
     formats={"NV12":(3,8)}
     for index,name in enumerate(("I420","I422","I444")):
         for depth in (8,10,12): formats[name+("" if depth==8 else f"P{depth}")]=(index,depth)

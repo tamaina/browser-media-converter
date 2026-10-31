@@ -36,17 +36,24 @@ export async function createEncoder(options = {}) {
       if (value == null) warnings.push(`Defaulted ${key} to ${fallback}`);
     }
     const tf = colorResolved.transfer;
-    if (['pq','hlg','smpte2084','arib-std-b67'].includes(tf)) fail('SDR only: PQ/HLG transfer is unsupported');
-    if (![...videoTransfers,'srgb','iec61966-2-1','linear'].includes(tf)) fail('unsupported SDR transfer');
+    const hdr = ['pq','hlg','smpte2084','arib-std-b67'].includes(tf);
+    if (hdr && (rgb || colorResolved.primaries !== 'bt2020' || colorResolved.matrix !== 'bt2020-ncl')) fail('HDR requires planar BT.2020 primaries and BT.2020 NCL matrix; encodeRgb HDR is unsupported');
+    if (hdr && (['bt2020','p3'].includes(o.iccHeader) || o.iccFallback === 'srgb')) fail('HDR requires enum color encoding; SDR ICC header/fallback is unsupported');
+    if (![...videoTransfers,'srgb','iec61966-2-1','linear','pq','hlg','smpte2084','arib-std-b67'].includes(tf)) fail('unsupported transfer');
     if (!['bt709','smpte170m','bt470bg','smpte432','bt2020'].includes(colorResolved.primaries)) fail('unsupported source primaries');
     if (!rgb && colorResolved.matrix === 'rgb') fail('rgb identity matrix is unsupported for YUV planes; use encodeRgb');
     if (!rgb && !['bt709','bt601','smpte170m','bt470bg','bt2020-ncl'].includes(colorResolved.matrix)) fail('unsupported YUV matrix');
     if (typeof colorResolved.fullRange !== 'boolean') fail('fullRange must be boolean');
     if (!['left','center','topleft'].includes(colorResolved.chromaSiting)) fail('chromaSiting must be left/center/topleft');
     if (o.bt709Linearization !== undefined && (!videoTransfers.includes(tf) || !['gamma2.4','srgb','inverse-oetf'].includes(o.bt709Linearization))) fail('bt709Linearization requires a BT-like transfer and gamma2.4/srgb/inverse-oetf');
-    colorResolved.linearization = videoTransfers.includes(tf) ? o.bt709Linearization ?? 'gamma2.4' : tf === 'linear' ? 'linear' : 'srgb';
+    colorResolved.linearization = videoTransfers.includes(tf) ? o.bt709Linearization ?? 'gamma2.4' : hdr ? (['pq','smpte2084'].includes(tf) ? 'pq' : 'hlg') : tf === 'linear' ? 'linear' : 'srgb';
     colorResolved.source.linearization = o.bt709Linearization !== undefined ? 'option' : 'default';
     if (o.bt709Linearization === undefined) warnings.push(`Defaulted linearization to ${colorResolved.linearization} (from transfer)`);
+    const intensity = o.intensityTargetNits ?? i.intensityTargetNits ?? (hdr ? (colorResolved.linearization === 'pq' ? 10000 : 1000) : 255);
+    if (typeof intensity !== 'number' || !Number.isFinite(intensity) || intensity < 2**-24 || intensity > 65504) fail('intensityTargetNits must be positive finite and fit the JXL F16 header (2^-24..65504 nits)');
+    colorResolved.intensityTarget = Math.fround(intensity);
+    colorResolved.source.intensityTarget = o.intensityTargetNits != null || i.intensityTargetNits != null ? 'option' : 'default';
+    colorResolved.policy = hdr ? 'hdr-as-is' : 'sdr-as-is';
     return {colorResolved,warnings};
   }
   function config(i, o) {
@@ -66,6 +73,8 @@ export async function createEncoder(options = {}) {
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
     if (metadata != null && !['icc','cicp'].includes(metadata.type)) fail('unsupported colorMetadata type');
+    const declaredTransfer=o.transfer ?? i.transfer ?? (o.colorSpace ?? i.colorSpace)?.transfer ?? (metadata?.type==='cicp'?metadata.cicp?.transfer:undefined);
+    if (rgb && ['pq','hlg','smpte2084','arib-std-b67',16,18].includes(declaredTransfer)) fail('encodeRgb HDR is unsupported; use planar BT.2020 NCL 10/12-bit input');
     const profile=o.icc ?? i.icc ?? (metadata?.type==='icc'?metadata.profile:undefined);
     if (!rgb && (profile != null || metadata != null)) fail('ICC/colorMetadata is supported only by encodeRgb');
     if (profile != null && [o.primaries,o.transfer,i.primaries,i.transfer].some(v=>v!=null)) fail('ICC conflicts with explicit primaries/transfer');
@@ -76,7 +85,7 @@ export async function createEncoder(options = {}) {
       if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
     }
     const {distance,effort}=config(i,o);
-    const {colorResolved,warnings}=resolveColor(icc?{width:i.width,height:i.height}:i,icc?{}:o,rgb);
+    const {colorResolved,warnings}=resolveColor(icc?{width:i.width,height:i.height}:i,icc?{intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits}:o,rgb);
     if(rgb) {
       Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
       if(icc) {
@@ -101,6 +110,8 @@ export async function createEncoder(options = {}) {
         warnings.length=0;
       } else if(metadata?.type==='cicp' && colorResolved.matrix!=='rgb') warnings.push('CICP matrix describes the pre-decoded source; ignored for already-decoded RGB');
     }
+    for (const key of ['masteringDisplay','contentLightLevel']) if (o[key] !== undefined || i[key] !== undefined) warnings.push(`${key} is not stored (MDCV/CLLI unsupported)`);
+    if (!rgb && o.validation !== 'strict') warnings.push('Reconstructed RGB outside [0,1] is clipped (validation: clip)');
     i={...i,...(icc?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)};
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
@@ -108,9 +119,11 @@ export async function createEncoder(options = {}) {
     const match=/^(I420|I422|I444)(?:P(10|12))?$/.exec(i.format??'');
     const sourceDepth=rgb?(i.depth??i.bitDepth??8):(match?Number(match[2]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
+    if (!rgb && ['pq','hlg'].includes(i.linearization) && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
     const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
     if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
     const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb?0:sourceDepth):bitDepth;
+    if (['pq','hlg'].includes(i.linearization) && outputDepth === 8) fail('HDR output must be 10/12-bit or float32; 8-bit HDR is unsupported');
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format);
     const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6,'bt2020-ncl':9})[i.matrix];
     if (format<0 || !matrix || (!rgb && typeof i.fullRange !== 'boolean')) fail('explicit supported format required');
@@ -121,7 +134,7 @@ export async function createEncoder(options = {}) {
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
-      m._w_init(i.width,i.height,format,matrix,+i.fullRange,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8})[i.linearization],({left:0,center:1,topleft:2})[i.chromaSiting],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9})[i.primaries]);
+      m._w_init(i.width,i.height,format,matrix,+i.fullRange,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18})[i.linearization],({left:0,center:1,topleft:2})[i.chromaSiting],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9})[i.primaries],colorResolved.intensityTarget);
       let status;
       if (rgb) {
         const data=i.data;

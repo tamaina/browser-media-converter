@@ -125,8 +125,6 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
 }
 fn check_config(c: &Config) -> Result<(), String> {
     need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
-    #[cfg(target_arch = "wasm32")]
-    need(matches!(c.primaries, 1 | 5 | 6 | 9 | 11) && matches!(c.transfer, 1 | 8 | 13 | 1001), "unsupported WASM colour (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -142,14 +140,12 @@ fn check_config(c: &Config) -> Result<(), String> {
         ),
         "unsupported primaries/transfer pair",
     )?;
-    let target = match c.transfer {
-        16 => 10000.0,
-        18 => 1000.0,
-        _ => 255.0,
-    };
+    need(!matches!(c.transfer, 16 | 18) || c.depth != 8, "8-bit HDR output is unsupported")?;
+    // ToneMapping::VisitFields uses F16: finite, positive, <= 65504.
+    // Smaller values would serialize as zero and fail decoder validation.
     need(
-        c.intensity == target,
-        "explicit intensity must be PQ=10000, HLG=1000, SDR=255 nits",
+        c.intensity.is_finite() && c.intensity >= 1.0 / 16777216.0 && c.intensity <= 65504.0,
+        "intensity target must be positive finite and fit the JXL F16 header (2^-24..65504 nits)",
     )
 }
 impl Session {
@@ -263,7 +259,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
-            strict: option == 1 || !matches!(config.transfer, 1 | 8 | 13 | 1001),
+            strict: option == 1,
             config,
             depth: i.depth,
             storage: i.storage,
@@ -407,8 +403,8 @@ pub unsafe extern "C" fn planar_create(
 ) -> i32 {
     unsafe { planar_create_profile(input, out, 0, std::ptr::null_mut(), error, n) }
 }
-/// Option 0 clips SDR BT.709/sRGB; option 1 explicitly rejects out-of-range RGB.
-/// Option 2 is RGB-conversion-only: region clips SDR reconstructed pixels;
+/// Option 0 clips reconstructed RGB; option 1 explicitly rejects out-of-range RGB.
+/// Option 2 is RGB-conversion-only: region clips reconstructed pixels;
 /// planar_encode refuses this session. No unvalidated fused encode is possible.
 /// timings points to three doubles: metadata/layout/copy, total preflight,
 /// then the stored-sample-only subset of preflight.
@@ -634,6 +630,7 @@ pub unsafe extern "C" fn planar_quantize_rgb_depth(rgb: *mut f32, count: usize, 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_set_bit_depth(session: *mut Session, depth: u32) -> i32 {
     if session.is_null() || !matches!(depth, 0 | 8 | 10 | 12) { return 1; }
+    if depth == 8 && matches!(unsafe { (*session).config.transfer }, 16 | 18) { return 1; }
     unsafe { (*session).config.depth = depth; }
     0
 }

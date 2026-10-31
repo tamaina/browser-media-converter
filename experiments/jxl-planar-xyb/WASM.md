@@ -1,7 +1,7 @@
 # Planar YUV / RGB → XYB JPEG XL in WebAssembly — design and spec
 
 Patched libjxl v0.11.1 (794a5dcf), Highway four-lane SIMD, Emscripten `-O2 -msimd128`.
-The API is synchronous, SDR-only, and produces lossy XYB/VarDCT. Builds,
+The API is synchronous, supports planar HDR, and produces lossy XYB/VarDCT. Builds,
 fixtures, logs and codestreams stay in the ignored `build/`. The libjxl build,
 bridge, Wasm exports and JS API are in `packages/libjxl-wasm` (its own ignored
 `build/`); this directory holds the Rust session and the suites. The full
@@ -82,7 +82,7 @@ Each field resolves as: encode option > input field > `colorSpace` > (`encodeRgb
 | Transfer | bt709, smpte170m (+ bt2020-10/12, bt470bg aliases) | **E^2.4**, gamma header 0.4166667 |
 | Transfer | iec61966-2-1 / srgb | sRGB |
 | Transfer | linear | LINEAR |
-| Transfer | pq, hlg | rejected (SDR only) |
+| Transfer | pq, hlg (and aliases) | planar BT.2020 NCL, 10/12-bit; enum header |
 
 ### Gamma 2.4 for BT.709 / SMPTE 170M
 
@@ -195,7 +195,7 @@ slightly; the benefit is avoiding CMS fetching, discovery and compilation.
 
 ## Known limitations
 
-- **SDR only.** PQ/HLG are rejected in WASM; the native row path supports them through the CMS.
+- **HDR scope:** planar BT.2020 NCL 10/12-bit PQ/HLG through the row CMS path (see HDR base below).
 - No mastering metadata. The output is lossy, not integer-exact.
 - WebCodecs exposes no chroma siting; the default is left.
 - VP9 ignores bitstream colour, so pass `config.colorSpace`.
@@ -254,3 +254,41 @@ investigation scripts (round8/round9) and the prototypes `jxl-yuv`,
 `jxl-direct` and `jxl-planar-hdr` (a possible base for PQ/HLG) were removed
 after `ed28b03`. Restore them with
 `git checkout ed28b03 -- experiments/<path>`.
+
+## HDR base
+
+Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
+`transfer: 'pq' | 'hlg'` (aliases `smpte2084` / `arib-std-b67`). It uses the
+non-fused row/CMS path. 8-bit HDR, BT.709 matrices, P3 HDR and `encodeRgb` HDR
+are rejected (including an 8-bit output override; float32 output remains available). HDR is recorded with PQ/HLG enum encoding; HDR ICC input is out
+of scope. HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
+
+`intensityTargetNits` on input or encode options (options win) is variable for
+HDR and SDR. Defaults are PQ 10000, HLG 1000, SDR 255 nits. Values must be
+positive and finite within the JXL header's F16 range, `2^-24..65504` nits.
+The CMS and XYB use this intensity as well as the header; PQ retains absolute
+luminance, whereas HLG's display OOTF depends on this peak. The header truncates
+to F16 precision, so arbitrary fractional targets may read back slightly lower.
+`colorResolved.intensityTarget` (also in `encoder.stats.colorResolved`) reports
+the float32 setting. `colorResolved.policy` is `hdr-as-is` for HDR, `sdr-as-is`
+for SDR. There is no `hdrMode` option and no HDR→SDR tone mapping.
+
+Default `validation: 'clip'` clips reconstructed RGB to [0,1] for HDR as for SDR
+and emits a policy warning without an additional pixel scan. `strict` rejects
+out-of-range values. `masteringDisplay` and `contentLightLevel` produce warnings
+and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurposed.
+
+`node wasm/hdr-test.mjs` from `experiments/jxl-planar-xyb` verifies native/WASM
+XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
+and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
+`build/hdr/numeric.json`. **Real HDR display output is unverified.**
+
+For HDR numerical comparisons, the oracle's `--hdr-linear709` requests decoded
+XYB and applies the codestream opsin inverse matrix/bias plus `255/intensity`.
+This bypasses jxl-oxide 0.12.6's automatic Rec.2408 SDR mapping for a linear
+output target, and its perceptual gamut mapping for original BT.2020 output.
+The existing `--linear709` and SDR gates remain unchanged. Neutral nits probes
+use distance 0.01; saturated gamut probes use the public default distance 1.
+A sharp saturated HDR probe at distance 0.01 currently gives a large decoder
+disagreement (jxl-oxide versus both libjxl decoders), reproducible with native
+and WASM encoders; see `build/hdr/sol-report.md` for the measured limitation.

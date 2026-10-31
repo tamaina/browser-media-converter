@@ -97,7 +97,7 @@ try {
     const pointers=[],alloc=a=>{const p=raw._malloc(a.byteLength);pointers.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
     const primaries={bt709:1,bt470bg:5,smpte170m:6,smpte432:11,bt2020:9}[f.primaries];
     const transfer=f.transfer==='linear'?8:['srgb','iec61966-2-1'].includes(f.transfer)?13:1;
-    raw._w_options(1,0);raw._w_init(f.width,f.height,['I420','I422','I444','NV12'].indexOf(f.format.split('P')[0]),{'bt709':1,'smpte170m':6,'bt470bg':6,'bt2020-ncl':9}[f.matrix],+f.fullRange,.01,3,f.format.includes('P10')?10:8,0,transfer,f.chromaSiting==='topleft'?2:0,primaries);
+    raw._w_options(1,0);raw._w_init(f.width,f.height,['I420','I422','I444','NV12'].indexOf(f.format.split('P')[0]),{'bt709':1,'smpte170m':6,'bt470bg':6,'bt2020-ncl':9}[f.matrix],+f.fullRange,.01,3,f.format.includes('P10')?10:8,0,transfer,f.chromaSiting==='topleft'?2:0,primaries,255);
     try{
      let status;if(isRgb)status=raw._w_rgb(alloc(rgb),rgb.length);else{input.planes.forEach((p,c)=>raw._w_plane(c,alloc(p.data),p.data.length,p.offset,p.stride));status=raw._w_encode(0);}
      if(status)throw Error(raw.UTF8ToString(raw._w_error()));
@@ -113,7 +113,7 @@ try {
   // Explicit false must override true, including VideoColorSpace prototype getters.
   const a=encoder.encodePlanarYuv({...base,colorSpace:new VideoColorSpace({matrix:'bt2020-ncl',primaries:'bt2020',transfer:'linear',fullRange:true})});
   if(a.colorResolved.source.fullRange!=='option'||a.colorResolved.fullRange!==false)throw Error('precedence');validationChecks++;
-  for(const transfer of ['pq','hlg','smpte2084','arib-std-b67']){let e;try{encoder.encodePlanarYuv({...base,transfer});}catch(x){e=x;}if(!String(e).includes('SDR only'))throw Error('HDR rejection');validationChecks++;}
+  for(const transfer of ['pq','hlg','smpte2084','arib-std-b67']){let e;try{encoder.encodePlanarYuv({...base,transfer});}catch(x){e=x;}if(!String(e).includes('HDR requires'))throw Error('HDR rejection');validationChecks++;}
   for(const key of ['icc','matrix']){let e;try{encoder.encodePlanarYuv({...base,[key]:key==='matrix'?'rgb':new Uint8Array()});}catch(x){e=x;}if(!e)throw Error('unsupported accepted');validationChecks++;}
   for(const transfer of ['bt2020-10','bt2020-12','bt470bg'])for(const policy of ['gamma2.4','srgb','inverse-oetf']){if(!eq(encoder.encodePlanarYuv({...base,transfer},{bt709Linearization:policy}),encoder.encodePlanarYuv({...base,transfer:'bt709'},{bt709Linearization:policy})))throw Error('BT-like alias');validationChecks++;}
   // Plain object, inherited getter and encode-options precedence.

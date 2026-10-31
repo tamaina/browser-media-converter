@@ -28,7 +28,7 @@ try {
    if(encoded.length!==floating.length || encoded.some((v,i)=>v!==floating[i]))throw Error('float parity '+name+kind);
    const ptr=[],alloc=a=>{const p=raw._malloc(a.byteLength);ptr.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    let xyb;
-   try{raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,name==='cicp'?11:1);if(icc)raw._w_icc(alloc(icc),icc.length);
+   try{raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,name==='cicp'?11:1,255);if(icc)raw._w_icc(alloc(icc),icc.length);
     const status=raw._w_rgb_integer?raw._w_rgb_integer(alloc(data),data.length,max===255?8:16,channels):raw._w_rgb(alloc(f),f.length);
     if(status)throw Error(raw.UTF8ToString(raw._w_error()));
     xyb=pack(raw.HEAPU8.slice(raw._w_xyb_data(),raw._w_xyb_data()+raw._w_xyb_count()*4));

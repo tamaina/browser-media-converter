@@ -28,7 +28,7 @@ try {
    const pointers=[],alloc=a=>{const p=raw._malloc(a.byteLength);pointers.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    let xyb;
    try {
-    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1);raw._w_icc(alloc(icc),icc.length);
+    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1,255);raw._w_icc(alloc(icc),icc.length);
     if(raw._w_rgb(alloc(rgb),rgb.length))throw Error(raw.UTF8ToString(raw._w_error()));
     const captured=raw.HEAPU8.slice(raw._w_data(),raw._w_data()+raw._w_size());
     if(pack(captured)!==pack(data))throw Error('diagnostics change bytes: '+name);
@@ -56,7 +56,7 @@ try {
   if(!eq(matrix,encoder.encodeRgb({...base,colorMetadata:metadata})) || !matrix.warnings.some(w=>w.includes('ignored')))throw Error('CICP decoded RGB matrix/range');apiChecks++;
   if(!eq(encoder.encodeRgb({...base,colorMetadata:{type:'cicp',cicp:{primaries:1,transfer:1,matrix:1,fullRange:true}}}),encoder.encodeRgb({...base,primaries:'bt709',transfer:'bt709'})))throw Error('CICP gamma2.4 rule');apiChecks++;
   if(!eq(encoder.encodeRgb({...base,colorMetadata:{type:'cicp',cicp:{primaries:'smpte432',transfer:'iec61966-2-1',matrix:'rgb',fullRange:true}}}),encoder.encodeRgb({...base,colorMetadata:metadata})))throw Error('named CICP');apiChecks++;
-  for(const transfer of [16,18])rejects(()=>encoder.encodeRgb({...base,colorMetadata:{...metadata,cicp:{...metadata.cicp,transfer}}}),/SDR only/);
+  for(const transfer of [16,18])rejects(()=>encoder.encodeRgb({...base,colorMetadata:{...metadata,cicp:{...metadata.cicp,transfer}}}),/encodeRgb HDR is unsupported/);
   const rgba=new Uint8ClampedArray(width*height*4);for(let p=0;p<width*height;p++){rgba.set(u8.subarray(p*3,p*3+3),p*4);rgba[p*4+3]=255;}
   if(!eq(encoder.encodeRgb({...base,data:rgba,icc:p3}),encoder.encodeRgb({...base,icc:p3})))throw Error('RGBA');apiChecks++;
   rgba[3]=254;rejects(()=>encoder.encodeRgb({...base,data:rgba}),/alpha unsupported/);
