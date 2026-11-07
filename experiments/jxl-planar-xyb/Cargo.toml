@@ -6,8 +6,8 @@ publish = false
 license = "MIT"
 
 [dependencies]
-# Pinned: LUT ICC profiles. See src/cms.rs for the 0.9.1 A2B0 alias workaround.
-moxcms = { version = "=0.9.1", default-features = false, features = ["lut", "extended_range"] }
+# Pinned: LUT ICC profiles; 0.9.2 includes the upstream A2B0 fallback.
+moxcms = { version = "=0.9.2", default-features = false, features = ["lut", "extended_range"] }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
