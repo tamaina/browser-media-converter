@@ -40,9 +40,9 @@
     "access": "public"
   },
   "peerDependencies": {
-    "mediabunny": "^1.62.0"
+    "mediabunny": "^1.63.0"
   },
   "devDependencies": {
-    "mediabunny": "1.62.0"
+    "mediabunny": "1.63.0"
   }
 }
