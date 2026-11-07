@@ -243,10 +243,6 @@ fn moxcms_lut(icc: &[u8]) -> Result<LutTransform, String> {
     let options = TransformOptions {
         rendering_intent: RenderingIntent::RelativeColorimetric,
         allow_extended_range_rgb_xyz: true,
-        // Keep floating LUT storage explicit. In 0.9.1, the default true with
-        // SIMD LUT features clipped f32 HDR values at ~2.0 (moxcms#208).
-        // Upstream fixed this in 0.9.2; removal still needs local validation.
-        prefer_fixed_point: false,
         ..Default::default()
     };
     source
@@ -895,6 +891,28 @@ pub unsafe extern "C" fn planar_cms_destroy(ctx: *mut Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn assert_lut_matches_explicit_false(icc: &[u8], input: &[f32], output: &[f32]) {
+        use moxcms::{ColorProfile, Layout, RenderingIntent, ToneReprCurve, TransformOptions};
+        let source = ColorProfile::new_from_slice(icc).unwrap();
+        let mut linear709 = ColorProfile::new_srgb();
+        for trc in [&mut linear709.red_trc, &mut linear709.green_trc, &mut linear709.blue_trc] {
+            *trc = Some(ToneReprCurve::Lut(Vec::new()));
+        }
+        linear709.cicp = None;
+        let options = TransformOptions {
+            rendering_intent: RenderingIntent::RelativeColorimetric,
+            allow_extended_range_rgb_xyz: true,
+            prefer_fixed_point: false,
+            ..Default::default()
+        };
+        let t = source.create_transform_f32(Layout::Rgb, &linear709, Layout::Rgb, options).unwrap();
+        let mut reference = vec![0f32; input.len()];
+        t.transform(input, &mut reference).unwrap();
+        assert_eq!(output.len(), reference.len());
+        for (k, (actual, expected)) in output.iter().zip(&reference).enumerate() {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "component {k}");
+        }
+    }
     fn profile(tags: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
         let mut table = Vec::new();
         let mut data = Vec::new();
@@ -923,9 +941,11 @@ mod tests {
         // Pass the original ICC through the production path: 0.9.2 must use
         // A2B0 for relative intent without a synthetic A2B1 alias.
         let t = moxcms_lut(&icc).expect("unaliased A2B0 transform");
-        let mut out = [0f32; 3];
-        t.transform(&[1.0, 1.0, 1.0], &mut out).unwrap();
-        assert!(out.iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
+        let input = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, -0.1, 1.2, 0.5];
+        let mut out = [0f32; 12];
+        t.transform(&input, &mut out).unwrap();
+        assert_lut_matches_explicit_false(&icc, &input, &out);
+        assert!(out[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
     }
     /// Synthetic v4 RGB->XYZ lutAtoBType (linear curves, identity 2^3 CLUT, sRGB
     /// D50 matrix x`scale`; mAB XYZ PCS units are 1.0 = 65535/32768, so x2
@@ -1002,9 +1022,12 @@ mod tests {
     }
     #[test]
     fn lut_values_above_two_are_not_clipped() {
-        let t = moxcms_lut(&hdr_lut_profile(2.0)).expect("synthetic HDR LUT");
+        let icc = hdr_lut_profile(2.0);
+        let t = moxcms_lut(&icc).expect("synthetic HDR LUT");
+        let input = [1.0, 1.0, 1.0, 0.25, 0.25, 0.25];
         let mut out = [0f32; 6];
-        t.transform(&[1.0, 1.0, 1.0, 0.25, 0.25, 0.25], &mut out).unwrap();
+        t.transform(&input, &mut out).unwrap();
+        assert_lut_matches_explicit_false(&icc, &input, &out);
         assert!(out[..3].iter().all(|v| (v - 4.0).abs() < 0.02), "white {out:?}");
         assert!(out[3..].iter().all(|v| (v - 1.0).abs() < 0.02), "quarter {out:?}");
     }
