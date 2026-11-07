@@ -124,10 +124,10 @@ and pass both to `encodeRgb`.
 - Header choice (`set_fields_from_icc`) is a Rust port of libjxl's skcms variant (white/primaries snapping, gamma and 709/linear/sRGB/DCI candidates via the 252-byte random-pixel comparison, `cicp` tag). No C CMS is used by either encoder: `JPEGXL_EXTERNAL_CMS=ON` skips skcms/LCMS2 discovery and builds only a static rejecting default-CMS stub; native `libjxl.so` has no `libjxl_cms.so` dependency. Without a `cicp` tag, PQ/HLG curves are kept as ICC (the skcms A2B candidates are not ported).
 
 **LUT (A2B) profiles.**
-- Converted by moxcms `=0.9.1` (relative colorimetric, `extended_range`), identically in WASM and natively.
-- moxcms 0.9.1 reads only A2B1 for relative intent; A2B0-only profiles get an A2B1 alias entry first (`moxcms_091_relative_a2b0_alias`, remove after moxcms > 0.9.1; upstream PR #205).
-- Fixture `lut` XYB vs LCMS2: 3.29e-4 max (gate .003; skcms/LCMS before: 2.32e-4 WASM / 1.11e-4 native).
-- `prefer_fixed_point: false`: moxcms' default `true` stores the f32 LUT grid as Q2.14 with its SIMD LUT features and clips at ~2.0 (HDR/wide LUTs such as AppleHagc reach 10.3; moxcms#208). Our build disables those features, so this changes no output today (same XYB, timing within noise); `lut_values_above_two_are_not_clipped` guards it.
+- Converted by moxcms `=0.9.2` (relative colorimetric, `extended_range`), identically in WASM and natively.
+- moxcms 0.9.2 falls back to A2B0 when A2B1 is absent for relative intent (upstream PR #205); the original ICC is passed directly without an alias.
+- 0.9.1 baseline, fixture `lut` XYB vs LCMS2: 3.29e-4 max (gate .003; skcms/LCMS before: 2.32e-4 WASM / 1.11e-4 native).
+- `prefer_fixed_point: false` remains explicit. In 0.9.1, the default `true` with SIMD LUT features stored the f32 LUT grid as Q2.14 and clipped at ~2.0 (HDR/wide LUTs such as AppleHagc reach 10.3; moxcms#208). Upstream fixed this in 0.9.2, but removal requires local correctness validation. Our build disables those SIMD features; `lut_values_above_two_are_not_clipped` guards extended output.
 
 **Gray profiles.**
 - Produce a true one-channel JXL (`num_color_channels=1`).
