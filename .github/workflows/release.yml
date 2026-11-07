@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -38,13 +38,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        run: pnpm -r --sort --workspace-concurrency=1 build:package
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium
 
       - name: Test
-        run: pnpm test
+        run: pnpm -r --sort --if-present --workspace-concurrency=1 test:package
 
       - name: Stage packages
         shell: bash
