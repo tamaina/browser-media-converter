@@ -127,7 +127,7 @@ and pass both to `encodeRgb`.
 - Converted by moxcms `=0.9.2` (relative colorimetric, `extended_range`), identically in WASM and natively.
 - moxcms 0.9.2 falls back to A2B0 when A2B1 is absent for relative intent (upstream PR #205); the original ICC is passed directly without an alias.
 - 0.9.1 baseline, fixture `lut` XYB vs LCMS2: 3.29e-4 max (gate .003; skcms/LCMS before: 2.32e-4 WASM / 1.11e-4 native).
-- `prefer_fixed_point: false` remains explicit. In 0.9.1, the default `true` with SIMD LUT features stored the f32 LUT grid as Q2.14 and clipped at ~2.0 (HDR/wide LUTs such as AppleHagc reach 10.3; moxcms#208). Upstream fixed this in 0.9.2, but removal requires local correctness validation. Our build disables those SIMD features; `lut_values_above_two_are_not_clipped` guards extended output.
+- Uses the default `prefer_fixed_point`. moxcms 0.9.2 fixed the f32 SIMD LUT clipping at ~2.0 from 0.9.1 (moxcms#208). Local comparisons with production and default moxcms features found bit-identical f32 output versus explicit `false` for HDR/LUT full-frame, extended-range, and normalized U8/U16 probes, HDR maxima around 4.0018, and no meaningful conversion slowdown. Production uses only `create_transform_f32` for LUT profiles; SIMD integer CMS diagnostic differences do not apply to this path. Our build still disables those SIMD features. The HDR and A2B0 regression tests compare default output bitwise with explicit `false`; `lut_values_above_two_are_not_clipped` also guards extended output.
 
 **Gray profiles.**
 - Produce a true one-channel JXL (`num_color_channels=1`).
