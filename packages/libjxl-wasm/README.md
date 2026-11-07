@@ -11,7 +11,7 @@ so the root `pnpm build` / `pnpm test` do not need emsdk or Chrome.
 | Here (`packages/libjxl-wasm`) | `experiments/jxl-planar-xyb` |
 | --- | --- |
 | libjxl clone, `patches/libjxl-xyb.patch` (planar XYB input only; see below) | Rust planar session `src/lib.rs`: validation, owned planes, YUV→XYB kernel |
-| `src/bridge.cc`: JxlEncoder calls, installs the Rust CMS (`JxlEncoderSetCms`) | Rust CMS `src/cms.rs` (stock `JxlCmsInterface`; moxcms `=0.9.1` for LUT ICC); `build.rs` compiles `src/bridge.cc` from here into the Rust cdylib |
+| `src/bridge.cc`: JxlEncoder calls, installs the Rust CMS (`JxlEncoderSetCms`) | Rust CMS `src/cms.rs` (stock `JxlCmsInterface`; moxcms `=0.9.2` for LUT ICC); `build.rs` compiles `src/bridge.cc` from here into the Rust cdylib |
 | `src/planar_session.h`: the C ABI the Rust session implements | oracle, Python/Chrome verification suites (Round 10–12, real10) |
 | `src/wasm_entry.cc`, `src/api.mjs`: Emscripten exports and JS API | |
 | `tools/decode_float.cc` (stock system libjxl decoder), `tools/tail_guard.cc` | |

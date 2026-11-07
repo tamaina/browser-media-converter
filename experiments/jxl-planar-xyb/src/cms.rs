@@ -5,7 +5,7 @@
 //! "input profile -> linear sRGB (D65, BT.709 primaries)". Three paths:
 //! * the registered source ICC, matrix/TRC: exact scalar f64 evaluation
 //!   (bounded parser below, formerly `source_icc.h` inside patched libjxl);
-//! * the registered source ICC, LUT (A2B*) profiles: moxcms 0.9.1;
+//! * the registered source ICC, LUT (A2B*) profiles: moxcms 0.9.2;
 //! * enum input (no ICC; transfer from `color_encoding`, never from an ICC):
 //!   linear / sRGB / BT.709 / pure gamma with any white point and primaries,
 //!   using the same float approximations as the fused YUV->XYB kernel;
@@ -230,54 +230,11 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected, String> {
 }
 
 // ------------------------------------------------------- moxcms LUT profiles
-/// TODO(moxcms > 0.9.1): delete this function and its call site.
-///
-/// moxcms 0.9.1 resolves RelativeColorimetric only through A2B1 and fails on
-/// the common A2B0-only device profiles (ICC.1:2010 8.10.2 requires the A2B0
-/// fallback; lcms2 and skcms do it). Fixed upstream by moxcms PR #205
-/// (commit 962636e), not released yet. Until then, when A2B1 is absent and
-/// A2B0 present, append an A2B1 tag-table entry that aliases the A2B0 data
-/// (+12 bytes: one table entry; every data offset shifts by 12). The profile
-/// ID (MD5) is zeroed because the bytes changed. The aliased copy is only fed
-/// to moxcms; the original ICC bytes are what libjxl embeds.
-pub fn moxcms_091_relative_a2b0_alias(icc: &[u8]) -> Option<Vec<u8>> {
-    if icc.len() < 132 { return None; }
-    let be = |o: usize| u32::from_be_bytes(icc[o..o + 4].try_into().unwrap()) as usize;
-    let n = be(128);
-    if n > (icc.len() - 132) / 12 { return None; }
-    let mut a2b0 = None;
-    for i in 0..n {
-        let o = 132 + 12 * i;
-        match &icc[o..o + 4] {
-            b"A2B1" => return None,
-            b"A2B0" => a2b0 = Some((be(o + 4), be(o + 8))),
-            _ => {}
-        }
-    }
-    let (offset, size) = a2b0?;
-    let mut out = Vec::with_capacity(icc.len() + 12);
-    out.extend_from_slice(&icc[..128]);
-    out.extend_from_slice(&(n as u32 + 1).to_be_bytes());
-    for i in 0..n {
-        let o = 132 + 12 * i;
-        out.extend_from_slice(&icc[o..o + 4]);
-        out.extend_from_slice(&(be(o + 4) as u32 + 12).to_be_bytes());
-        out.extend_from_slice(&icc[o + 8..o + 12]);
-    }
-    out.extend_from_slice(b"A2B1");
-    out.extend_from_slice(&(offset as u32 + 12).to_be_bytes());
-    out.extend_from_slice(&(size as u32).to_be_bytes());
-    out.extend_from_slice(&icc[132 + 12 * n..]);
-    let len = out.len() as u32;
-    out[0..4].copy_from_slice(&len.to_be_bytes());
-    out[84..100].fill(0);
-    Some(out)
-}
 type LutTransform = Arc<moxcms::TransformF32Executor>;
 fn moxcms_lut(icc: &[u8]) -> Result<LutTransform, String> {
     use moxcms::{ColorProfile, Layout, RenderingIntent, ToneReprCurve, TransformOptions};
-    let aliased = moxcms_091_relative_a2b0_alias(icc);
-    let source = ColorProfile::new_from_slice(aliased.as_deref().unwrap_or(icc)).map_err(|e| format!("moxcms parse: {e}"))?;
+    // moxcms 0.9.2 falls back to A2B0 when the relative-intent A2B1 is absent.
+    let source = ColorProfile::new_from_slice(icc).map_err(|e| format!("moxcms parse: {e}"))?;
     let mut linear709 = ColorProfile::new_srgb();
     for trc in [&mut linear709.red_trc, &mut linear709.green_trc, &mut linear709.blue_trc] {
         *trc = Some(ToneReprCurve::Lut(Vec::new())); // identity
@@ -286,12 +243,9 @@ fn moxcms_lut(icc: &[u8]) -> Result<LutTransform, String> {
     let options = TransformOptions {
         rendering_intent: RenderingIntent::RelativeColorimetric,
         allow_extended_range_rgb_xyz: true,
-        // moxcms defaults to true. With its SIMD LUT features (avx_luts /
-        // sse_luts / neon_luts) the f32 LUT grid is then stored as Q2.14 i16
-        // and saturates at ~2.0, silently clipping wide-gamut/HDR LUT profiles
-        // (AppleHagc reaches 10.3 linear): https://github.com/awxkee/moxcms/issues/208
-        // Our Cargo.toml disables those features, so the scalar float path is
-        // used today either way; this keeps it correct if they are enabled.
+        // Keep floating LUT storage explicit. In 0.9.1, the default true with
+        // SIMD LUT features clipped f32 HDR values at ~2.0 (moxcms#208).
+        // Upstream fixed this in 0.9.2; removal still needs local validation.
         prefer_fixed_point: false,
         ..Default::default()
     };
@@ -962,48 +916,13 @@ mod tests {
         out
     }
     #[test]
-    fn alias_adds_a2b1_pointing_at_a2b0() {
-        let a2b0 = b"mft2\0\0\0\0payload!".to_vec();
-        let original = profile(&[(b"wtpt", vec![1; 20]), (b"A2B0", a2b0.clone())]);
-        let aliased = moxcms_091_relative_a2b0_alias(&original).expect("alias");
-        assert_eq!(aliased.len(), original.len() + 12);
-        assert_eq!(u32::from_be_bytes(aliased[0..4].try_into().unwrap()) as usize, aliased.len());
-        assert_eq!(u32::from_be_bytes(aliased[128..132].try_into().unwrap()), 3);
-        assert!(aliased[84..100].iter().all(|&b| b == 0), "profile ID must be cleared");
-        let entry = |i: usize| {
-            let o = 132 + 12 * i;
-            (&aliased[o..o + 4], u32::from_be_bytes(aliased[o + 4..o + 8].try_into().unwrap()) as usize,
-             u32::from_be_bytes(aliased[o + 8..o + 12].try_into().unwrap()) as usize)
-        };
-        let (s0, o0, n0) = entry(1);
-        let (s1, o1, n1) = entry(2);
-        assert_eq!((s0, s1), (&b"A2B0"[..], &b"A2B1"[..]));
-        assert_eq!((o0, n0), (o1, n1));
-        assert_eq!(&aliased[o1..o1 + n1], &a2b0[..]);
-        let (_, ow, nw) = entry(0);
-        assert_eq!(&aliased[ow..ow + nw], &[1u8; 20][..]);
-    }
-    #[test]
-    fn alias_not_applied_when_a2b1_exists_or_no_a2b0() {
-        assert!(moxcms_091_relative_a2b0_alias(&profile(&[(b"A2B0", vec![0; 12]), (b"A2B1", vec![0; 12])])).is_none());
-        assert!(moxcms_091_relative_a2b0_alias(&profile(&[(b"rTRC", vec![0; 12])])).is_none());
-    }
-    #[test]
-    fn a2b0_only_lut_needs_alias_with_moxcms_091() {
+    fn a2b0_only_lut_uses_upstream_fallback() {
         // Fixture produced by round11 (LCMS device link -> A2B0/B2A0 only).
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/build/round11/lut.icc");
         let Ok(icc) = std::fs::read(path) else { eprintln!("skip: {path} missing"); return };
-        let raw = moxcms::ColorProfile::new_from_slice(&icc).unwrap();
-        let mut dst = moxcms::ColorProfile::new_srgb();
-        dst.cicp = None;
-        let options = moxcms::TransformOptions {
-            rendering_intent: moxcms::RenderingIntent::RelativeColorimetric,
-            allow_extended_range_rgb_xyz: true,
-            ..Default::default()
-        };
-        // If this starts succeeding, moxcms gained the A2B0 fallback: remove the alias.
-        assert!(raw.create_transform_f32(moxcms::Layout::Rgb, &dst, moxcms::Layout::Rgb, options).is_err());
-        let t = moxcms_lut(&icc).expect("aliased transform");
+        // Pass the original ICC through the production path: 0.9.2 must use
+        // A2B0 for relative intent without a synthetic A2B1 alias.
+        let t = moxcms_lut(&icc).expect("unaliased A2B0 transform");
         let mut out = [0f32; 3];
         t.transform(&[1.0, 1.0, 1.0], &mut out).unwrap();
         assert!(out.iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
@@ -1011,9 +930,9 @@ mod tests {
     /// Synthetic v4 RGB->XYZ lutAtoBType (linear curves, identity 2^3 CLUT, sRGB
     /// D50 matrix x`scale`; mAB XYZ PCS units are 1.0 = 65535/32768, so x2
     /// maps white to ~4.0 linear), like HDR/wide LUT profiles
-    /// (AppleHagc reaches 10.3). With moxcms' default prefer_fixed_point and
-    /// its avx_luts feature the f32 LUT saturates at ~2.0 (moxcms#208;
-    /// verified: this test then gets 1.99988).
+    /// (AppleHagc reaches 10.3). In moxcms 0.9.1, default prefer_fixed_point
+    /// with avx_luts saturated f32 LUT output at ~2.0 (moxcms#208; this test
+    /// got 1.99988). Keep guarding extended output after the 0.9.2 fix.
     fn hdr_lut_profile(scale: f64) -> Vec<u8> {
         let s15 = |v: f64| ((v * 65536.0).round() as i32).to_be_bytes();
         // Two-entry linear curv (a zero-entry identity curv sends moxcms to its
