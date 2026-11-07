@@ -1,0 +1,88 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2e5a165..35dd5bd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -138,6 +138,8 @@ set(JPEGXL_ENABLE_SJPEG true CACHE BOOL
+     "Build JPEGXL with support for encoding with sjpeg.")
+ set(JPEGXL_ENABLE_OPENEXR true CACHE BOOL
+     "Build JPEGXL with support for OpenEXR if available.")
++option(JPEGXL_EXTERNAL_CMS "Use an application-supplied CMS; default CMS rejects all profiles." OFF)
++
+ set(JPEGXL_ENABLE_SKCMS ${ENABLE_SKCMS_DEFAULT} CACHE BOOL
+     "Build with skcms instead of lcms2.")
+ set(JPEGXL_ENABLE_VIEWERS false CACHE BOOL
+diff --git a/lib/jxl_cms.cmake b/lib/jxl_cms.cmake
+index 62d5b65..3d503d7 100644
+--- a/lib/jxl_cms.cmake
++++ b/lib/jxl_cms.cmake
+@@ -8,9 +8,13 @@ include(jxl_lists.cmake)
+ # Headers for exporting/importing public headers
+ include(GenerateExportHeader)
+ 
+-add_library(jxl_cms
+-  ${JPEGXL_INTERNAL_CMS_SOURCES}
+-)
++if (JPEGXL_EXTERNAL_CMS)
++  # Static even in a shared build: no runtime dependency on libjxl_cms.so.
++  add_library(jxl_cms STATIC jxl/cms/reject_cms.cc)
++  target_compile_definitions(jxl_cms PUBLIC JXL_CMS_STATIC_DEFINE)
++else()
++  add_library(jxl_cms ${JPEGXL_INTERNAL_CMS_SOURCES})
++endif()
+ target_compile_options(jxl_cms PRIVATE "${JPEGXL_INTERNAL_FLAGS}")
+ set_target_properties(jxl_cms PROPERTIES
+         POSITION_INDEPENDENT_CODE ON
+@@ -28,7 +32,9 @@ target_include_directories(jxl_cms BEFORE PUBLIC
+ 
+ set(JPEGXL_CMS_LIBRARY_REQUIRES "")
+ 
+-if (JPEGXL_ENABLE_SKCMS)
++if (JPEGXL_EXTERNAL_CMS)
++  # The caller must install a CMS with JxlEncoderSetCms/JxlDecoderSetCms.
++elseif (JPEGXL_ENABLE_SKCMS)
+   target_link_skcms(jxl_cms)
+ else()
+   target_link_libraries(jxl_cms PRIVATE lcms2)
+diff --git a/third_party/CMakeLists.txt b/third_party/CMakeLists.txt
+index ea22103..405a45a 100644
+--- a/third_party/CMakeLists.txt
++++ b/third_party/CMakeLists.txt
+@@ -95,7 +95,7 @@ else()
+ endif()
+ 
+ # *cms
+-if (JPEGXL_ENABLE_SKCMS)
++if (JPEGXL_ENABLE_SKCMS AND NOT JPEGXL_EXTERNAL_CMS)
+   if( NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/skcms/skcms.h" )
+     message(FATAL_ERROR "Please run ${PROJECT_SOURCE_DIR}/deps.sh to fetch the "
+             "build dependencies.")
+@@ -104,7 +104,7 @@ if (JPEGXL_ENABLE_SKCMS)
+   configure_file("${CMAKE_CURRENT_SOURCE_DIR}/skcms/LICENSE"
+                  ${PROJECT_BINARY_DIR}/LICENSE.skcms COPYONLY)
+ endif ()
+-if (JPEGXL_ENABLE_VIEWERS OR NOT JPEGXL_ENABLE_SKCMS OR JPEGXL_ENABLE_PLUGINS)
++if (JPEGXL_ENABLE_VIEWERS OR (NOT JPEGXL_ENABLE_SKCMS AND NOT JPEGXL_EXTERNAL_CMS) OR JPEGXL_ENABLE_PLUGINS)
+   if( NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lcms/.git" OR JPEGXL_FORCE_SYSTEM_LCMS2 )
+     find_package(LCMS2 2.12)
+     if ( NOT LCMS2_FOUND )
+diff --git a/lib/jxl/cms/reject_cms.cc b/lib/jxl/cms/reject_cms.cc
+new file mode 100644
+index 0000000..455dfb4
+--- /dev/null
++++ b/lib/jxl/cms/reject_cms.cc
+@@ -0,0 +1,15 @@
++// Application-supplied CMS only. Never silently fall back to a C CMS.
++#include <jxl/cms.h>
++
++extern "C" const JxlCmsInterface* JxlGetDefaultCms() {
++  static const JxlCmsInterface none{
++      nullptr,
++      [](void*, const uint8_t*, size_t, JxlColorEncoding*, JXL_BOOL*) -> JXL_BOOL { return 0; },
++      nullptr,
++      [](void*, size_t, size_t, const JxlColorProfile*, const JxlColorProfile*, float) -> void* { return nullptr; },
++      [](void*, size_t) -> float* { return nullptr; },
++      [](void*, size_t) -> float* { return nullptr; },
++      [](void*, size_t, const float*, float*, size_t) -> JXL_BOOL { return 0; },
++      [](void*) {}};
++  return &none;
++}
