@@ -1,5 +1,12 @@
 # @browser-mc/browser-movie-converter
 
+## 2.1.0
+
+### Minor Changes
+
+- Require Mediabunny `^1.63.0` as a peer dependency; tested with 1.63.0.
+- Update the published `@browser-mc/mediabunny-scene-keyframes` dependency to `^0.3.0`.
+
 ## 2.0.0
 
 ### Breaking Changes

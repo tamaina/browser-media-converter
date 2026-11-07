@@ -1,5 +1,11 @@
 # @browser-mc/mediabunny-scene-keyframes
 
+## 0.3.0
+
+### Minor Changes
+
+- Require Mediabunny `^1.63.0` as a peer dependency; tested with 1.63.0.
+
 ## 0.2.0
 
 ### Breaking Changes
