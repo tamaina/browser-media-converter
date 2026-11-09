@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/playground-output/**'],
+    ignores: ['**/dist/**', '**/node_modules/**', '**/playground-output/**', 'packages/libjxl-wasm/build/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

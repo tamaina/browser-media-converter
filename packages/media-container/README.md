@@ -25,7 +25,7 @@ Use `readImageColorMetadata` when source color signaling should be preserved wit
 ```ts
 import { readImageColorMetadata, writeImageColorMetadata } from '@browser-mc/media-container';
 
-const metadata = readImageColorMetadata(inputBytes, 'image/avif');
+const metadata = await readImageColorMetadata(inputBytes, 'image/avif');
 // { type: 'cicp', cicp: { ... } } or { type: 'icc', profile: Uint8Array }
 
 const jpeg = writeImageColorMetadata(encodedJpeg, 'image/jpeg', metadata);
@@ -80,3 +80,18 @@ pnpm --filter @browser-mc/media-container build
 pnpm --filter @browser-mc/media-container typecheck
 pnpm --filter @browser-mc/media-container test
 ```
+
+`readImageColorMetadata` is asynchronous and returns
+`Promise<ImageColorMetadata | null>` for every format; malformed input rejects
+(the format-specific JPEG/WebP/AVIF helpers stay synchronous and throw).
+PNG colour metadata is read with `await readImageColorMetadata(bytes, 'image/png')`
+or `await readPngColorMetadata(bytes)`. PNG cICP takes precedence over iCCP and
+an overridden iCCP is not decompressed; RGB matrix code 0 and either full/narrow
+range flag are supported. iCCP is decompressed with the standard
+`DecompressionStream('deflate')` (zlib wrapper; Adler-32, truncation and trailing
+data are checked by the runtime), so it needs a runtime with
+`DecompressionStream` (browsers, workers, Node 18+). Decompression stops and
+rejects with a `RangeError` once the profile exceeds
+`PNG_ICCP_MAX_PROFILE_BYTES` (16 MiB). Invalid/truncated colour chunks and
+invalid zlib data reject with an `Error`; CRCs and image pixel data are not checked.
+PNG metadata writing throws for non-null metadata (null returns the input).

@@ -6,3 +6,5 @@ export * from './avif.js';
 export * from './jpeg.js';
 export * from './webp.js';
 export * from './isobmff-gps.js';
+
+export * from './png.js';

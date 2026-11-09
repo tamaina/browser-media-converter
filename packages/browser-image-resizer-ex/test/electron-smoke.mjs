@@ -8,7 +8,7 @@ import { resolve } from 'node:path';
 
 const root = resolve(new URL('../../..', import.meta.url).pathname);
 const main = resolve(root, 'packages/browser-image-resizer-ex/test/electron-main.cjs');
-const outputDir = resolve(root, 'playground-output/browser-image-resizer-ex');
+const outputDir = process.env.RESIZER_SMOKE_OUTPUT ?? resolve(root, 'playground-output/browser-image-resizer-ex');
 const smokeDir = await mkdtemp(resolve(tmpdir(), 'image-resizer-'));
 const smokeBundle = resolve(smokeDir, 'resizer.js');
 
@@ -46,7 +46,7 @@ const app = await electron.launch({
 const page = await app.firstWindow();
 await page.goto(`http://127.0.0.1:${port}/`);
 
-const result = await page.evaluate(async ({ port }) => {
+const result = await page.evaluate(async ({ port, fixtureIcc }) => {
   const {
     checkImageDecodeSupport,
     getBrowserImageResizerSupport,
@@ -54,6 +54,7 @@ const result = await page.evaluate(async ({ port }) => {
     inspectImageInput,
     muxAnimatedWebp,
     readAvifColorSpace,
+    readAvifColorMetadata,
     resizeAndConvertImage,
     resizeAnimatedImageToWebp,
   } = await import(`http://127.0.0.1:${port}/resizer.js`);
@@ -181,6 +182,40 @@ const result = await page.evaluate(async ({ port }) => {
     quality: 0.75,
   });
   const iccWebpProfile = readWebpIccProfile(iccWebp.data);
+  // CRC-valid PNG fixtures; the generated LCMS sRGB profile is freely reproducible.
+  const u32be = value => new Uint8Array([value >>> 24, value >>> 16, value >>> 8, value]);
+  const pngChunk = (type, payload) => {
+    const body = concat(new Uint8Array(ascii(type)), payload);
+    let crc = 0xffffffff;
+    for (const value of body) {
+      crc ^= value;
+      for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+    return concat(u32be(payload.length), body, u32be((crc ^ 0xffffffff) >>> 0));
+  };
+  const pngCanvas = new OffscreenCanvas(16, 16);
+  pngCanvas.getContext('2d').fillRect(0, 0, 16, 16);
+  const png = new Uint8Array(await (await pngCanvas.convertToBlob({type:'image/png'})).arrayBuffer());
+  // Remove any Canvas color chunks before inserting the test metadata.
+  const pngChunks = [];
+  for (let at = 8; at < png.length;) {
+    const length = new DataView(png.buffer, png.byteOffset + at).getUint32(0);
+    const type = String.fromCharCode(...png.subarray(at + 4, at + 8));
+    if (!['iCCP','cICP','sRGB','gAMA','cHRM'].includes(type)) pngChunks.push(png.slice(at, at + length + 12));
+    at += length + 12;
+  }
+  const compressed = new Uint8Array(await new Response(new Blob([new Uint8Array(fixtureIcc)]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer());
+  const pngMetadata = [];
+  for (const [type, payload] of [
+    ['iCCP', concat(new Uint8Array(ascii('test\0\0')), compressed)],
+    ['cICP', new Uint8Array([12,13,0,1])],
+  ]) {
+    const input = concat(png.slice(0,8), pngChunks[0], pngChunk(type, payload), ...pngChunks.slice(1));
+    // Same size keeps packed RGB samples in their original encoding.
+    const output = await resizeAndConvertImage({input, inputMime:'image/png', outputMime:'image/avif', avif:{alpha:'discard'}});
+    const metadata = readAvifColorMetadata(output.data);
+    pngMetadata.push({type, metadata: metadata?.type === 'icc' ? {type:'icc', profile:[...metadata.profile]} : metadata});
+  }
   const support = getBrowserImageResizerSupport();
   const checkedSupport = await getBrowserImageResizerSupportWithAvif();
   const fallbackWebpInput = await makeFrame('#296f5d', 'F');
@@ -280,6 +315,7 @@ const result = await page.evaluate(async ({ port }) => {
   const hdrExplicitColorSpaceContainerColorSpace = readAvifColorSpace(hdrExplicitColorSpaceAvif.data);
 
   return {
+    pngMetadata,
     animated: [...animated],
     decoded,
     inspection,
@@ -394,7 +430,7 @@ const result = await page.evaluate(async ({ port }) => {
       decoder.close();
     }
   }
-}, { port });
+}, { port, fixtureIcc: [...Buffer.from('AAACTGxjbXMEQAAAbW50clJHQiBYWVogB+oACgAYAAoAFAAPYWNzcEFQUEwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPbWAAEAAAAA0y1sY21zAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALZGVzYwAAAQgAAAA2Y3BydAAAAUAAAABMd3RwdAAAAYwAAAAUY2hhZAAAAaAAAAAsclhZWgAAAcwAAAAUYlhZWgAAAeAAAAAUZ1hZWgAAAfQAAAAUclRSQwAAAggAAAAgZ1RSQwAAAggAAAAgYlRSQwAAAggAAAAgY2hybQAAAigAAAAkbWx1YwAAAAAAAAABAAAADGVuVVMAAAAaAAAAHABzAFIARwBCACAAYgB1AGkAbAB0AC0AaQBuAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAADAAAAAcAE4AbwAgAGMAbwBwAHkAcgBpAGcAaAB0ACwAIAB1AHMAZQAgAGYAcgBlAGUAbAB5WFlaIAAAAAAAAPbWAAEAAAAA0y1zZjMyAAAAAAABDEIAAAXe///zJQAAB5MAAP2Q///7of///aIAAAPcAADAblhZWiAAAAAAAABvoAAAOPUAAAOQWFlaIAAAAAAAACSfAAAPhAAAtsNYWVogAAAAAAAAYpcAALeHAAAY2XBhcmEAAAAAAAMAAAACZmYAAPKnAAANWQAAE9AAAApbY2hybQAAAAAAAwAAAACj1wAAVHsAAEzNAACZmgAAJmYAAA9c', 'base64')] });
 
 assert.equal(result.decoded.animated, true);
 assert.equal(result.decoded.frameCount, 2);
@@ -443,6 +479,8 @@ assert.deepEqual(
 );
 assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.resizePath === 'canvas'));
 assert.ok(result.canvasSdrAnimated.frames.every((frame) => frame.inspection.colorSpace.primaries === 'bt709'));
+assert.deepEqual(result.pngMetadata[0].metadata, {type:'icc', profile:[...Buffer.from('AAACTGxjbXMEQAAAbW50clJHQiBYWVogB+oACgAYAAoAFAAPYWNzcEFQUEwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPbWAAEAAAAA0y1sY21zAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALZGVzYwAAAQgAAAA2Y3BydAAAAUAAAABMd3RwdAAAAYwAAAAUY2hhZAAAAaAAAAAsclhZWgAAAcwAAAAUYlhZWgAAAeAAAAAUZ1hZWgAAAfQAAAAUclRSQwAAAggAAAAgZ1RSQwAAAggAAAAgYlRSQwAAAggAAAAgY2hybQAAAigAAAAkbWx1YwAAAAAAAAABAAAADGVuVVMAAAAaAAAAHABzAFIARwBCACAAYgB1AGkAbAB0AC0AaQBuAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAADAAAAAcAE4AbwAgAGMAbwBwAHkAcgBpAGcAaAB0ACwAIAB1AHMAZQAgAGYAcgBlAGUAbAB5WFlaIAAAAAAAAPbWAAEAAAAA0y1zZjMyAAAAAAABDEIAAAXe///zJQAAB5MAAP2Q///7of///aIAAAPcAADAblhZWiAAAAAAAABvoAAAOPUAAAOQWFlaIAAAAAAAACSfAAAPhAAAtsNYWVogAAAAAAAAYpcAALeHAAAY2XBhcmEAAAAAAAMAAAACZmYAAPKnAAANWQAAE9AAAApbY2hybQAAAAAAAwAAAACj1wAAVHsAAEzNAACZmgAAJmYAAA9c', 'base64')]});
+assert.deepEqual(result.pngMetadata[1].metadata, {type:'cicp', cicp:{primaries:'smpte432', transfer:'iec61966-2-1', matrix:'rgb', fullRange:true}});
 assert.equal(result.iccWebp.kind, 'still');
 assert.equal(result.iccWebp.mime, 'image/webp');
 assert.notDeepEqual(result.iccWebp.iccProfile, [1, 2, 3, 4]);
