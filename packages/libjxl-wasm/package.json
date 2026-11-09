@@ -2,26 +2,34 @@
   "name": "@browser-mc/libjxl-wasm",
   "version": "0.0.0",
   "private": true,
-  "description": "Patched libjxl v0.11.1 (planar XYB input, source-ICC policy) built for native tests and WebAssembly, plus the createEncoder JS API.",
+  "description": "Patched libjxl v0.11.1 (planar XYB input, source-ICC policy) built for native tests and WebAssembly, plus the createEncoder TypeScript API.",
   "type": "module",
-  "types": "./src/api.d.ts",
+  "types": "./src/api.ts",
   "exports": {
     ".": {
-      "types": "./src/api.d.ts",
-      "import": "./src/api.mjs"
+      "types": "./src/api.ts",
+      "import": "./src/api.ts"
     },
-    "./codec.mjs": "./build/wasm/codec.mjs"
+    "./codec.mjs": {
+      "types": "./build/wasm/codec.d.ts",
+      "import": "./build/wasm/codec.mjs"
+    }
   },
   "scripts": {
-    "test:api": "node --test --test-isolation=none --test-concurrency=1 test/api.test.mjs",
+    "test:api": "node --test --test-isolation=none --test-concurrency=1 test/api.test.ts",
     "build:native": "bash scripts/build-native.sh",
-    "build:wasm": "bash ../../experiments/jxl-planar-xyb/build-wasm.sh"
+    "build:wasm": "bash scripts/build-wasm.sh"
   },
   "files": [
     "src",
     "patches",
     "build/wasm/codec.mjs",
     "build/wasm/codec.wasm",
+    "build/wasm/codec.d.ts",
+    "build/wasm/codec.d.mts",
     "README.md"
-  ]
+  ],
+  "engines": {
+    "node": ">=26"
+  }
 }

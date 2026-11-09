@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createEncoder} from '../src/api.mjs';
+import {createEncoder} from '@browser-mc/libjxl-wasm';
+import type {ColorOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
@@ -9,12 +10,13 @@ const encoder = await createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));
   return {};
 }});
-const rgb = (extra = {}) => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
-const cicp = (transfer = 8) => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
+// Extra fields deliberately allow malformed inputs to exercise runtime validation.
+const rgb = (extra: Record<string, unknown> = {}): RgbInput => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
+const cicp = (transfer: number | string = 8): Extract<NonNullable<ColorOptions['colorMetadata']>, {type: 'cicp'}> => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
 
-const planar = (format, depth = 8, transfer = 'bt709') => {
+const planar = (format: PlanarInput['format'], depth = 8, transfer: ColorOptions['transfer'] = 'bt709'): PlanarInput => {
   const bytes = depth === 8 ? 1 : 2;
-  const plane = value => {
+  const plane = (value: number) => {
     const data = new Uint8Array(bytes);
     new DataView(data.buffer).setUint8(0, value & 255);
     if (bytes === 2) data[1] = value >> 8;
@@ -30,11 +32,11 @@ const planar = (format, depth = 8, transfer = 'bt709') => {
 for (const [format, depth, transfer] of [
   ['I420A', 8, 'bt709'], ['I444A', 8, 'bt709'],
   ['I444AP10', 10, 'pq'], ['I420AP12', 12, 'hlg']
-]) {
+] as const) {
   test(`${format} ${transfer} rejects sparse alpha planes`, () => {
     for (const makeSparse of [
-      planes => { planes.length = 3; planes.length = 4; },
-      planes => { delete planes[3]; }
+      (planes: PlanarInput['planes']) => { planes.length = 3; planes.length = 4; },
+      (planes: PlanarInput['planes']) => { delete planes[3]; }
     ]) {
       const input = planar(format, depth, transfer);
       makeSparse(input.planes);
@@ -53,7 +55,7 @@ for (const [format, depth, transfer] of [
 }
 
 test('every required plane rejects holes and non-object descriptors', () => {
-  for (const format of ['I444', 'I444A']) {
+  for (const format of ['I444', 'I444A'] as const) {
     const count = format === 'I444A' ? 4 : 3;
     for (let c = 0; c < count; c++) {
       for (const missing of [true, false]) {
@@ -61,7 +63,7 @@ test('every required plane rejects holes and non-object descriptors', () => {
           const input = planar(format);
           input.planes.length = count;
           if (missing) delete input.planes[c];
-          else input.planes[c] = value;
+          else (input.planes as unknown[])[c] = value;
           assert.throws(() => encoder.encodePlanarYuv(input), {
             name:'TypeError', message:`plane ${c} must be an object`
           });
@@ -119,6 +121,7 @@ test('CICP transfer 5 and gamma28 reject identically instead of using gamma2.4',
   });
   assert.equal(errors[0], errors[1]);
   assert.match(errors[0], /unsupported SDR transfer: gamma28/);
+  // @ts-expect-error Intentionally unsupported transfer must also reject at runtime.
   assert.throws(() => encoder.encodeRgb(rgb(), {transfer:'gamma28'}), /gamma28/);
 });
 
@@ -142,7 +145,7 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
     [new Uint8Array([17, 128, 255]), 8, 'u8', 255],
     [new Uint8ClampedArray([17, 128, 255]), 8, 'u8', 255],
     [new Uint16Array([1023, 32768, 65535]), 16, 'u16le-lsb', 65535]
-  ]) {
+  ] as const) {
     const expected = encoder.encodeRgb(rgb({data:Float32Array.from(data, v => v / max)}), {bitDepth:10});
     for (const declarations of [{}, {depth, bitDepth:depth, storage}]) {
       const actual = encoder.encodeRgb(rgb({data, ...declarations}), {bitDepth:10});
