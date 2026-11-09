@@ -14,6 +14,29 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware CPU preserve resize, scene-keyframe forcing, and stream-only HLS output.
 - `@browser-mc/libjxl-wasm` (private, experimental): patched libjxl v0.11.1 native/Wasm builds, the C++ bridge, and the `createEncoder` JS API used by `experiments/jxl-planar-xyb`.
 
+## JPEG XL metadata
+
+The experimental `@browser-mc/libjxl-wasm` encoder accepts metadata in the
+options of both `encodeRgb` and `encodePlanarYuv`:
+
+```js
+const jxl = encoder.encodeRgb({width, height, data}, {
+  exif: tiffBytes, // Uint8Array: raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes
+  xmp: xmpBytes,   // Uint8Array: opaque XML/XMP, 1 byte..4 MiB
+  compressBoxes: true, // default; Brotli-compress the Exif and xml-space boxes
+});
+```
+
+The encoder strips the optional EXIF prefix and adds the four-byte TIFF offset
+required by a JPEG XL `Exif` box. IFD0 Orientation (1..8) sets the codestream
+orientation; missing Orientation means identity. Supply pixels and dimensions
+**before** that transform: the encoder does not rotate or mirror pixel data.
+Already oriented pixels require EXIF with Orientation removed or set to 1.
+Malformed TIFF headers, IFD0 tables and Orientation entries are rejected;
+other EXIF tags and XMP bytes are preserved without interpreting their contents.
+Metadata is optional and applies only to that encode call. See
+[`WASM.md`](experiments/jxl-planar-xyb/WASM.md) for the full API and verification.
+
 ## Commands
 
 ```sh

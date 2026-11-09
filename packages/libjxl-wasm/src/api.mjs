@@ -1,4 +1,5 @@
 import createModule from '../build/wasm/codec.mjs';
+import {metadataOptions} from './metadata.mjs';
 
 // One synchronous call at a time per instance. Returned arrays own their bytes.
 export async function createEncoder(options = {}) {
@@ -79,6 +80,7 @@ export async function createEncoder(options = {}) {
   }
   function run(i,o,rgb) {
     const start=performance.now();
+    const boxes=metadataOptions(o);
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
@@ -145,6 +147,8 @@ export async function createEncoder(options = {}) {
     };
     try {
       m._w_init(i.width,i.height,format,matrix,+i.fullRange,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18})[i.linearization],({left:0,center:1,topleft:2})[i.chromaSiting],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9})[i.primaries],colorResolved.intensityTarget);
+      m._w_metadata(boxes.exif ? alloc(boxes.exif) : 0, boxes.exif?.length ?? 0,
+        boxes.xmp ? alloc(boxes.xmp) : 0, boxes.xmp?.length ?? 0, boxes.orientation, +boxes.compressBoxes);
       let status;
       if (rgb) {
         const data=i.data;

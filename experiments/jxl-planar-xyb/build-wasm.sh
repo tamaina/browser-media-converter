@@ -10,7 +10,8 @@ export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache" npm_config_ca
 mkdir -p "$TMPDIR" build/wasm
 # Cargo (not bare rustc) because the session links moxcms (pinned in Cargo.lock).
 export CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS="-C panic=abort"
-CARGO_TARGET_DIR="$PWD/build/wasm-target" cargo rustc --lib --release --locked --jobs 1 \
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/build/wasm-target}"
+cargo rustc --lib --release --locked --jobs 1 \
   --target wasm32-unknown-emscripten --crate-type staticlib
-cp build/wasm-target/wasm32-unknown-emscripten/release/libjxl_planar_xyb_proof.a build/wasm/session.a
+cp "$CARGO_TARGET_DIR/wasm32-unknown-emscripten/release/libjxl_planar_xyb_proof.a" build/wasm/session.a
 PLANAR_SESSION_LIB="$PWD/build/wasm/session.a" bash ../../packages/libjxl-wasm/scripts/build-wasm.sh

@@ -40,6 +40,41 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 | `iccHeader` | `'auto'`\|`'exact'`\|`'bt2020'`\|`'p3'` (`'auto'`) | See ICC. |
 | `rgbViaPlanar`, `observe` | boolean | Test/benchmark: RGB baseline from planar input; XYB capture. |
 
+Both encode methods also accept these metadata options:
+
+| Option | Values (default) | Notes |
+| --- | --- | --- |
+| `exif` | `Uint8Array`, 1..65536 bytes | Raw TIFF or `Exif\0\0` + TIFF; the limit includes the optional prefix. |
+| `xmp` | `Uint8Array`, 1 byte..4 MiB | Opaque XML/XMP, stored in an `xml ` box (type ends in a space). |
+| `compressBoxes` | boolean (`true`) | Brotli-compress the metadata into `brob` boxes; `false` stores uncompressed boxes. |
+
+### EXIF/XMP and orientation
+
+Metadata options apply only to the current call, including the `rgbViaPlanar`
+baseline path. Supplying EXIF or XMP enables the JPEG XL container. Omitting
+both preserves the existing output; `compressBoxes` alone adds no boxes.
+
+The optional `Exif\0\0` prefix is removed. The `Exif` box payload is four zero
+bytes (the big-endian offset to TIFF) followed by the original TIFF bytes.
+Both little- and big-endian TIFF are accepted. The header and IFD0 table are
+validated; IFD0 Orientation must be a single SHORT with value 1..8. Duplicate,
+malformed or out-of-range Orientation entries throw `TypeError` before encoding.
+Other EXIF tags remain opaque, and XMP is copied without XML validation.
+Caller buffers are preserved.
+
+Orientation sets the codestream's orientation without rotating or mirroring
+pixels. Pass pixels and `width`/`height` **before** the EXIF transform. A decoder
+normally applies that transform for display (orientations 5..8 swap displayed
+dimensions). Missing Orientation, including TIFF with no IFD0, means identity.
+If the pixels have already been oriented, remove Orientation or set it to 1
+before encoding to avoid applying the transform twice. XMP orientation is not
+interpreted or reconciled with EXIF.
+
+```js
+encoder.encodeRgb({width, height, data}, {exif: tiffBytes, xmp: xmpBytes});
+encoder.encodePlanarYuv(input, {exif: app1ExifBytes, compressBoxes: false});
+```
+
 **Input rules.**
 - U16 input must be LE and low-bit aligned. P010/MSB-aligned storage and samples above the declared depth are rejected.
 - Odd sizes, unaligned offsets, padding and shared buffers all work.
@@ -188,7 +223,7 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size (`codec.wasm`) | 2,513,349 B raw / 967,625 B gzip (Python `gzip.compress(data, compresslevel=9, mtime=0)`; +31 / +27 vs 2,513,318 / 967,598 before removing the C CMS build) |
+| WASM size (`codec.wasm`, EXIF/XMP boxes enabled) | 2,526,809 B raw / 973,510 B gzip (Python `gzip.compress(data, compresslevel=9, mtime=0)`; rebuilt 2026-11-09) |
 
 The C CMS was already absent from the previous WASM link. Removing its build
 and moving the rejecting default CMS into a static stub changes size only
@@ -223,21 +258,35 @@ explicitly, independently of the encoder's `LD_LIBRARY_PATH`.
 
 ```sh
 cd experiments/jxl-planar-xyb
+repo_root="$(cd ../.. && pwd)"
+export TMPDIR="$repo_root/packages/libjxl-wasm/build/tmp"
+export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
+export npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
+export CARGO_TARGET_DIR="$PWD/build/target"
+export JXL_INCLUDE="$repo_root/packages/libjxl-wasm/build/libjxl/lib/include"
+export JXL_LIBRARY="$repo_root/packages/libjxl-wasm/build/native/lib/libjxl.so"
+export LD_LIBRARY_PATH="$repo_root/packages/libjxl-wasm/build/native/lib"
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$npm_config_cache" "$EMCC_TEMP_DIR" "$CARGO_TARGET_DIR"
 bash build.sh                  # package: clone/patch libjxl, native libs, djxl, tools; then Rust adapter, oracle
-JXL_INCLUDE="$PWD/../../packages/libjxl-wasm/build/libjxl/lib/include" \
-JXL_LIBRARY="$PWD/../../packages/libjxl-wasm/build/native/lib/libjxl.so" \
-LD_LIBRARY_PATH="$PWD/../../packages/libjxl-wasm/build/native/lib" \
-CARGO_TARGET_DIR="$PWD/build/target" cargo test --lib --locked --jobs 1
+bash build-wasm.sh             # cargo (moxcms, Cargo.lock) session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
+# Bridge-only rebuild with matching, boxes-enabled wasm-codec libraries already built:
+# LINK_ONLY=1 bash build-wasm.sh
+cargo test --lib --locked --jobs 1
 # Opt-in native CMS callback timer (synthetic Display P3 matrix/TRC RGB f32).
 cargo test --lib --release --locked --jobs 1 cms_row_benchmark -- --ignored --nocapture --test-threads=1
 # API regressions against the existing built codec, no browser needed.
-node --test --test-isolation=none --test-concurrency=1 ../../packages/libjxl-wasm/test/api.test.mjs
-bash build-wasm.sh             # cargo (moxcms, Cargo.lock) session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
+node --test --test-isolation=none --test-concurrency=1 ../../packages/libjxl-wasm/test/api.test.mjs ../../packages/libjxl-wasm/test/metadata.test.mjs
 node wasm/browser-test.mjs     # main suite, then round10 → round11 → round12 (each closes Chrome first)
 node wasm/browser-test.mjs --benchmark [--real10]   # timings → build/browser/benchmark-observations.json
 python3 test_xyb.py && ../../packages/libjxl-wasm/build/tail-guard   # native (LD_LIBRARY_PATH=../../packages/libjxl-wasm/build/native/lib)
 node round12/png-avif.mjs      # PNG iCCP/cICP → AVIF in browser-image-resizer-ex
 ```
+
+The metadata API suite compiles `tools/inspect_metadata.cc` into
+`packages/libjxl-wasm/build/inspect-metadata`, linked against the native decoder.
+It checks EXIF/XMP payloads independently (including Brotli decompression),
+all eight orientations with retained and displayed dimensions, RGB and planar
+paths, per-call reset, payload caps and malformed metadata rejection.
 
 The Python verifiers need `PYTHONPATH=build/python` and
 `LD_LIBRARY_PATH=../../packages/libjxl-wasm/build/native/lib`; the runners set these themselves.

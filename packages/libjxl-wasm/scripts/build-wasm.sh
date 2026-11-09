@@ -11,6 +11,9 @@ source "${EMSDK_ENV:-$HOME/emsdk/emsdk_env.sh}"
 export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 export EM_CACHE="${EM_CACHE:-$PWD/build/em-cache}"
 mkdir -p "$EMCC_TEMP_DIR" build/wasm
+# Reuse the already configured static libraries when only the bridge changes.
+# The caller is responsible for a matching patched libjxl with boxes enabled.
+if [[ "${LINK_ONLY:-0}" != 1 ]]; then
 fetch_libjxl
 cmake="${CMAKE:-$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake}"
 emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
@@ -23,6 +26,7 @@ emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DJPEGXL_EXTERNAL_CMS=ON -DJPEGXL_ENABLE_SKCMS=OFF -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
   -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF
 "$cmake" --build build/wasm-codec --target jxl --parallel 1
+fi
 # jxl_cms is the tiny rejecting stub, with no skcms/LCMS2 sources.
 mapfile -t libs < <(find build/wasm-codec -name '*.a' | sort)
 em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
@@ -30,7 +34,7 @@ em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
   src/wasm_entry.cc src/bridge.cc "$PLANAR_SESSION_LIB" -Wl,--start-group "${libs[@]}" -Wl,--end-group \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sALLOW_MEMORY_GROWTH=1 -sFILESYSTEM=0 \
   -sINITIAL_MEMORY=33554432 -sSTACK_SIZE=2097152 -sENVIRONMENT=web \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_w_diagnostics","_w_xyb_data","_w_xyb_count","_w_init","_w_options","_w_time","_w_plane","_w_encode","_w_rgb","_w_rgb_integer","_w_icc_header_mode","_w_icc","_w_icc_path","_w_icc_header","_w_error","_w_data","_w_size","_w_free","_w_lanes","_w_target"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_w_diagnostics","_w_xyb_data","_w_xyb_count","_w_init","_w_options","_w_time","_w_plane","_w_encode","_w_rgb","_w_rgb_integer","_w_metadata","_w_icc_header_mode","_w_icc","_w_icc_path","_w_icc_header","_w_error","_w_data","_w_size","_w_free","_w_lanes","_w_target"]' \
   -sEXPORTED_RUNTIME_METHODS='["UTF8ToString","HEAPU8"]' -o build/wasm/codec.mjs
 python3 - <<'PY'
 import gzip,json,pathlib

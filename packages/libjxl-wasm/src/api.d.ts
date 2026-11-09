@@ -24,6 +24,13 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes. Four zero offset bytes are added internally.
+   * IFD0 Orientation (1..8) sets codestream orientation; supply pixels before that transform. */
+  exif?: Uint8Array;
+  /** Opaque XML/XMP bytes, 1 byte..4 MiB, stored as an xml-space box. */
+  xmp?: Uint8Array;
+  /** Brotli-compress metadata boxes (default true). */
+  compressBoxes?: boolean;
   distance?: number;
   effort?: 1 | 2 | 3;
   bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12;
