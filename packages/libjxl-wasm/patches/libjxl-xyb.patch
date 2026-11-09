@@ -65,7 +65,7 @@ index 66d1a5e..9d42230 100644
 +  JXL_ENSURE(!(input.experimental_fill_row || fused_input) ||
 +      (frame_header.color_transform == ColorTransform::kXYB &&
 +       frame_info.ib_needs_color_transform && !jpeg_data &&
-+       num_extra_channels == 0 && cparams.speed_tier > SpeedTier::kKitten));
++       (num_extra_channels == 0 || (num_extra_channels == 1 && alpha_eci)) && cparams.speed_tier > SpeedTier::kKitten));
 +
 +  const auto conversion_start = input.experimental_conversion_ms ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 +  if (!jpeg_data && !input.experimental_fill_row && !fused_input) {
@@ -77,14 +77,14 @@ index 66d1a5e..9d42230 100644
          linear = &linear_storage;
        }
 +      if (fused_input) {
-+        JXL_ENSURE(!black && !linear && num_extra_channels == 0);
++        JXL_ENSURE(!black && !linear && (num_extra_channels == 0 || (num_extra_channels == 1 && alpha_eci)));
 +        JXL_RETURN_IF_ERROR(ExperimentalYuvToXYB(*input.experimental_yuv,
 +            patch_rect.x0(), patch_rect.y0(), metadata->m.IntensityTarget(),
 +            &color, input.experimental_simd_lanes));
 +      } else if (input.experimental_fill_row) {
 +        // Bounded row scratch. The full color allocation holds only final XYB;
 +        // no full nonlinear/linear RGB image is constructed by this path.
-+        JXL_ENSURE(!black && !linear && num_extra_channels == 0);
++        JXL_ENSURE(!black && !linear && (num_extra_channels == 0 || (num_extra_channels == 1 && alpha_eci)));
 +        JXL_ASSIGN_OR_RETURN(Image3F row,
 +                             Image3F::Create(memory_manager, color.xsize(), 1));
 +        for (size_t y = 0; y < color.ysize(); ++y) {

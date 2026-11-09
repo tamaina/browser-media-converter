@@ -1,7 +1,7 @@
 # Planar YUV / RGB → XYB JPEG XL in WebAssembly — design and spec
 
 Patched libjxl v0.11.1 (794a5dcf), Highway four-lane SIMD, Emscripten `-O2 -msimd128`.
-The API is synchronous, SDR-only, and produces lossy XYB/VarDCT. Builds,
+The API is synchronous, supports planar HDR, and produces lossy XYB/VarDCT. Builds,
 fixtures, logs and codestreams stay in the ignored `build/`. The libjxl build,
 bridge, Wasm exports and JS API are in `packages/libjxl-wasm` (its own ignored
 `build/`); this directory holds the Rust session and the suites. The full
@@ -16,14 +16,14 @@ const encoder = await createEncoder();
 
 // Planar YUV straight from VideoFrame.copyTo (offsets/strides in bytes).
 const jxl = encoder.encodePlanarYuv({
-  width, height, format: frame.format,           // I420/I422/I444/NV12, I4xxP10/P12
+  width, height, format: frame.format,           // I420/I422/I444/NV12, I4xxP10/P12 and I4xxA/AP10/AP12
   planes: [{data, offset, stride}, ...],
   colorSpace: frame.colorSpace,                  // optional; VideoColorSpace or plain object
   chromaSiting: 'left',                          // not exposed by WebCodecs; pass if known
 }, {distance: 1, effort: 3});
 jxl.colorResolved; jxl.warnings;                 // also in encoder.stats
 
-// Packed RGB: Float32 RGB, U8/U8Clamped RGB or opaque RGBA, full-range U16 RGB/RGBA.
+// Packed RGB: Float32 RGB/RGBA, U8/U8Clamped RGB/RGBA, full-range U16 RGB/RGBA.
 const metadata = await readImageColorMetadata(bytes, 'image/png'); // media-container; jpeg/webp/avif/png
 encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'auto'});
 ```
@@ -41,7 +41,7 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 | `rgbViaPlanar`, `observe` | boolean | Test/benchmark: RGB baseline from planar input; XYB capture. |
 
 **Input rules.**
-- U16 input must be LE and low-bit aligned. P010/MSB-aligned storage, alpha, and samples above the declared depth are rejected.
+- U16 input must be LE and low-bit aligned. P010/MSB-aligned storage and samples above the declared depth are rejected.
 - Odd sizes, unaligned offsets, padding and shared buffers all work.
 - Limits: 8192 px per axis, 4,194,304 px, and 64 MiB of validated source spans.
 - The source format determines the source depth.
@@ -82,7 +82,7 @@ Each field resolves as: encode option > input field > `colorSpace` > (`encodeRgb
 | Transfer | bt709, smpte170m (+ bt2020-10/12, bt470bg aliases) | **E^2.4**, gamma header 0.4166667 |
 | Transfer | iec61966-2-1 / srgb | sRGB |
 | Transfer | linear | LINEAR |
-| Transfer | pq, hlg | rejected (SDR only) |
+| Transfer | pq, hlg (and aliases) | planar BT.2020 NCL, 10/12-bit; enum header |
 
 ### Gamma 2.4 for BT.709 / SMPTE 170M
 
@@ -196,7 +196,7 @@ slightly; the benefit is avoiding CMS fetching, discovery and compilation.
 
 ## Known limitations
 
-- **SDR only.** PQ/HLG are rejected in WASM; the native row path supports them through the CMS.
+- **HDR scope:** planar BT.2020 NCL 10/12-bit PQ/HLG through the row CMS path (see HDR base below).
 - No mastering metadata. The output is lossy, not integer-exact.
 - WebCodecs exposes no chroma siting; the default is left.
 - VP9 ignores bitstream colour, so pass `config.colorSpace`.
@@ -246,7 +246,7 @@ What the suites check:
 - **Main suite.** Every format, depth and siting combination, plus validation and ownership. Output is decoded by jxl-oxide and stock libjxl and compared with the native build and `wasm/reference.py`.
 - **round10.** Colour resolution against an independent NumPy reference, plus Chrome display.
 - **round11.** ICC/CICP against LCMS2 (`round11/lcms.py`), with native vs WASM parity.
-- **round12.** Gray ICC, header targets, and integer/Float32 bit-parity for U8/U16 RGB/RGBA × 8 profile paths.
+- **round12.** Gray ICC, header targets, and integer/Float32 colour bit-parity for U8/U16 RGB/RGBA × 8 profile paths.
 
 Measurement JSON goes to `build/*/observations.json` and is never committed.
 `real10/` describes the optional Netflix fixtures. They are CC BY-NC-ND: fetch
@@ -259,3 +259,80 @@ investigation scripts (round8/round9) and the prototypes `jxl-yuv`,
 `jxl-direct` and `jxl-planar-hdr` (a possible base for PQ/HLG) were removed
 after `ed28b03`. Restore them with
 `git checkout ed28b03 -- experiments/<path>`.
+
+## HDR base
+
+Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
+`transfer: 'pq' | 'hlg'` (aliases `smpte2084` / `arib-std-b67`). It uses the
+non-fused row/CMS path. 8-bit HDR, BT.709 matrices, P3 HDR and `encodeRgb` HDR
+are rejected (including an 8-bit output override; float32 output remains available). HDR is recorded with PQ/HLG enum encoding; HDR ICC input is out
+of scope. HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
+
+`intensityTargetNits` on input or encode options (options win) is variable for
+HDR and SDR. Defaults are PQ 10000, HLG 1000, SDR 255 nits. Values must be
+positive and finite within the JXL header's F16 range, `2^-24..65504` nits.
+The CMS and XYB use this intensity as well as the header; PQ retains absolute
+luminance, whereas HLG's display OOTF depends on this peak. The header truncates
+to F16 precision, so arbitrary fractional targets may read back slightly lower.
+`colorResolved.intensityTarget` (also in `encoder.stats.colorResolved`) reports
+the float32 setting. `colorResolved.policy` is `hdr-as-is` for HDR, `sdr-as-is`
+for SDR. There is no `hdrMode` option and no HDR→SDR tone mapping.
+
+Default `validation: 'clip'` clips reconstructed RGB to [0,1] for HDR as for SDR
+and emits a policy warning without an additional pixel scan. `strict` rejects
+out-of-range values. `masteringDisplay` and `contentLightLevel` produce warnings
+and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurposed.
+
+`node wasm/hdr-test.mjs` from `experiments/jxl-planar-xyb` verifies native/WASM
+XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
+and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
+`build/hdr/numeric.json`. **Real HDR display output is unverified.**
+
+For HDR numerical comparisons, the oracle's `--hdr-linear709` requests decoded
+XYB and applies the codestream opsin inverse matrix/bias plus `255/intensity`.
+This bypasses jxl-oxide 0.12.6's automatic Rec.2408 SDR mapping for a linear
+output target, and its perceptual gamut mapping for original BT.2020 output.
+The existing `--linear709` and SDR gates remain unchanged. Neutral nits probes
+use distance 0.01; saturated gamut probes use the public default distance 1.
+A sharp saturated HDR probe at distance 0.01 currently gives a large decoder
+disagreement (jxl-oxide versus both libjxl decoders), reproducible with native
+and WASM encoders; see `build/hdr/sol-report.md` for the measured limitation.
+
+## Straight alpha (D1)
+
+Input `alphaMode?: 'straight'` defaults to straight and rejects all other explicit
+values. Packed RGBA accepts U8, U8Clamped, U16 and Float32. Alpha is passed as a
+separate `JXL_CHANNEL_ALPHA` without colour conversion or an opacity pre-scan.
+Its depth follows the input type (8/16/32; Float32 exponent 8), independent of
+the colour output `bitDepth`. libjxl initializes extra-channel distance to zero,
+so the alpha coding is lossless at normal colour distance 1. Float input must
+be finite and in [0,1]. Default `KEEP_INVISIBLE` allows fully transparent colour
+to be simplified after conversion; hidden RGB is not guaranteed to survive.
+
+`node wasm/alpha-test.mjs` runs Chrome encoding then native XYB and independent
+libjxl/jxl-oxide decoding, including non-sRGB ICCs. This does not verify display
+compositing, canvas, real HDR displays, Firefox or Safari.
+
+Planar alpha: I420A/I422A/I444A and I420AP10/I422AP10/I444AP10,
+I420AP12/I422AP12/I444AP12. `planes[3]` has width×height samples and its own byte
+offset/stride. Alpha is full range even with limited-range YUV; its integer
+depth is the source format's 8/10/12 bits. No alpha ICC/CMS or luma/chroma
+range conversion is performed. `bitDepth: 'float32'` changes colour signalling
+without changing alpha depth. The combined 64 MiB span cap includes all four
+planes. The Rust session's original three-plane ABI is unchanged; alpha is
+borrowed through the synchronous extended encode call. `rgbViaPlanar` retains it.
+
+SDR YUVA still uses the four-lane fused colour kernel; PQ/HLG YUVA keeps the
+existing row/CMS colour path. Alpha uses libjxl's standard extra-channel copy
+and modular coding, at default extra-channel distance 0. No opacity scan or
+additional full-frame preflight is introduced.
+
+`node wasm/alpha-yuv.mjs` checks padded/offset odd-size planes, all three
+subsamplings/depths, PQ/HLG and float32 colour output, native/WASM exact XYB and
+codestream agreement, and independent alpha/colour decode.
+[WebCodecs §9.8](https://www.w3.org/TR/2026/WD-webcodecs-20261026/#pixel-format)
+confirms format names, plane order and sample layout; webcodecs-color uses the
+same descriptors. Tested Chrome 156 raw VideoFrame/copyTo accepted 8/10-bit
+alpha in all three layouts and preserved alpha bytes; AP12 enum values were
+rejected. Direct AP12 encoder input passed. WebCodecs association semantics
+are **unconfirmed** here; the caller must provide straight alpha values.

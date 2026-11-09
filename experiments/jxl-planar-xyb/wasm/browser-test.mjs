@@ -174,6 +174,15 @@ try {
     const base={...fixtures[0],planes:fixtures[0].planes.map(p=>({...p,data:unpack(p.data)}))};
     const invalid=[{...base,depth:10},{...base,transfer:'pq'},{...base,transfer:'hlg'},{...base,chromaSiting:'bottom'},{...base,matrix:'bt2020'}, {...base,planes:[]},{...base,width:0},{...base,planes:base.planes.map(p=>({...p,offset:p.data.length}))}];
     for(const i of invalid) for(const validation of ['clip','strict']) {let rejected=false;try{encoder.encodePlanarYuv(i,{validation});}catch{rejected=true;}if(!rejected)throw Error('invalid input accepted');}
+    for (const transfer of ['pq','hlg','smpte2084','arib-std-b67']) {
+      const f=fixtures.find(f=>f.format==='I420P10');
+      const input={...f,primaries:'bt2020',matrix:'bt2020-ncl',transfer,planes:f.planes.map(p=>({...p,data:unpack(p.data)}))};
+      const bytes=encoder.encodePlanarYuv(input);
+      if(bytes.colorResolved.policy!=='hdr-as-is')throw Error('HDR policy');
+      for(const changes of [{matrix:'bt709'},{primaries:'smpte432'},{format:'I420'}]) {
+        let rejected=false;try{encoder.encodePlanarYuv({...input,...changes});}catch{rejected=true;}if(!rejected)throw Error('HDR scope');
+      }
+    }
     let policyValidationCases=0;
     for(const rgb of [false,true])for(const transfer of [undefined,'srgb','iec61966-2-1','bt709','smpte170m'])for(const bt709Linearization of ['gamma2.4','srgb','inverse-oetf','unknown',null]) {
       const i=rgb?{width:1,height:1,transfer,data:new Float32Array([.5,.5,.5])}:{...base,transfer};

@@ -4,8 +4,12 @@
   "private": true,
   "description": "Patched libjxl v0.11.1 (planar XYB input, source-ICC policy) built for native tests and WebAssembly, plus the createEncoder JS API.",
   "type": "module",
+  "types": "./src/api.d.ts",
   "exports": {
-    ".": "./src/api.mjs",
+    ".": {
+      "types": "./src/api.d.ts",
+      "import": "./src/api.mjs"
+    },
     "./codec.mjs": "./build/wasm/codec.mjs"
   },
   "scripts": {

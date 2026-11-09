@@ -24,7 +24,8 @@ int main(int argc,char** argv) {
       auto status=JxlDecoderProcessInput(dec.get());
       if(status==JXL_DEC_BASIC_INFO) {
         check(JxlDecoderGetBasicInfo(dec.get(),&info));
-        if(uint64_t(info.xsize)*info.ysize>4194304 || (info.num_color_channels!=3 && info.num_color_channels!=1) || info.alpha_bits) throw std::runtime_error("shape");
+        if(argc==4 && std::strcmp(argv[3],"--rgba")==0)fmt.num_channels=4;
+        if(uint64_t(info.xsize)*info.ysize>4194304 || (info.num_color_channels!=3 && info.num_color_channels!=1)) throw std::runtime_error("shape");
       } else if(status==JXL_DEC_COLOR_ENCODING) {
         if(argc==4 && std::strcmp(argv[3],"--icc")==0) {
           size_t n=0;check(JxlDecoderGetICCProfileSize(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&n));
@@ -33,6 +34,7 @@ int main(int argc,char** argv) {
           if(!out)throw std::runtime_error("ICC output write");
           return 0;
         }
+        if(argc==4 && std::strcmp(argv[3],"--rgba")==0)std::fprintf(stderr,"alpha_bits=%u alpha_exponent=%u alpha_premultiplied=%d extra_channels=%u\n",info.alpha_bits,info.alpha_exponent_bits,info.alpha_premultiplied,info.num_extra_channels);
         JxlColorEncoding original{},pixels{};
         const bool enum_header=JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&original)==JXL_DEC_SUCCESS;
         const bool source_icc=argc==4 && std::strcmp(argv[3],"--source-icc")==0;
@@ -47,6 +49,7 @@ int main(int argc,char** argv) {
           if(std::strcmp(argv[3],"--linear-source")==0) {if(!enum_header)throw std::runtime_error("linear-source requires enum header");desired.transfer_function=JXL_TRANSFER_FUNCTION_LINEAR;}
           else if(std::strcmp(argv[3],"--linear709")==0) JxlColorEncodingSetToLinearSRGB(&desired,info.num_color_channels==1);
           else if(std::strcmp(argv[3],"--srgb")==0) JxlColorEncodingSetToSRGB(&desired,info.num_color_channels==1);
+          else if(std::strcmp(argv[3],"--rgba")==0) JxlColorEncodingSetToSRGB(&desired,info.num_color_channels==1);
           else throw std::runtime_error("unknown output encoding");
         }
         if(!source_icc && (argc==4 || enum_header))check(JxlDecoderSetPreferredColorProfile(dec.get(),&desired));

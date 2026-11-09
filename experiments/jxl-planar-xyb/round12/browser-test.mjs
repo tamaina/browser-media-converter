@@ -21,7 +21,7 @@ try {
   async function capture(data,icc,header){
    const ptr=[],alloc=a=>{const p=raw._malloc(a.byteLength);ptr.push(p);raw.HEAPU8.set(new Uint8Array(a.buffer,a.byteOffset,a.byteLength),p);return p;};
    try{
-    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1);raw._w_icc(alloc(icc),icc.length);raw._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[header]);
+    raw._w_options(1,0);raw._w_init(width,height,2,1,1,.01,3,8,0,13,0,1,255);raw._w_icc(alloc(icc),icc.length);raw._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[header]);
     if(data instanceof Float32Array?raw._w_rgb(alloc(data),data.length):raw._w_rgb_integer(alloc(data),data.length,data instanceof Uint16Array?16:8,data.length/(width*height)))throw Error(raw.UTF8ToString(raw._w_error()));
     return pack(raw.HEAPU8.slice(raw._w_xyb_data(),raw._w_xyb_data()+raw._w_xyb_count()*4));
    }finally{raw._w_free();for(const p of ptr)raw._free(p);}
@@ -63,10 +63,10 @@ try {
     const channels=kind.endsWith('a')?4:3,max=kind.startsWith('u16')?65535:255,a=max===255?new Uint8Array(width*height*channels):new Uint16Array(width*height*channels);
     for(let p=0;p<width*height;p++){const v=max===255?p%256:(p*193)%65536;for(let c=0;c<channels;c++)a[p*channels+c]=c===3?max:v;}
     const f=Float32Array.from({length:width*height*3},(_,i)=>a[Math.floor(i/3)*channels+i%3]/max);
-    const actual=e.encodeRgb({width,height,data:a,icc},{distance:.01,observe:true}),ref=e.encodeRgb({width,height,data:f,icc},{distance:.01,observe:true});if(pack(actual)!==pack(ref))throw Error('gray integer float '+kind);
+    const actual=e.encodeRgb({width,height,data:a,icc},{distance:.01,observe:true}),ref=e.encodeRgb({width,height,data:f,icc},{distance:.01,observe:true});const colour=channels===4?e.encodeRgb({width,height,data:a.filter((_,i)=>i%4!==3),icc},{distance:.01,observe:true}):actual;if(pack(colour)!==pack(ref))throw Error('gray integer float '+kind);
     const actualXYB=await capture(a,icc,'auto'),floatXYB=await capture(f,icc,'auto');if(actualXYB!==floatXYB)throw Error('gray integer float XYB '+kind);
     const hash=async data=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data)),v=>v.toString(16).padStart(2,'0')).join('');
-    row.integerPairs.push({kind,jxl:await hash(actual),xyb:await hash(Uint8Array.from(atob(actualXYB),c=>c.charCodeAt(0))),floatJxlAndXYBIdentical:true});apiChecks++;
+    row.integerPairs.push({kind,jxl:await hash(actual),xyb:await hash(Uint8Array.from(atob(actualXYB),c=>c.charCodeAt(0))),colourJxlAndXYBIdentical:true,alphaStored:channels===4});apiChecks++;
    }
    let rejected=false;try{e.encodeRgb({width,height,data:u8,icc});}catch(err){rejected=/ICC:.*R=G=B/.test(err.message);}if(!rejected)throw Error('gray chromatic admission');apiChecks++;
    const fallback=e.encodeRgb({width,height,data:u8,icc},{iccFallback:'srgb'});if(pack(fallback)!==pack(e.encodeRgb({width,height,data:u8})) || !fallback.warnings.some(s=>s.includes('ICC fallback')))throw Error('gray fallback');apiChecks++;

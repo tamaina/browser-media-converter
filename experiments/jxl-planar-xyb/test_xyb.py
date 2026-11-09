@@ -196,7 +196,7 @@ class XYBTests(unittest.TestCase):
     def test_fused_reference(self):
         os.environ["JXL_EXPERIMENT_CAPTURE_XYB"]="1"
         self.addCleanup(lambda: os.environ.pop("JXL_EXPERIMENT_CAPTURE_XYB",None))
-        count=0;max_decode=0.;max_lossy=0.;peak=0;by_profile={};max_xyb=0.;changed=0;fused_count=0;max_vs_row=0.
+        count=0;max_decode=0.;max_pq_linear=0.;max_lossy=0.;peak=0;by_profile={};max_xyb=0.;changed=0;fused_count=0;max_vs_row=0.
         with tempfile.TemporaryDirectory(dir=ROOT/"build") as tmp:
             base=Path(tmp)
             formats=[(base+("" if depth==8 else f"P{depth}"),["709-srgb","601-709","p3"]+([] if depth==8 else ["pq","hlg"])) for base in ["I420","I422","I444"] for depth in [8,10,12]]+[("NV12",["709-srgb","601-709","p3"])]
@@ -247,10 +247,20 @@ class XYBTests(unittest.TestCase):
                             delta=max(abs(a-b) for a,b in zip(stock,oxide))
                             by_profile[profile]=max(by_profile.get(profile,0),delta)
                             max_decode=max(max_decode,delta)
-                            if profile != "pq": self.assertLess(delta,1e-4)
+                            if profile == "pq":
+                                # oxide gamut-maps perceptual BT.709 -> BT.2020
+                                # before PQ encoding, unlike libjxl's float output.
+                                # Compare unmodified HDR linear BT.709 instead of
+                                # excluding PQ or allowing a large code-space error.
+                                subprocess.check_output([LIBJXL/"decode-float",base/"fused.jxl",base/"pq-stock.f32","--linear709"],env={**os.environ,"LD_LIBRARY_PATH":""})
+                                subprocess.check_output([ROOT/"build/oracle/debug/jxl-planar-xyb-oracle",base/"fused.jxl",base/"pq-oxide.f32","--hdr-linear709"])
+                                linear_delta=max(abs(a-b) for a,b in zip(read_floats(base/"pq-stock.f32"),read_floats(base/"pq-oxide.f32")))
+                                max_pq_linear=max(max_pq_linear,linear_delta)
+                                self.assertLess(linear_delta,1e-4)
+                            else: self.assertLess(delta,1e-4)
                             max_lossy=max(max_lossy,max(abs(a-b) for a,b in zip(stock,rgb)))
                             count+=1
-        print(json.dumps(dict(cases=count,xyb_max_absolute_error=max_xyb,fused_cases=fused_count,codestream_changed_cases=changed,max_stock_decode_difference_vs_row=max_vs_row,max_decoder_difference=max_decode,max_lossy_code_error=max_lossy,peak_test_rgb_scratch_bytes=peak,decoder_error_by_profile=by_profile)))
+        print(json.dumps(dict(cases=count,xyb_max_absolute_error=max_xyb,fused_cases=fused_count,codestream_changed_cases=changed,max_stock_decode_difference_vs_row=max_vs_row,max_decoder_difference=max_decode,max_pq_linear_decoder_difference=max_pq_linear,max_lossy_code_error=max_lossy,peak_test_rgb_scratch_bytes=peak,decoder_error_by_profile=by_profile)))
     def test_fused_matrix_and_transfer_edges(self):
         os.environ["JXL_EXPERIMENT_CAPTURE_XYB"]="1"
         self.addCleanup(lambda: os.environ.pop("JXL_EXPERIMENT_CAPTURE_XYB",None))

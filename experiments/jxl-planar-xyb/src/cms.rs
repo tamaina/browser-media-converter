@@ -405,7 +405,9 @@ fn linearize(tf: Tf, v: f32) -> f32 {
         }
     }
 }
-/// libjxl ApplyHlgOotf(forward) gamma for the intensity target; None if ~1.
+/// libjxl 0.11.1 cms/jxl_cms.cc ApplyHlgOotf(forward), including its
+/// 295..305-nit shortcut. This peak-dependent approximation differs from
+/// BT.2100's 1.2 + 0.42*log10(Lw/1000); retain decoder-compatible behaviour.
 fn hlg_ootf_gamma(intensity: f32) -> Option<f32> {
     if (295.0..=305.0).contains(&intensity) { return None; }
     Some(1.2f32 * 1.111f32.powf((intensity * 1e-3).log2()))
@@ -910,27 +912,37 @@ pub unsafe extern "C" fn planar_cms_destroy(ctx: *mut Context) {
 mod tests {
     use super::*;
     include!("cms_run_tests.rs");
-    fn assert_lut_matches_explicit_false(icc: &[u8], input: &[f32], output: &[f32]) {
+    const LUT_PROBES: [f32; 27] = [
+        1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.0, 0.0, 0.0,
+        0.1, 0.5, 0.9, -0.25, 0.5, 1.25,
+        0.25, 0.5, 0.75, -0.1, 1.2, 0.5,
+        1.0 / 255.0, 128.0 / 255.0, 254.0 / 255.0,
+        1.0 / 65535.0, 32768.0 / 65535.0, 65534.0 / 65535.0,
+    ];
+    fn lut_output_matching_explicit_float(icc: &[u8]) -> Vec<f32> {
         use moxcms::{ColorProfile, Layout, RenderingIntent, ToneReprCurve, TransformOptions};
+        let default = moxcms_lut(icc).expect("default LUT transform");
         let source = ColorProfile::new_from_slice(icc).unwrap();
         let mut linear709 = ColorProfile::new_srgb();
         for trc in [&mut linear709.red_trc, &mut linear709.green_trc, &mut linear709.blue_trc] {
             *trc = Some(ToneReprCurve::Lut(Vec::new()));
         }
         linear709.cicp = None;
-        let options = TransformOptions {
+        let explicit_float = source.create_transform_f32(Layout::Rgb, &linear709, Layout::Rgb, TransformOptions {
             rendering_intent: RenderingIntent::RelativeColorimetric,
             allow_extended_range_rgb_xyz: true,
             prefer_fixed_point: false,
             ..Default::default()
-        };
-        let t = source.create_transform_f32(Layout::Rgb, &linear709, Layout::Rgb, options).unwrap();
-        let mut reference = vec![0f32; input.len()];
-        t.transform(input, &mut reference).unwrap();
-        assert_eq!(output.len(), reference.len());
-        for (k, (actual, expected)) in output.iter().zip(&reference).enumerate() {
-            assert_eq!(actual.to_bits(), expected.to_bits(), "component {k}");
+        }).expect("explicit floating LUT transform");
+        let mut out = vec![0f32; LUT_PROBES.len()];
+        let mut reference = vec![0f32; LUT_PROBES.len()];
+        default.transform(&LUT_PROBES, &mut out).unwrap();
+        explicit_float.transform(&LUT_PROBES, &mut reference).unwrap();
+        assert!(out.iter().all(|v| v.is_finite()), "{out:?}");
+        for (i, (actual, expected)) in out.iter().zip(&reference).enumerate() {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "component {i}: {actual} vs {expected}");
         }
+        out
     }
     fn profile(tags: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
         let mut table = Vec::new();
@@ -959,11 +971,7 @@ mod tests {
         let Ok(icc) = std::fs::read(path) else { eprintln!("skip: {path} missing"); return };
         // Pass the original ICC through the production path: 0.9.2 must use
         // A2B0 for relative intent without a synthetic A2B1 alias.
-        let t = moxcms_lut(&icc).expect("unaliased A2B0 transform");
-        let input = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, -0.1, 1.2, 0.5];
-        let mut out = [0f32; 12];
-        t.transform(&input, &mut out).unwrap();
-        assert_lut_matches_explicit_false(&icc, &input, &out);
+        let out = lut_output_matching_explicit_float(&icc);
         assert!(out[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{out:?}");
     }
     /// Synthetic v4 RGB->XYZ lutAtoBType (linear curves, identity 2^3 CLUT, sRGB
@@ -1041,14 +1049,9 @@ mod tests {
     }
     #[test]
     fn lut_values_above_two_are_not_clipped() {
-        let icc = hdr_lut_profile(2.0);
-        let t = moxcms_lut(&icc).expect("synthetic HDR LUT");
-        let input = [1.0, 1.0, 1.0, 0.25, 0.25, 0.25];
-        let mut out = [0f32; 6];
-        t.transform(&input, &mut out).unwrap();
-        assert_lut_matches_explicit_false(&icc, &input, &out);
+        let out = lut_output_matching_explicit_float(&hdr_lut_profile(2.0));
         assert!(out[..3].iter().all(|v| (v - 4.0).abs() < 0.02), "white {out:?}");
-        assert!(out[3..].iter().all(|v| (v - 1.0).abs() < 0.02), "quarter {out:?}");
+        assert!(out[3..6].iter().all(|v| (v - 1.0).abs() < 0.02), "quarter {out:?}");
     }
     #[test]
     fn fast_math_matches_reference() {

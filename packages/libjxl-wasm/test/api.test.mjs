@@ -12,6 +12,65 @@ const encoder = await createEncoder({instantiateWasm(imports, receive) {
 const rgb = (extra = {}) => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
 const cicp = (transfer = 8) => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
 
+const planar = (format, depth = 8, transfer = 'bt709') => {
+  const bytes = depth === 8 ? 1 : 2;
+  const plane = value => {
+    const data = new Uint8Array(bytes);
+    new DataView(data.buffer).setUint8(0, value & 255);
+    if (bytes === 2) data[1] = value >> 8;
+    return {data, stride:bytes};
+  };
+  return {
+    width:1, height:1, format, alphaMode:'straight', transfer,
+    ...(transfer === 'bt709' ? {} : {primaries:'bt2020', matrix:'bt2020-ncl'}),
+    planes:[plane(1 << (depth - 2)), plane(1 << (depth - 1)), plane(1 << (depth - 1)), plane((1 << depth) - 1)]
+  };
+};
+
+for (const [format, depth, transfer] of [
+  ['I420A', 8, 'bt709'], ['I444A', 8, 'bt709'],
+  ['I444AP10', 10, 'pq'], ['I420AP12', 12, 'hlg']
+]) {
+  test(`${format} ${transfer} rejects sparse alpha planes`, () => {
+    for (const makeSparse of [
+      planes => { planes.length = 3; planes.length = 4; },
+      planes => { delete planes[3]; }
+    ]) {
+      const input = planar(format, depth, transfer);
+      makeSparse(input.planes);
+      assert.throws(() => encoder.encodePlanarYuv(input), {
+        name:'TypeError', message:'plane 3 must be an object'
+      });
+    }
+  });
+
+  test(`${format} ${transfer} still encodes complete straight-alpha input`, () => {
+    const bytes = encoder.encodePlanarYuv(planar(format, depth, transfer));
+    assert.ok(bytes.length > 0);
+    assert.equal(bytes.colorResolved.linearization, transfer === 'bt709' ? 'gamma2.4' : transfer);
+    assert.equal(bytes.colorResolved.intensityTarget, transfer === 'pq' ? 10000 : transfer === 'hlg' ? 1000 : 255);
+  });
+}
+
+test('every required plane rejects holes and non-object descriptors', () => {
+  for (const format of ['I444', 'I444A']) {
+    const count = format === 'I444A' ? 4 : 3;
+    for (let c = 0; c < count; c++) {
+      for (const missing of [true, false]) {
+        for (const value of [undefined, null, 0, 'plane']) {
+          const input = planar(format);
+          input.planes.length = count;
+          if (missing) delete input.planes[c];
+          else input.planes[c] = value;
+          assert.throws(() => encoder.encodePlanarYuv(input), {
+            name:'TypeError', message:`plane ${c} must be an object`
+          });
+        }
+      }
+    }
+  }
+});
+
 test('partial colorSpace preserves CICP P3/linear and source labels', () => {
   for (const options of [{colorSpace:{fullRange:true}}, {}]) {
     const bytes = encoder.encodeRgb(rgb({colorMetadata:cicp(), colorSpace:{fullRange:true}}), options);

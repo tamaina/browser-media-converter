@@ -100,6 +100,36 @@ unsafe extern "C" {
     fn planar_clock_ms() -> f64;
     fn bridge_instrumentation(enabled: i32);
 }
+// The colour session still owns three planes. Alpha is borrowed only until the
+// synchronous encode returns; metadata checks are O(1), sample checks fold into copy.
+unsafe fn encode_with_alpha(
+    c: *const Config, opaque: *mut c_void, fill: Option<Fill>, rgb: *const f32,
+    yuv: *const KernelYuv, out: *mut Encoded, error: *mut c_char, n: usize,
+    alpha: *const PlaneInput, depth: u32,
+) -> i32 {
+    if alpha.is_null() {
+        return unsafe { hdr_jxl_encode(c,opaque,fill,rgb,yuv,out,error,n) };
+    }
+    let validation=guard(|| {
+        let c=unsafe { &*c }; let a=unsafe { &*alpha };
+        need(matches!(depth,8|10|12|16|32),"alpha depth")?;
+        need(!a.data.is_null() && a.width==c.width as usize && a.height==c.height as usize,"alpha full-resolution plane required")?;
+        let row=a.width.checked_mul(depth.div_ceil(8) as usize).ok_or("alpha row overflow")?;
+        need(a.stride>=row,"alpha stride")?;
+        let span=(a.height-1).checked_mul(a.stride).and_then(|v|v.checked_add(row)).ok_or("alpha span overflow")?;
+        need(span<=67_108_864 && a.offset.checked_add(span).is_some_and(|end|end<=a.size),"alpha bounds/span cap")
+    },error,n);
+    if validation!=0 {return validation;}
+    unsafe extern "C" {
+        fn hdr_jxl_encode_alpha(c: *const Config, opaque: *mut c_void, fill: Option<Fill>,
+            rgb: *const f32, yuv: *const KernelYuv, out: *mut Encoded, error: *mut c_char,
+            n: usize, alpha: *const u8, stride: usize, depth: u32) -> i32;
+    }
+    unsafe {
+        let a=&*alpha;
+        hdr_jxl_encode_alpha(c,opaque,fill,rgb,yuv,out,error,n,a.data.add(a.offset),a.stride,depth)
+    }
+}
 struct Plane {
     bytes: Vec<u8>,
     offset: usize,
@@ -127,8 +157,6 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
 }
 fn check_config(c: &Config) -> Result<(), String> {
     need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
-    #[cfg(target_arch = "wasm32")]
-    need(matches!(c.primaries, 1 | 5 | 6 | 9 | 11) && matches!(c.transfer, 1 | 8 | 13 | 1001), "unsupported WASM colour (SDR only)")?;
     need(
         c.width > 0
             && c.height > 0
@@ -144,14 +172,12 @@ fn check_config(c: &Config) -> Result<(), String> {
         ),
         "unsupported primaries/transfer pair",
     )?;
-    let target = match c.transfer {
-        16 => 10000.0,
-        18 => 1000.0,
-        _ => 255.0,
-    };
+    need(!matches!(c.transfer, 16 | 18) || c.depth != 8, "8-bit HDR output is unsupported")?;
+    // ToneMapping::VisitFields uses F16: finite, positive, <= 65504.
+    // Smaller values would serialize as zero and fail decoder validation.
     need(
-        c.intensity == target,
-        "explicit intensity must be PQ=10000, HLG=1000, SDR=255 nits",
+        c.intensity.is_finite() && c.intensity >= 1.0 / 16777216.0 && c.intensity <= 65504.0,
+        "intensity target must be positive finite and fit the JXL F16 header (2^-24..65504 nits)",
     )
 }
 impl Session {
@@ -265,7 +291,7 @@ impl Session {
         }
         let session = Self {
             nominal_preflight: option != 2,
-            strict: option == 1 || !matches!(config.transfer, 1 | 8 | 13 | 1001),
+            strict: option == 1,
             config,
             depth: i.depth,
             storage: i.storage,
@@ -409,8 +435,8 @@ pub unsafe extern "C" fn planar_create(
 ) -> i32 {
     unsafe { planar_create_profile(input, out, 0, std::ptr::null_mut(), error, n) }
 }
-/// Option 0 clips SDR BT.709/sRGB; option 1 explicitly rejects out-of-range RGB.
-/// Option 2 is RGB-conversion-only: region clips SDR reconstructed pixels;
+/// Option 0 clips reconstructed RGB; option 1 explicitly rejects out-of-range RGB.
+/// Option 2 is RGB-conversion-only: region clips reconstructed pixels;
 /// planar_encode refuses this session. No unvalidated fused encode is possible.
 /// timings points to three doubles: metadata/layout/copy, total preflight,
 /// then the stored-sample-only subset of preflight.
@@ -489,8 +515,9 @@ pub unsafe extern "C" fn planar_region(
     unsafe { fill(session.cast(), x, y, w, h, out, count) }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn planar_encode(
+pub unsafe extern "C" fn planar_encode_alpha(
     session: *mut Session,
+    alpha: *const PlaneInput,
     out: *mut Encoded,
     error: *mut c_char,
     n: usize,
@@ -526,7 +553,7 @@ pub unsafe extern "C" fn planar_encode(
             siting: s.siting,
             primaries: s.config.primaries,
         };
-        hdr_jxl_encode(
+        encode_with_alpha(
             &(*session).config,
             session.cast(),
             Some(fill),
@@ -535,14 +562,17 @@ pub unsafe extern "C" fn planar_encode(
             out,
             error,
             n,
+            alpha, s.depth,
         )
     }
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rgb_encode(
+pub unsafe extern "C" fn rgb_encode_alpha(
     config: *const Config,
     rgb: *const f32,
     count: usize,
+    alpha: *const PlaneInput,
+    alpha_depth: u32,
     out: *mut Encoded,
     error: *mut c_char,
     n: usize,
@@ -574,7 +604,7 @@ pub unsafe extern "C" fn rgb_encode(
         return validation;
     }
     unsafe {
-        hdr_jxl_encode(
+        encode_with_alpha(
             config,
             std::ptr::null_mut(),
             None,
@@ -583,6 +613,7 @@ pub unsafe extern "C" fn rgb_encode(
             out,
             error,
             n,
+            alpha, alpha_depth,
         )
     }
 }
@@ -636,6 +667,50 @@ pub unsafe extern "C" fn planar_quantize_rgb_depth(rgb: *mut f32, count: usize, 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_set_bit_depth(session: *mut Session, depth: u32) -> i32 {
     if session.is_null() || !matches!(depth, 0 | 8 | 10 | 12) { return 1; }
+    if depth == 8 && matches!(unsafe { (*session).config.transfer }, 16 | 18) { return 1; }
     unsafe { (*session).config.depth = depth; }
     0
+}
+
+/// Synchronous packed RGB(A) input. Alpha is straight, source-depth, and bypasses CMS.
+/// Pointer/count validity is the same caller obligation as rgb_encode.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode_packed(
+    config: *const Config, data: *const u8, count: usize, depth: i32, channels: i32,
+    out: *mut Encoded, error: *mut c_char, n: usize,
+) -> i32 {
+    let status = guard(|| {
+        need(!config.is_null(), "null RGB config")?;
+        check_config(unsafe { &*config })
+    }, error, n);
+    if status != 0 { return status; }
+    unsafe extern "C" {
+        fn bridge_rgb_integer(config: *const Config, data: *const u8, count: usize,
+            depth: i32, channels: i32, out: *mut Encoded, error: *mut c_char, n: usize) -> i32;
+    }
+    unsafe { bridge_rgb_integer(config, data, count, depth, channels, out, error, n) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode_packed_icc(
+    config: *const Config, data: *const u8, count: usize, depth: i32, channels: i32,
+    icc: *const u8, icc_size: usize, out: *mut Encoded, error: *mut c_char, n: usize,
+) -> i32 {
+    unsafe extern "C" { fn bridge_icc(p: *const u8, n: usize); }
+    unsafe {
+        bridge_icc(icc,icc_size);
+        let status=rgb_encode_packed(config,data,count,depth,channels,out,error,n);
+        bridge_icc(std::ptr::null(),0);
+        status
+    }
+}
+
+// Preserve the existing no-alpha ABI and explicit three-colour-plane input struct.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn planar_encode(session: *mut Session,out: *mut Encoded,error: *mut c_char,n: usize) -> i32 {
+    unsafe {planar_encode_alpha(session,std::ptr::null(),out,error,n)}
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rgb_encode(config: *const Config,rgb: *const f32,count: usize,out: *mut Encoded,error: *mut c_char,n: usize) -> i32 {
+    unsafe {rgb_encode_alpha(config,rgb,count,std::ptr::null(),0,out,error,n)}
 }
