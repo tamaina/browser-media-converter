@@ -15,6 +15,7 @@
 //! no C CMS (skcms / LCMS2) is used; the Wasm build does not link one.
 #![allow(clippy::missing_safety_doc)]
 use std::{
+    cell::UnsafeCell,
     ffi::{c_char, c_void},
     sync::Arc,
 };
@@ -656,6 +657,9 @@ struct Session {
     op: Op,
     src: Vec<Vec<f32>>,
     dst: Vec<Vec<f32>>,
+    // libjxl gives each concurrent callback a distinct thread index. Only
+    // that thread mutates its scratch; disjoint input/output never needs it.
+    scratch: Vec<UnsafeCell<Vec<f32>>>,
 }
 
 impl Context {
@@ -767,6 +771,7 @@ unsafe extern "C" fn init(data: *mut c_void, threads: usize, pixels: usize, inpu
         op,
         src: (0..threads).map(|_| vec![0f32; pixels * channels]).collect(),
         dst: (0..threads).map(|_| vec![0f32; pixels * output_ref.num_channels.max(1)]).collect(),
+        scratch: (0..threads).map(|_| UnsafeCell::new(Vec::new())).collect(),
     };
     Box::into_raw(Box::new(session)) as *mut c_void
 }
@@ -778,14 +783,27 @@ unsafe extern "C" fn get_dst(data: *mut c_void, thread: usize) -> *mut f32 {
     let s = unsafe { &mut *(data as *mut Session) };
     s.dst[thread].as_mut_ptr()
 }
-unsafe extern "C" fn run(data: *mut c_void, _thread: usize, input: *const f32, output: *mut f32, n: usize) -> i32 {
+unsafe extern "C" fn run(data: *mut c_void, thread: usize, input: *const f32, output: *mut f32, n: usize) -> i32 {
     let s = unsafe { &*(data as *mut Session) };
     let op = &s.op;
     let channels = match op { Op::Matrix(_, true) | Op::Enum { gray: true, .. } => 1, _ => 3 };
-    // Input may alias our own src buffer; read it fully before writing output.
-    let src = unsafe { std::slice::from_raw_parts(input, n * channels) }.to_vec();
-    let out = unsafe { std::slice::from_raw_parts_mut(output, n * channels) };
-    convert(op, &src, out)
+    let len = n * channels;
+    let bytes = len * std::mem::size_of::<f32>();
+    let overlaps = (input as usize).abs_diff(output as usize) < bytes;
+    let input = unsafe { std::slice::from_raw_parts(input, len) };
+    let src = if overlaps {
+        // Includes exact in-place and partial overlap in either direction.
+        // Copy before creating the exclusive output slice. The separate
+        // scratch cannot alias buffers exposed by get_src/get_dst.
+        let scratch = unsafe { &mut *s.scratch[thread].get() };
+        scratch.resize(len, 0.0);
+        scratch.copy_from_slice(input);
+        &scratch[..]
+    } else {
+        input
+    };
+    let out = unsafe { std::slice::from_raw_parts_mut(output, len) };
+    convert(op, src, out)
 }
 fn convert(op: &Op, src: &[f32], out: &mut [f32]) -> i32 {
     match op {
@@ -893,6 +911,7 @@ pub unsafe extern "C" fn planar_cms_destroy(ctx: *mut Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("cms_run_tests.rs");
     const LUT_PROBES: [f32; 27] = [
         1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.0, 0.0, 0.0,
         0.1, 0.5, 0.9, -0.25, 0.5, 1.25,

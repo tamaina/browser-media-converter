@@ -16,7 +16,7 @@ export async function createEncoder(options = {}) {
       if (!c || typeof c.fullRange !== 'boolean') fail('CICP fullRange must be boolean');
       const names = {
         primaries:{1:'bt709',5:'bt470bg',6:'smpte170m',9:'bt2020',12:'smpte432'},
-        transfer:{1:'bt709',5:'bt470bg',6:'smpte170m',8:'linear',13:'iec61966-2-1',14:'bt2020-10',15:'bt2020-12',16:'pq',18:'hlg'},
+        transfer:{1:'bt709',5:'gamma28',6:'smpte170m',8:'linear',13:'iec61966-2-1',14:'bt2020-10',15:'bt2020-12',16:'pq',18:'hlg'},
         matrix:{0:'rgb',1:'bt709',5:'bt470bg',6:'smpte170m',9:'bt2020-ncl'}
       };
       for (const key of ['primaries','transfer','matrix']) {
@@ -25,17 +25,19 @@ export async function createEncoder(options = {}) {
       }
       mc.fullRange=c.fullRange;
     }
-    const cs = o.colorSpace ?? i.colorSpace ?? mc;
+    const cs = o.colorSpace ?? i.colorSpace ?? {};
     if (typeof cs !== 'object') fail('colorSpace must be a VideoColorSpace or plain object');
     const colorResolved = {source:{}}, warnings = [];
     const defaults = {matrix:'bt709',primaries:'bt709',transfer:rgb?'iec61966-2-1':'bt709',fullRange:false,chromaSiting:'left'};
     for (const [key, fallback] of Object.entries(defaults)) {
-      const value = o[key] ?? i[key] ?? cs[key];
+      const value = o[key] ?? i[key] ?? cs[key] ?? mc[key];
       colorResolved[key] = value ?? fallback;
-      colorResolved.source[key] = o[key] != null || i[key] != null ? 'option' : cs[key] != null ? (cs===mc?'colorMetadata':'colorSpace') : 'default';
+      colorResolved.source[key] = o[key] != null || i[key] != null ? 'option' : cs[key] != null ? 'colorSpace' : mc[key] != null ? 'colorMetadata' : 'default';
       if (value == null) warnings.push(`Defaulted ${key} to ${fallback}`);
     }
     const tf = colorResolved.transfer;
+    // Match media-container's CICP name; the encoder has no gamma-2.8 path.
+    if (tf === 'gamma28') fail('unsupported SDR transfer: gamma28 (CICP 5)');
     const hdr = ['pq','hlg','smpte2084','arib-std-b67'].includes(tf);
     if (hdr && (rgb || colorResolved.primaries !== 'bt2020' || colorResolved.matrix !== 'bt2020-ncl')) fail('HDR requires planar BT.2020 primaries and BT.2020 NCL matrix; encodeRgb HDR is unsupported');
     if (hdr && (['bt2020','p3'].includes(o.iccHeader) || o.iccFallback === 'srgb')) fail('HDR requires enum color encoding; SDR ICC header/fallback is unsupported');
@@ -56,14 +58,21 @@ export async function createEncoder(options = {}) {
     colorResolved.policy = hdr ? 'hdr-as-is' : 'sdr-as-is';
     return {colorResolved,warnings};
   }
-  function config(i, o) {
+  function config(i, o, rgb) {
     if (!integer(i.width, 1, 8192) || !integer(i.height, 1, 8192) || i.width*i.height > 4194304) fail('dimension limit: 4 megapixels');
     for (const [k,v] of Object.entries(i)) {
-      if (['bitDepth','depth'].includes(k) && ![8,10,12].includes(v)) fail('source depth must be 8/10/12');
-      if (k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
+      if (!rgb && ['bitDepth','depth'].includes(k) && ![8,10,12].includes(v)) fail('source depth must be 8/10/12');
+      if (!rgb && k === 'storage' && !['u8','u16le-lsb'].includes(v)) fail('storage must be u8/u16le-lsb');
       if (['alpha','origin','color'].includes(k)) fail(`unsupported ${k}`);
     }
     if (i.alphaMode !== undefined && i.alphaMode !== 'straight') fail("alphaMode must be 'straight' (premultiplied alpha is unsupported)");
+    if (rgb) {
+      // Integer RGB is full-range U8/U16, never low-bit-depth codes in U16.
+      const depth = i.data instanceof Uint16Array ? 16 : i.data instanceof Float32Array ? 32 : 8;
+      const storage = depth === 32 ? 'float32' : depth === 16 ? 'u16le-lsb' : 'u8';
+      if ((i.depth !== undefined && i.depth !== depth) || (i.bitDepth !== undefined && i.bitDepth !== depth) ||
+          (i.storage !== undefined && i.storage !== storage)) fail(`RGB depth/storage mismatch: expected depth ${depth}, storage ${storage}`);
+    }
     const distance = o.distance ?? 1, effort = o.effort ?? 3;
     if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
     return {distance,effort};
@@ -85,7 +94,7 @@ export async function createEncoder(options = {}) {
       icc=profile instanceof ArrayBuffer?new Uint8Array(profile):profile;
       if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
     }
-    const {distance,effort}=config(i,o);
+    const {distance,effort}=config(i,o,rgb);
     const {colorResolved,warnings}=resolveColor(icc?{width:i.width,height:i.height}:i,icc?{intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits}:o,rgb);
     if(rgb) {
       Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
@@ -118,7 +127,7 @@ export async function createEncoder(options = {}) {
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
     const match=/^(I420|I422|I444)(A)?(?:P(10|12))?$/.exec(i.format??'');
-    const sourceDepth=rgb?(i.depth??i.bitDepth??8):(match?Number(match[3]??8):8);
+    const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization) && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
     const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
@@ -154,9 +163,14 @@ export async function createEncoder(options = {}) {
         }
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
-        if (!Array.isArray(i.planes) || i.planes.length !== (format===3?2:match?.[2]?4:3)) fail('plane count');
+        const expected=format===3?2:match?.[2]?4:3;
+        if (!Array.isArray(i.planes) || i.planes.length !== expected) fail('plane count');
         let total=0;
-        const layouts=i.planes.map((p,c)=> {
+        const layouts=[];
+        // Validate every required index before allocating, including sparse holes.
+        for (let c=0;c<expected;c++) {
+          const p=i.planes[c];
+          if (p === null || typeof p !== 'object') fail(`plane ${c} must be an object`);
           const w=c!==0&&c!==3?Math.ceil(i.width/(format===2?1:2)):i.width;
           const h=c!==0&&c!==3?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
           const row=w*(format===3&&c?2:1)*(sourceDepth===8?1:2);
@@ -164,9 +178,12 @@ export async function createEncoder(options = {}) {
           const span=(h-1)*p.stride+row;
           if ((p.offset??0)+span>p.data.length) fail('plane bounds');
           total+=span;if(total>67108864) fail('plane span cap: 64 MiB');
-          return {p,span};
-        });
-        layouts.forEach(({p,span},c)=>m._w_plane(c,alloc(p.data.subarray(p.offset??0,(p.offset??0)+span)),span,0,p.stride));
+          layouts.push({p,span});
+        }
+        for (let c=0;c<expected;c++) {
+          const {p,span}=layouts[c];
+          m._w_plane(c,alloc(p.data.subarray(p.offset??0,(p.offset??0)+span)),span,0,p.stride);
+        }
         status=m._w_encode(+(o.rgbViaPlanar??false));
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()));
