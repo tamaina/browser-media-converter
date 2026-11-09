@@ -66,10 +66,22 @@ struct Source {
   std::vector<uint8_t> captured_pixels;
   std::map<const void*,std::vector<float>> buffers;
 };
-#ifdef __EMSCRIPTEN__
-extern float wasm_distance;
-extern int wasm_effort;
-#endif
+// Shared synchronous ABI for Wasm and native proof callers. Native environment
+// overrides remain active until a caller explicitly supplies options.
+static thread_local bool explicit_options=false;
+static thread_local float encode_distance=1;
+static thread_local int encode_effort=3;
+extern "C" void bridge_encode_options(float distance,int effort) {
+  explicit_options=true;encode_distance=distance;encode_effort=effort;
+}
+static float frame_distance() {
+  const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_DISTANCE");
+  return value?std::strtof(value,nullptr):encode_distance;
+}
+static int frame_effort() {
+  const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_EFFORT");
+  return value?std::atoi(value):encode_effort;
+}
 static void format(void* opaque,JxlPixelFormat* f) { *f={static_cast<Source*>(opaque)->gray?1u:3u,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0}; }
 static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* stride) noexcept {
   auto& s=*static_cast<Source*>(opaque);
@@ -134,6 +146,13 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
       throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
+    const float distance=frame_distance();
+    const bool lossless=distance==0;
+    const int effort=frame_effort();
+    // v0.11.1 effort >=8 (kKitten and slower) needs a linear RGB image;
+    // the experimental fused/row XYB paths cannot provide that image.
+    const bool standard_input=lossless || effort>=8;
+    if(lossless && header_mode>=2) throw std::runtime_error("lossless requires the original profile");
     Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
@@ -156,7 +175,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
-    info.uses_original_profile=JXL_FALSE; info.intensity_target=c->intensity;
+    info.uses_original_profile=lossless?JXL_TRUE:JXL_FALSE; info.intensity_target=c->intensity;
     if(alpha.data) {
       info.num_extra_channels=1;
       info.alpha_bits=alpha.depth;
@@ -199,13 +218,10 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
-    #ifdef __EMSCRIPTEN__
-    check(JxlEncoderSetFrameDistance(settings,wasm_distance));
-    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
-#else
-    check(JxlEncoderSetFrameDistance(settings,std::getenv("JXL_EXPERIMENT_DISTANCE")?std::strtof(std::getenv("JXL_EXPERIMENT_DISTANCE"),nullptr):1.0f));
-    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
-#endif
+    check(JxlEncoderSetFrameDistance(settings,distance));
+    check(JxlEncoderSetFrameLossless(settings,lossless?JXL_TRUE:JXL_FALSE));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,effort));
+    if(lossless) check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE,1));
     bool observed_reference=rgb && (alpha.data || source.gray || diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));
     struct RGB { const float* p;size_t width; } reference{rgb,c->width};
     if(observed_reference) {
@@ -252,11 +268,11 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
         };
       }
       input.experimental_borrowed=true;
-      input.experimental_fill_row=(observed_reference || !yuv)?nullptr:row;
+      input.experimental_fill_row=(standard_input || observed_reference || !yuv)?nullptr:row;
       input.experimental_observe_xyb=instrumentation?observe:nullptr;
       input.experimental_conversion_ms=&result->conversion_ms;
       input.experimental_simd_lanes=&result->simd_lanes;
-      input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
+      input.experimental_yuv=standard_input || std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
       if(input.experimental_yuv && (c->transfer==13 || c->transfer==1 || c->transfer==1001 || c->transfer==8))
         input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));

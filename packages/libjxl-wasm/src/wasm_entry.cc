@@ -8,8 +8,6 @@ static PlanarInput input{};
 static PlanarPlane alpha{};
 static PlanarEncoded output{};
 static char error[512]{};
-float wasm_distance=1;
-int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
@@ -34,7 +32,7 @@ void w_init(int w,int h,int format,int matrix,int full,float distance,int effort
   bridge_icc(nullptr,0);bridge_icc_header_mode(0);
   input.width=w;input.height=h;input.format=format;input.matrix=matrix;
   input.depth=depth;input.storage=depth==8?0:1;output_depth=out_depth;input.primaries=primaries;input.transfer=transfer;input.intensity=intensity;
-  input.full_range=full;input.siting=siting;wasm_distance=distance;wasm_effort=effort;
+  input.full_range=full;input.siting=siting;bridge_encode_options(distance,effort);
 }
 void w_plane(int c,const uint8_t* p,size_t size,size_t offset,size_t stride) {
   if(c==3){alpha={p,size,offset,stride,input.width,input.height};return;}

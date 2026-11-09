@@ -90,6 +90,54 @@ const encoder = await createEncoder();
 served as-is. The experiment's test servers map `/libjxl-wasm/` to this directory.
 API and verification details: `experiments/jxl-planar-xyb/WASM.md`.
 
+## Encoding options
+
+Shared by `encodeRgb(input, options)` and `encodePlanarYuv(input, options)`:
+
+| Option | Values | Default |
+| --- | --- | --- |
+| `distance` | finite number [0,25], Butteraugli distance; 0 means lossless | 1 |
+| `lossless` | boolean; true conflicts with positive distance | false |
+| `effort` | integer 1..10 (libjxl v0.11.1 non-expert range) | 3 |
+| `bitDepth` | `'preserve'`, `'float32'`, 8, 10, 12 | planar: preserve; RGB: float32 (lossless U8: 8) |
+
+```js
+encoder.encodeRgb({width, height, data}, {lossless: true, effort: 10});
+encoder.encodePlanarYuv(input, {distance: 0, bitDepth: 'float32'});
+```
+
+Lossless uses original-profile modular coding (`JxlEncoderSetFrameLossless`),
+bypassing the lossy XYB conversion. `lossless: true` and `distance: 0` select the
+same mode; zero wins even with `lossless: false`. A positive explicit distance
+conflicts with `lossless: true`. Without either selector the default stays
+lossy XYB, distance 1, effort 3. Effort accepts integers 1..10, verified in
+v0.11.1 `lib/jxl/encode.cc`; expert-only effort 11 is not exposed.
+Effort 8..10 uses standard RGB callbacks because the fused/row XYB input
+paths cannot supply the linear RGB image required by those effort tiers.
+
+U8/U8Clamped RGB defaults to 8-bit output in lossless mode and round-trips
+bit-exactly. U16 and Float32 RGB keep the existing float32 output default;
+integer RGB is normalized to float32 first (U16 recovery rounds decoded values
+back to 16-bit). Float32 round-trip tests allow absolute error 1e-7 for decoder
+float output. Explicit integer output `bitDepth` quantizes reconstructed RGB
+at that depth; it cannot preserve arbitrary float samples. Planar lossless
+preserves reconstructed RGB at the selected output depth, **not the source
+YUV planes**: chroma interpolation, range conversion, clipping (or strict
+validation), and optional `rgbViaPlanar` rounding happen before coding.
+Planar defaults to its source integer depth; use `bitDepth: 'float32'` to
+retain the reconstructed floats. Invisible RGB is retained in lossless mode.
+`iccHeader: 'bt2020' | 'p3'` is rejected with lossless because the original
+profile must describe the stored samples. `auto`/`exact` remain available.
+
+The shared native/Wasm C ABI `bridge_encode_options(distance, effort)` selects
+these options (distance zero means lossless). Native callers that do not invoke
+it retain `JXL_EXPERIMENT_DISTANCE` and the default effort 3;
+`JXL_EXPERIMENT_EFFORT` is also supported. Explicit ABI options take precedence.
+
+API tests run sequentially with `npm run test:api`. Round-trip cases require
+`build/decode-float` (built by `scripts/build-native.sh`); test temporary files
+use `TMPDIR`, falling back to `build/tmp`. No new dependencies are needed.
+
 ## HDR base
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts

@@ -73,9 +73,14 @@ export async function createEncoder(options = {}) {
       if ((i.depth !== undefined && i.depth !== depth) || (i.bitDepth !== undefined && i.bitDepth !== depth) ||
           (i.storage !== undefined && i.storage !== storage)) fail(`RGB depth/storage mismatch: expected depth ${depth}, storage ${storage}`);
     }
-    const distance = o.distance ?? 1, effort = o.effort ?? 3;
-    if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
-    return {distance,effort};
+    if (o.lossless !== undefined && typeof o.lossless !== 'boolean') fail('lossless must be boolean');
+    if (o.distance !== undefined && (!Number.isFinite(o.distance) || o.distance < 0 || o.distance > 25)) fail('distance must be in [0,25]');
+    if (o.lossless === true && o.distance > 0) fail('lossless: true conflicts with positive distance');
+    const lossless = o.lossless === true || o.distance === 0;
+    const distance = lossless ? 0 : o.distance ?? 1, effort = o.effort ?? 3;
+    if (!integer(effort,1,10)) fail('effort must be an integer in 1..10');
+    if (lossless && ['bt2020','p3'].includes(o.iccHeader)) fail('lossless requires the original profile; iccHeader override is unsupported');
+    return {distance,effort,lossless};
   }
   function run(i,o,rgb) {
     const start=performance.now();
@@ -94,7 +99,7 @@ export async function createEncoder(options = {}) {
       icc=profile instanceof ArrayBuffer?new Uint8Array(profile):profile;
       if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
     }
-    const {distance,effort}=config(i,o,rgb);
+    const {distance,effort,lossless}=config(i,o,rgb);
     const {colorResolved,warnings}=resolveColor(icc?{width:i.width,height:i.height}:i,icc?{intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits}:o,rgb);
     if(rgb) {
       Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
@@ -130,7 +135,9 @@ export async function createEncoder(options = {}) {
     const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization) && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
-    const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
+    // Lossless U8 retains its native precision; other RGB keeps float32.
+    const defaultDepth=rgb?(lossless && sourceDepth===8?8:'float32'):'preserve';
+    const bitDepth=o.bitDepth===undefined?defaultDepth:o.bitDepth;
     if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
     const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb?0:sourceDepth):bitDepth;
     if (['pq','hlg'].includes(i.linearization) && outputDepth === 8) fail('HDR output must be 10/12-bit or float32; 8-bit HDR is unsupported');

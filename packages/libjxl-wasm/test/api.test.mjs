@@ -1,6 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, writeFile, mkdtemp, rm} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const exec = promisify(execFile);
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {createEncoder} from '../src/api.mjs';
 
 // Exercise the real API and codec without a browser or a network server.
@@ -150,4 +155,98 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
     }
   }
   assert.ok(encoder.encodeRgb(rgb({depth:32, bitDepth:32, storage:'float32'})).length > 0);
+});
+
+// Independent stock decoder process; build/decode-float must be built first.
+const decoder = fileURLToPath(new URL('../build/decode-float', import.meta.url));
+async function decode(bytes, check, mode) {
+  const dir = await mkdtemp(join(process.env.TMPDIR ?? fileURLToPath(new URL('../build/tmp', import.meta.url)), 'lossless-'));
+  try {
+    const input = join(dir, 'input.jxl'), output = join(dir, 'output.f32');
+    await writeFile(input, bytes);
+    const {stdout} = await exec(decoder, [input, output, ...(mode ? [mode] : [])], {encoding:'utf8'});
+    const info = JSON.parse(stdout);
+    const raw = await readFile(output);
+    const values = Array.from({length:raw.length / 4}, (_, i) => raw.readFloatLE(i * 4));
+    check(values, info);
+  } finally { await rm(dir, {recursive:true, force:true}); }
+}
+
+for (const [name, encode] of [
+  ['RGB', options => encoder.encodeRgb(rgb(), options)],
+  ['planar', options => encoder.encodePlanarYuv(planar('I444A'), options)]
+]) {
+  test(`${name} validates distance, lossless conflicts and effort`, () => {
+    for (const distance of [-1, 25.1, NaN, Infinity, '0', null])
+      assert.throws(() => encode({distance}), /distance must be in \[0,25\]/);
+    for (const effort of [0, 11, 1.5, NaN, Infinity, '3'])
+      assert.throws(() => encode({effort}), /effort must be an integer in 1..10/);
+    assert.throws(() => encode({lossless:true, distance:1}), /conflicts/);
+    assert.throws(() => encode({lossless:1}), /lossless must be boolean/);
+    assert.throws(() => encode({lossless:true, iccHeader:'p3'}), /original profile/);
+    for (const effort of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      for (const options of [{effort}, {effort, lossless:true}]) assert.ok(encode(options).length > 0, JSON.stringify(options));
+    }
+    assert.ok(encode({distance:25}).length > 0);
+  });
+}
+
+test('U8 RGB lossless is bit-exact, including zero distance alias and all byte values', async () => {
+  const data = Uint8Array.from({length:16 * 16 * 3}, (_, i) => (i * 73 + (i >> 8)) & 255);
+  for (const options of [{lossless:true}, {distance:0}, {lossless:true, distance:0}, {lossless:false, distance:0}]) {
+    await decode(encoder.encodeRgb({width:16, height:16, data}, options), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      assert.equal(info.bits, 8);
+      assert.deepEqual(values.map(v => Math.round(v * 255)), [...data]);
+    });
+  }
+  // A subsequent lossy call must reset the instance's lossless state.
+  await decode(encoder.encodeRgb(rgb()), (_, info) => assert.equal(info.usesOriginalProfile, 0));
+});
+
+test('Float32 RGB lossless preserves normalized samples', async () => {
+  const data = new Float32Array([0, 1, 0.5, 0.2, 0.7, 0.1234567, 1e-6, 0.9, 0.3]);
+  await decode(encoder.encodeRgb({width:3, height:1, data}, {lossless:true}), (values, info) => {
+    assert.equal(info.usesOriginalProfile, 1);
+    values.forEach((v, i) => assert.ok(Math.abs(v - data[i]) <= 1e-7, `${i}: ${v} vs ${data[i]}`));
+  });
+});
+
+test('planar lossless preserves reconstructed RGB at float32 or output integer depth', async () => {
+  const y = new Uint8Array([16, 40, 100, 200, 235]);
+  const input = {width:5, height:1, format:'I444', planes:[y, new Uint8Array(5).fill(128), new Uint8Array(5).fill(128)].map(data => ({data, stride:5}))};
+  for (const options of [{lossless:true}, {distance:0, bitDepth:'float32'}]) {
+    await decode(encoder.encodePlanarYuv(input, options), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      values.forEach((v, i) => {
+        const source = Math.fround((y[Math.floor(i / 3)] - 16) / 219);
+        const expected = options.bitDepth === 'float32' ? source : Math.round(source * 255) / 255;
+        assert.ok(Math.abs(v - expected) <= 1e-7, `${i}: ${v} vs ${expected}`);
+      });
+    });
+  }
+});
+
+test('U16 RGB lossless recovers integer samples through the float32 default', async () => {
+  const data = new Uint16Array([0, 65535, 32768, 1234, 32767, 65534]);
+  await decode(encoder.encodeRgb({width:2, height:1, data}, {lossless:true}), values => {
+    assert.deepEqual(values.map(v => Math.round(v * 65535)), [...data]);
+  });
+});
+
+test('lossless RGBA retains invisible colour and exact alpha', async () => {
+  const data = new Uint8Array([17, 128, 255, 0, 255, 3, 91, 128]);
+  await decode(encoder.encodeRgb({width:2, height:1, data}, {lossless:true}), values => {
+    assert.deepEqual(values.map(v => Math.round(v * 255)), [...data]);
+  }, '--rgba');
+});
+
+test('planar HDR lossless retains PQ/HLG original-profile signalling', async () => {
+  for (const transfer of ['pq', 'hlg']) {
+    await decode(encoder.encodePlanarYuv(planar('I444AP10', 10, transfer), {lossless:true}), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      assert.equal(info.transfer, transfer === 'pq' ? 16 : 18);
+      assert.ok(values.every(Number.isFinite));
+    });
+  }
 });

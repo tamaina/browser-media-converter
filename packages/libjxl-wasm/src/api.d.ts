@@ -24,8 +24,13 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Butteraugli distance [0,25], default 1. Zero implies lossless. */
   distance?: number;
-  effort?: 1 | 2 | 3;
+  /** Original-profile modular coding; conflicts with positive distance. */
+  lossless?: boolean;
+  /** libjxl v0.11.1 non-expert effort, default 3. */
+  effort?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  /** Planar defaults to preserve; RGB to float32, except lossless U8 defaults to 8. */
   bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12;
   validation?: 'clip' | 'strict';
   observe?: boolean;

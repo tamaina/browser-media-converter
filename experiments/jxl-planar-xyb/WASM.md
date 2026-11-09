@@ -1,7 +1,7 @@
 # Planar YUV / RGB → XYB JPEG XL in WebAssembly — design and spec
 
 Patched libjxl v0.11.1 (794a5dcf), Highway four-lane SIMD, Emscripten `-O2 -msimd128`.
-The API is synchronous, supports planar HDR, and produces lossy XYB/VarDCT. Builds,
+The API is synchronous, supports planar HDR, and produces lossy XYB/VarDCT or original-profile modular lossless. Builds,
 fixtures, logs and codestreams stay in the ignored `build/`. The libjxl build,
 bridge, Wasm exports and JS API are in `packages/libjxl-wasm` (its own ignored
 `build/`); this directory holds the Rust session and the suites. The full
@@ -30,8 +30,10 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 
 | Option | Values (default) | Notes |
 | --- | --- | --- |
-| `distance` / `effort` | (0,25] (1) / 1..3 (3) | |
-| `bitDepth` | planar: `'preserve'`\|8\|10\|12\|`'float32'` (`'preserve'` = source depth); RGB: 8/10/12/`'float32'` (`'float32'`) | Only the header signalling. Normalization always happens at source depth. |
+| `distance` | [0,25] (1) | libjxl Butteraugli distance; 0 selects lossless. |
+| `lossless` | boolean (`false`) | `true` conflicts with positive distance. |
+| `effort` | integer 1..10 (3) | v0.11.1 non-expert range. |
+| `bitDepth` | planar: `'preserve'`\|8\|10\|12\|`'float32'` (`'preserve'` = source depth); RGB: 8/10/12/`'float32'` (`'float32'`) | Output depth; lossless U8 RGB defaults to 8. Normalization always happens at source depth. |
 | `matrix`, `primaries`, `transfer`, `fullRange`, `chromaSiting`, `colorSpace` | see colour rules | Encode options override input fields. |
 | `bt709Linearization` | `'gamma2.4'`\|`'srgb'`\|`'inverse-oetf'` | BT-like transfers only. |
 | `validation` | `'clip'`\|`'strict'` (`'clip'`) | `strict` rejects out-of-range nonlinear RGB. |
@@ -39,6 +41,36 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 | `iccFallback` | `'error'`\|`'srgb'` (`'error'`) | `srgb`: unusable profile → untagged sRGB with a warning. |
 | `iccHeader` | `'auto'`\|`'exact'`\|`'bt2020'`\|`'p3'` (`'auto'`) | See ICC. |
 | `rgbViaPlanar`, `observe` | boolean | Test/benchmark: RGB baseline from planar input; XYB capture. |
+
+### Distance, effort and lossless
+
+Lossless uses original-profile modular coding (`JxlEncoderSetFrameLossless`),
+bypassing the lossy XYB conversion. `lossless: true` and `distance: 0` select the
+same mode; zero wins even with `lossless: false`. A positive explicit distance
+conflicts with `lossless: true`. Without either selector the default stays
+lossy XYB, distance 1, effort 3. Effort accepts integers 1..10, verified in
+v0.11.1 `lib/jxl/encode.cc`; expert-only effort 11 is not exposed.
+Effort 8..10 uses standard RGB callbacks because the fused/row XYB input
+paths cannot supply the linear RGB image required by those effort tiers.
+
+U8/U8Clamped RGB defaults to 8-bit output in lossless mode and round-trips
+bit-exactly. U16 and Float32 RGB keep the existing float32 output default;
+integer RGB is normalized to float32 first (U16 recovery rounds decoded values
+back to 16-bit). Float32 round-trip tests allow absolute error 1e-7 for decoder
+float output. Explicit integer output `bitDepth` quantizes reconstructed RGB
+at that depth; it cannot preserve arbitrary float samples. Planar lossless
+preserves reconstructed RGB at the selected output depth, **not the source
+YUV planes**: chroma interpolation, range conversion, clipping (or strict
+validation), and optional `rgbViaPlanar` rounding happen before coding.
+Planar defaults to its source integer depth; use `bitDepth: 'float32'` to
+retain the reconstructed floats. Invisible RGB is retained in lossless mode.
+`iccHeader: 'bt2020' | 'p3'` is rejected with lossless because the original
+profile must describe the stored samples. `auto`/`exact` remain available.
+
+The shared native/Wasm C ABI `bridge_encode_options(distance, effort)` selects
+these options (distance zero means lossless). Native callers that do not invoke
+it retain `JXL_EXPERIMENT_DISTANCE` and the default effort 3;
+`JXL_EXPERIMENT_EFFORT` is also supported. Explicit ABI options take precedence.
 
 **Input rules.**
 - U16 input must be LE and low-bit aligned. P010/MSB-aligned storage and samples above the declared depth are rejected.
