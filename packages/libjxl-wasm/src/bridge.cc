@@ -126,6 +126,25 @@ static void release(void* opaque,const void* p) noexcept {
   auto& s=*static_cast<Source*>(opaque); auto it=s.buffers.find(p);
   if(it!=s.buffers.end()) { s.live-=it->second.size()*sizeof(float); s.buffers.erase(it); }
 }
+// Animation state is instance-local in WASM. Every add is fully processed before
+// returning, so caller-owned packed samples can be released between frames.
+struct Animation {
+  std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms{nullptr,planar_cms_destroy};
+  std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc{nullptr,JxlEncoderDestroy};
+  bool active=false, last=false;
+  uint32_t loops=0, duration=0;
+};
+static thread_local Animation animation;
+extern "C" void bridge_animation_begin(uint32_t loops) {
+  animation.enc.reset();animation.cms.reset();
+  animation.active=true;animation.loops=loops;animation.duration=0;animation.last=false;
+}
+extern "C" void bridge_animation_frame(uint32_t duration,int last) {
+  animation.duration=duration;animation.last=last!=0;
+}
+extern "C" void bridge_animation_end() {
+  animation.enc.reset();animation.cms.reset();animation.active=false;
+}
 static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const JxlExperimentalYuv* yuv,
                                Encoded* result,char* error,size_t error_size,const Alpha& alpha) {
   if(!c || !result || (!fill && !rgb)) return 1;
@@ -137,22 +156,27 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
+    const bool continuing=animation.active && animation.enc;
     char cms_error[256]="";
     std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
-        planar_cms_create(source_profile,source_profile?source_profile_size:0,header_mode,cms_error,sizeof cms_error),
+        continuing?nullptr:planar_cms_create(source_profile,source_profile?source_profile_size:0,header_mode,cms_error,sizeof cms_error),
         planar_cms_destroy);
-    if(!cms) throw std::runtime_error(cms_error[0]?cms_error:"CMS allocation failed");
+    if(!continuing && !cms) throw std::runtime_error(cms_error[0]?cms_error:"CMS allocation failed");
+    PlanarCms* active_cms=continuing?animation.cms.get():cms.get();
     if(source_profile) {
-      source_profile_path=planar_cms_path(cms.get());
-      source.gray=planar_cms_gray(cms.get())!=0;
+      source_profile_path=planar_cms_path(active_cms);
+      source.gray=planar_cms_gray(active_cms)!=0;
       if(source.gray && rgb)for(size_t i=0;i<size_t(c->width)*c->height;i++)
         if(rgb[i*3]!=rgb[i*3+1] || rgb[i*3]!=rgb[i*3+2])throw std::runtime_error("ICC: Gray profile requires R=G=B");
     }
     source.capture_width=c->width;source.capture_height=c->height;
-    std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
+    if(animation.active && !continuing) animation.cms=std::move(cms);
+    std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(
+        continuing?animation.enc.release():JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
-    const JxlCmsInterface interface=planar_cms_interface(cms.get());
-    JxlEncoderSetCms(enc.get(),interface);
+    const JxlCmsInterface interface=planar_cms_interface(active_cms);
+    if(!continuing) JxlEncoderSetCms(enc.get(),interface);
+    if(!continuing) {
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
@@ -162,6 +186,11 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       info.alpha_bits=alpha.depth;
       info.alpha_exponent_bits=alpha.depth==32?8:0;
       info.alpha_premultiplied=JXL_FALSE;
+    }
+    if(animation.active) {
+      info.have_animation=JXL_TRUE;
+      info.animation.tps_numerator=1000;info.animation.tps_denominator=1;
+      info.animation.num_loops=animation.loops;info.animation.have_timecodes=JXL_FALSE;
     }
     check(JxlEncoderSetBasicInfo(enc.get(),&info));
     if(alpha.data) {
@@ -195,8 +224,9 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       } else if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
         throw std::runtime_error("ICC: libjxl CMS rejected the profile");
       // Exact mode (1) always embeds; auto embeds unless the CMS described it.
-      source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
+      source_profile_header=header_mode>=2?0:!planar_cms_enum_header(active_cms);
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
+    } // global header is set only once per animation
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
     #ifdef __EMSCRIPTEN__
@@ -216,7 +246,35 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
         return 0;
       };
     }
-    if(rgb && !observed_reference) {
+    if(animation.active) {
+      // Full-canvas replacement frames. Use stock packed-image submission,
+      // including straight alpha, rather than retaining borrowed row callbacks.
+      JxlFrameHeader header;JxlEncoderInitFrameHeader(&header);
+      header.duration=animation.duration;
+      header.layer_info.blend_info.blendmode=JXL_BLEND_REPLACE;
+      check(JxlEncoderSetFrameHeader(settings,&header));
+      const size_t pixels=size_t(c->width)*c->height;
+      std::vector<float> color(pixels*3);
+      if(rgb)std::copy_n(rgb,pixels*3,color.data());
+      else if(fill(opaque,0,0,c->width,c->height,color.data(),color.size()))
+        throw std::runtime_error("RGB samples must be finite nominal-range");
+      const size_t channels=(source.gray?1:3)+(alpha.data?1:0);
+      std::vector<float> packed(pixels*channels);
+      for(size_t i=0;i<pixels;i++) {
+        for(size_t k=0;k<(source.gray?1u:3u);k++)packed[i*channels+k]=color[i*3+k];
+        if(alpha.data) {
+          const auto* p=alpha.data+(i/c->width)*alpha.stride+(i%c->width)*alpha.pixel_stride;
+          float v;
+          if(alpha.depth==32)std::memcpy(&v,p,4);
+          else v=float(double(alpha.depth==8?p[0]:unsigned(p[0])+(unsigned(p[1])<<8))/double((1u<<alpha.depth)-1));
+          if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("alpha must be finite nominal-range");
+          packed[i*channels+channels-1]=v;
+        }
+      }
+      JxlPixelFormat f{uint32_t(channels),JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};
+      check(JxlEncoderAddImageFrame(settings,&f,packed.data(),packed.size()*sizeof(float)));
+      if(animation.last) {JxlEncoderCloseFrames(enc.get());JxlEncoderCloseInput(enc.get());}
+    } else if(rgb && !observed_reference) {
       JxlPixelFormat f{3,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};
       check(JxlEncoderAddImageFrame(settings,&f,rgb,size_t(c->width)*c->height*3*sizeof(float)));
       JxlEncoderCloseInput(enc.get());
@@ -281,6 +339,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       if(!result->xyb_data) { std::free(result->data);*result={};throw std::runtime_error("capture allocation"); }
       std::copy(source.captured.begin(),source.captured.end(),result->xyb_data);
     }
+    if(animation.active)animation.enc=std::move(enc);
     return 0;
   } catch(const std::exception& e) {
     if(error && error_size) std::snprintf(error,error_size,"%s",e.what());

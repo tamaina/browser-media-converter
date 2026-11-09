@@ -33,6 +33,20 @@ published packages depends on this directory.
 | `round12/` | Gray ICC, `iccHeader` targets, integer/Float32 parity, PNG→AVIF metadata |
 | `real10/` | Optional genuine 10-bit Netflix fixtures (fetched locally, never committed) |
 
+## JPEG XL animation (feature 5)
+
+The WASM API also exposes `encodeAnimation({width, height, frames, loops?}, options?)`.
+Pass already-decoded, composited full-canvas packed SDR RGB/RGBA frames as
+`{data, durationMs}`. GIF/APNG decoding, disposal and source-frame blending are
+out of scope. Frames share dimensions, source depth/channel count and colour
+settings; durations round to milliseconds, and `loops: 0` means infinite plays.
+See [WASM.md](WASM.md#jpeg-xl-animation-feature-5) for limits and header semantics.
+
+After native headers and WASM are built, run
+`pnpm --dir packages/libjxl-wasm test:api` from the repository root. Its stock
+libjxl decoder verifies frame counts, durations, loops and RGBA replacement,
+and checks that subsequent still-image encoding continues to work.
+
 ## Native path
 
 The native C ABI (`planar_session.h`) accepts U8 I420/I422/I444/NV12 and LE U16 10/12-bit

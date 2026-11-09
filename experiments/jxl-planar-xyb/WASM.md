@@ -336,3 +336,40 @@ same descriptors. Tested Chrome 156 raw VideoFrame/copyTo accepted 8/10-bit
 alpha in all three layouts and preserved alpha bytes; AP12 enum values were
 rejected. Direct AP12 encoder input passed. WebCodecs association semantics
 are **unconfirmed** here; the caller must provide straight alpha values.
+
+
+## JPEG XL animation (feature 5)
+
+`encoder.encodeAnimation({width, height, format?, frames, loops?}, options?)`
+encodes already-decoded, composited full-canvas SDR packed RGB/RGBA frames.
+Each frame is `{data, durationMs}`; all use one source depth/channel count and
+shared colour/ICC settings. U8/U8Clamped, U16 and Float32 use the RGB path's
+normalization and straight alpha rules. GIF/APNG decoding, disposal processing,
+source frame blending and source loop-count translation are out of scope.
+
+The bridge creates one encoder and CMS per sequence. `JxlBasicInfo.have_animation`
+is true, ticks per second are `1000/1`, and `num_loops` is `loops` (default 0,
+infinite; positive values specify total plays). Each `JxlFrameHeader.duration`
+is the positive input duration rounded to milliseconds, clamped to a minimum
+of 1; values rounding above uint32 are rejected. Frames use full-canvas replace.
+Only the final submission calls `JxlEncoderCloseFrames` / `JxlEncoderCloseInput`
+before output processing. The owned output chunks are concatenated into one
+codestream. Failure releases encoder/CMS state; ICC fallback restarts the whole
+sequence with a common sRGB header.
+
+Bounds: 1–256 frames, at most 8192 pixels per axis / 4,194,304 pixels per frame,
+64 MiB total source bytes. Planar/HDR animation and `observe` are unsupported.
+`encoder.stats` adds `frameCount`, `loops`, `durationsMs`; `encodeMs` and `totalMs`
+cover the sequence, while other detailed counters describe the final frame.
+
+`pnpm --dir packages/libjxl-wasm test:api` (from the repository root) checks the
+real WASM output using a standalone stock-system-libjxl decoder, including
+frame pixels, counts, durations, finite/infinite loops, single-frame animation,
+invalid sequences, ICC fallback and subsequent `encodeRgb` use. This requires
+g++ and native generated headers in addition to the built WASM. Playback in
+browser image renderers is not covered by this Node decoder test.
+
+Build scripts honor `CARGO_TARGET_DIR` and preserve `EM_CACHE` across emsdk
+initialization. Set `TMPDIR`, `ZIG_LOCAL_CACHE_DIR`, `ZIG_GLOBAL_CACHE_DIR` and
+all other compiler caches to writable directories in this worktree before
+building; inherited paths from another worktree must not be used.

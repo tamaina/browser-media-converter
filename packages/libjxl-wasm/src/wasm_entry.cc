@@ -13,6 +13,9 @@ int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" void bridge_animation_begin(uint32_t);
+extern "C" void bridge_animation_frame(uint32_t,int);
+extern "C" void bridge_animation_end();
 extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
 extern "C" int bridge_icc_path();
@@ -20,6 +23,9 @@ extern "C" int bridge_icc_header();
 extern "C" void bridge_icc_header_mode(int);
 extern "C" int bridge_rgb_integer(const PlanarRgbConfig*,const void*,size_t,int,int,PlanarEncoded*,char*,size_t);
 extern "C" {
+void w_animation_begin(uint32_t loops) {bridge_animation_begin(loops);}
+void w_animation_frame(uint32_t duration,int last) {bridge_animation_frame(duration,last);}
+void w_animation_end() {bridge_animation_end();}
 void w_icc_header_mode(int mode) {bridge_icc_header_mode(mode);}
 void w_icc(const uint8_t* p,size_t n) {bridge_icc(p,n);}
 int w_icc_path() {return bridge_icc_path();}

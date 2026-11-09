@@ -1,6 +1,37 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {openSync, closeSync, writeFileSync, readFileSync, mkdtempSync, rmSync, mkdirSync} from 'node:fs';
+import {join} from 'node:path';
+
+const inspector = fileURLToPath(new URL('../build/inspect-animation', import.meta.url));
+execFileSync(process.env.CXX || '/usr/bin/g++', [
+  '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
+  '-I', fileURLToPath(new URL('../build/libjxl/lib/include', import.meta.url)),
+  '-I', fileURLToPath(new URL('../build/native/lib/include', import.meta.url)),
+  fileURLToPath(new URL('../tools/inspect_animation.cc', import.meta.url)),
+  '/usr/lib/x86_64-linux-gnu/libjxl.so.0.11',
+  '-Wl,--disable-new-dtags,-rpath,/usr/lib/x86_64-linux-gnu', '-o', inspector
+], {stdio:'inherit'});
+const inspect = bytes => {
+  // File-backed subprocess I/O also works in sandboxes that disallow pipes.
+  const root = fileURLToPath(new URL('../build/tmp/', import.meta.url));
+  mkdirSync(root, {recursive:true});
+  const dir = mkdtempSync(join(root, 'animation-api-'));
+  const descriptors = [];
+  try {
+    writeFileSync(join(dir, 'input.jxl'), bytes);
+    const input = openSync(join(dir, 'input.jxl'), 'r'); descriptors.push(input);
+    const output = openSync(join(dir, 'decoded.json'), 'w'); descriptors.push(output);
+    execFileSync(inspector, {stdio:[input, output, 'inherit']});
+    return JSON.parse(readFileSync(join(dir, 'decoded.json'), 'utf8'));
+  } finally {
+    for (const fd of descriptors) closeSync(fd);
+    rmSync(dir, {recursive:true, force:true});
+  }
+};
 import {createEncoder} from '../src/api.mjs';
 
 // Exercise the real API and codec without a browser or a network server.
@@ -150,4 +181,87 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
     }
   }
   assert.ok(encoder.encodeRgb(rgb({depth:32, bitDepth:32, storage:'float32'})).length > 0);
+});
+
+
+for (const [name, Type, max] of [
+  ['U8', Uint8Array, 255], ['U8Clamped', Uint8ClampedArray, 255],
+  ['U16', Uint16Array, 65535], ['Float32', Float32Array, 1]
+]) {
+  test(`animation ${name}: independent decode preserves frames, timing, loops and straight alpha`, () => {
+    const colors = [[1,0,0,1], [0,1,0,0.5], [0,0,1,0]];
+    const bytes = encoder.encodeAnimation({width:2, height:2, format:'RGBA', loops:3,
+      frames:colors.map((c, n) => ({data:Type.from(Array(4).fill(c).flat(), x => Type === Float32Array ? x : Math.round(x*max)), durationMs:[12.4, 27.6, 0.1][n]}))
+    }, {bitDepth:8});
+    const decoded = inspect(bytes);
+    assert.equal(decoded.haveAnimation, true);
+    assert.equal(decoded.tpsNumerator, 1000);
+    assert.equal(decoded.tpsDenominator, 1);
+    assert.equal(decoded.loops, 3);
+    assert.deepEqual(decoded.frames.map(f => f.duration), [12,28,1]);
+    assert.deepEqual(decoded.frames.map(f => f.last), [false,false,true]);
+    for (const [n, frame] of decoded.frames.entries()) {
+      for (let pixel=0; pixel<4; pixel++) {
+        assert.ok(Math.abs(frame.pixels[pixel*4+3] - colors[n][3]) <= (Type === Float32Array ? 1e-6 : 1/max + 1e-6));
+        if (n < 2) for (let channel=0; channel<3; channel++) {
+          assert.ok(Math.abs(frame.pixels[pixel*4+channel] - colors[n][channel]) < 0.08);
+        }
+      }
+    }
+    assert.equal(encoder.stats.frameCount, 3);
+    assert.deepEqual(encoder.stats.durationsMs, [12,28,1]);
+  });
+}
+
+test('animation supports default infinite loops, RGB and a single displayed frame', () => {
+  for (const count of [1,2]) {
+    const decoded = inspect(encoder.encodeAnimation({width:1, height:1,
+      frames:Array.from({length:count}, () => ({data:rgb().data, durationMs:33}))}));
+    assert.equal(decoded.haveAnimation, true);
+    assert.equal(decoded.loops, 0);
+    assert.deepEqual(decoded.frames.map(f => f.duration), Array(count).fill(33));
+    assert.equal(decoded.frames.at(-1).last, true);
+  }
+  const still = inspect(encoder.encodeRgb(rgb()));
+  assert.equal(still.haveAnimation, false);
+  assert.equal(still.frames.length, 1);
+});
+
+test('animation rejects invalid sequences and releases state after a failed frame', () => {
+  const frame = {data:rgb().data, durationMs:20};
+  const input = {width:1, height:1, frames:[frame]};
+  for (const frames of [[], new Array(1), Array(257).fill(frame), [null],
+    [frame, {...frame, data:new Uint8Array(3)}], [frame, {...frame, data:new Float32Array(4)}],
+    [{...frame, disposal:1}], [{...frame, data:new Float32Array(2)}]]) {
+    assert.throws(() => encoder.encodeAnimation({...input, frames}), TypeError);
+  }
+  for (const durationMs of [0,-1,NaN,Infinity,2**32]) {
+    assert.throws(() => encoder.encodeAnimation({...input, frames:[{...frame, durationMs}]}), /durationMs/);
+  }
+  for (const loops of [-1,1.5,2**32]) assert.throws(() => encoder.encodeAnimation({...input, loops}), /loops/);
+  assert.throws(() => encoder.encodeAnimation(input, {observe:true}), /observation/);
+  assert.throws(() => encoder.encodeAnimation({...input, frames:[frame, {...frame, data:new Float32Array([NaN,0,0])}]}));
+  assert.equal(inspect(encoder.encodeAnimation(input)).frames.length, 1);
+  assert.equal(inspect(encoder.encodeRgb(rgb())).haveAnimation, false);
+});
+
+test('animation ICC fallback restarts the complete sequence', () => {
+  const bytes = encoder.encodeAnimation({width:1, height:1, icc:new Uint8Array(132), loops:2,
+    frames:[{data:rgb().data, durationMs:10}, {data:rgb().data, durationMs:20}]
+  }, {iccFallback:'srgb'});
+  assert.ok(bytes.warnings.some(w => w.startsWith('ICC fallback')));
+  const decoded = inspect(bytes);
+  assert.equal(decoded.loops, 2);
+  assert.deepEqual(decoded.frames.map(f => f.duration), [10,20]);
+});
+
+
+test('animation enforces combined source cap and accepts uint32 timing/loop boundaries', () => {
+  const data = new Float32Array(256*256*3);
+  assert.throws(() => encoder.encodeAnimation({width:256, height:256,
+    frames:Array(86).fill({data, durationMs:1})}), /64 MiB/);
+  const decoded = inspect(encoder.encodeAnimation({width:1, height:1, loops:0xffffffff,
+    frames:[{data:rgb().data, durationMs:0xffffffff}]}));
+  assert.equal(decoded.loops, 0xffffffff);
+  assert.equal(decoded.frames[0].duration, 0xffffffff);
 });

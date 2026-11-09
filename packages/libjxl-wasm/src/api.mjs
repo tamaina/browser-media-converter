@@ -193,7 +193,64 @@ export async function createEncoder(options = {}) {
       return bytes;
     } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+  // Thin ingestion boundary for already-decoded, composited GIF/APNG frames.
+  function encodeAnimation(input, o = {}) {
+    if (!input || typeof input !== 'object') fail('animation input must be an object');
+    const {frames, loops = 0, ...common} = input;
+    if (!Array.isArray(frames) || !integer(frames.length, 1, 256)) fail('animation requires 1..256 frames');
+    if (!integer(loops, 0, 0xffffffff)) fail('loops must be a uint32 (0 means infinite)');
+    let total = 0, sourceDepth, channels;
+    const durations = [];
+    for (let n = 0; n < frames.length; n++) {
+      const frame = frames[n];
+      if (!frame || typeof frame !== 'object') fail(`frame ${n} must be an object`);
+      if (Object.keys(frame).some(key => !['data','durationMs'].includes(key))) fail('frames accept only data/durationMs; supply composited full-canvas frames');
+      const {data, durationMs} = frame;
+      if (!(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array || data instanceof Float32Array)) fail('animation requires packed RGB/RGBA typed arrays');
+      config({...common, data}, o, true);
+      const count = data.length / (common.width * common.height);
+      const depth = data instanceof Float32Array ? 32 : data instanceof Uint16Array ? 16 : 8;
+      if (![3,4].includes(count)) fail('animation requires packed RGB or RGBA');
+      if (common.format != null && common.format !== (count === 4 ? 'RGBA' : 'RGB')) fail('RGB format/channel mismatch');
+      if (n && (depth !== sourceDepth || count !== channels)) fail('animation frames must share source depth and channel count');
+      sourceDepth = depth; channels = count;
+      total += data.byteLength;
+      if (total > 67108864) fail('animation source cap: 64 MiB');
+      if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0 || Math.round(durationMs) > 0xffffffff) fail('durationMs must be positive finite and round to uint32 milliseconds');
+      durations.push(Math.max(1, Math.round(durationMs)));
+    }
+    if (o.observe) fail('animation XYB observation is unsupported');
+    const start = performance.now();
+    const chunks = [];
+    let size = 0, encodeMs = 0, resultStats;
+    m._w_animation_begin(loops);
+    try {
+      for (let n = 0; n < frames.length; n++) {
+        m._w_animation_frame(durations[n], +(n === frames.length - 1));
+        const chunk = run({...common, data:frames[n].data}, o, true);
+        chunks.push(chunk); size += chunk.length; encodeMs += stats.encodeMs;
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      resultStats = {...stats, encodeMs, totalMs:performance.now()-start, frameCount:frames.length, loops, durationsMs:durations};
+      Object.assign(bytes, {colorResolved:stats.colorResolved, warnings:stats.warnings});
+      return bytes;
+    } catch (error) {
+      // A fallback must restart the whole sequence with one common colour header.
+      if (o.iccFallback !== 'srgb' || !error.message.startsWith('ICC:')) throw error;
+      m._w_animation_end();
+      const clean = object => {const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object; return rest;};
+      const bytes = encodeAnimation({...clean(common), frames, loops}, {...clean(o), iccFallback:'error'});
+      bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
+      resultStats = stats;
+      return bytes;
+    } finally {
+      m._w_animation_end();
+      if (resultStats) stats = resultStats;
+    }
+  }
+  return {encodeAnimation,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
     try{return run(i,o,true);}catch(error){
       if(o.iccFallback!=='srgb' || !error.message.startsWith('ICC:'))throw error;
       const clean=object=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};

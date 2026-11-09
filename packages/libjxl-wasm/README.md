@@ -141,3 +141,34 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+
+## JPEG XL animation (feature 5)
+
+`encodeAnimation` accepts already-decoded, composited full-canvas SDR RGB/RGBA
+frames. GIF/APNG decoding is out of scope; callers resolve disposal, blending,
+frame rectangles and source loop conventions before passing frames.
+
+```js
+const animation = encoder.encodeAnimation({
+  width, height, format: 'RGBA', loops: 0,
+  frames: [
+    {data: firstRgba, durationMs: 100},
+    {data: secondRgba, durationMs: 150},
+  ],
+}, {distance: 1, effort: 3, bitDepth: 8});
+```
+
+All frames share dimensions, channel count, source depth and colour settings.
+U8/U8Clamped, full-range U16 and Float32 inputs follow `encodeRgb` semantics,
+including straight alpha and ICC fallback. Frames replace the entire canvas.
+`loops` is the JPEG XL loop count (0 = infinite, positive = total plays), not
+necessarily the loop field of a source GIF/APNG. Durations must be positive and
+finite; they round to milliseconds with a minimum of 1 and maximum of uint32.
+Limits: 1–256 frames, 4 megapixels per frame, 64 MiB combined packed source bytes.
+Planar/HDR animation and animation XYB observation are unsupported.
+
+Run `pnpm test:api` here after building native headers and WASM. The Node suite
+compiles `tools/inspect_animation.cc` with g++ and decodes via the independent
+system `/usr/lib/x86_64-linux-gnu/libjxl.so.0.11`; it checks frame counts, timing,
+loop metadata, replacement RGBA pixels, error recovery and still-image reuse.

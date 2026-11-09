@@ -49,7 +49,16 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+/** Already-decoded, composited full-canvas frames; shared colour settings. */
+export interface AnimationInput extends Omit<RgbInput, 'data'> {
+  /** Total plays; 0 (default) means infinite. */
+  loops?: number;
+  /** 1..256 frames, at most 64 MiB total packed source bytes. Same source depth and channel count. */
+  frames: {data: RgbInput['data']; /** Positive finite; rounded to ms, minimum 1 ms, maximum uint32. */ durationMs: number}[];
+}
 export interface Encoder {
+  /** Packed SDR RGB(A) animation. No GIF/APNG decoding, disposal or blending. */
+  encodeAnimation(input: AnimationInput, options?: EncodeOptions): Encoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
