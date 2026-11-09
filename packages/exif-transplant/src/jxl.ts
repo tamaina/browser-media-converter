@@ -1,18 +1,11 @@
 import { concat, readAscii, readU32, startsWith, u32 } from '@browser-mc/binary';
 import { box, readBox, type IsobmffBox } from '@browser-mc/media-container';
+import { decompress } from 'brotli/decompress.js';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 
 const SIGNATURE = new Uint8Array([0, 0, 0, 12, 74, 88, 76, 32, 13, 10, 135, 10]);
 const rawCodestream = (data: Uint8Array) => data[0] === 0xff && data[1] === 0x0a;
-
-// Keep Node's synchronous Brotli API out of the browser execution path.
-let decompress: ((data: Uint8Array) => Uint8Array) | undefined;
-const runtime = globalThis as typeof globalThis & { process?: { versions?: { node?: string } } };
-if (runtime.process?.versions?.node) {
-  const moduleName = 'node:zlib';
-  decompress = (await import(/* @vite-ignore */ moduleName)).brotliDecompressSync;
-}
 
 export function isJxl(data: Uint8Array): boolean {
   return rawCodestream(data) || startsWith(data, SIGNATURE);
@@ -39,19 +32,58 @@ function isExifBox(data: Uint8Array, entry: IsobmffBox): boolean {
     && readAscii(data, entry.start + entry.headerSize, 4) === 'Exif');
 }
 
+function parseExif(payload: Uint8Array): ExifPayload {
+  if (payload.length < 4) throw new Error('Truncated JPEG XL Exif TIFF offset');
+  const offset = 4 + readU32(payload, 0);
+  if (offset >= payload.length) throw new Error('Invalid JPEG XL Exif TIFF offset');
+  return { bytes: normalizeJpegExif(payload.subarray(offset)), sourceMime: 'image/jxl' };
+}
+
+function decompressBrob(payload: Uint8Array): Uint8Array {
+  try {
+    const result = decompress(payload.subarray(4));
+    // Pure-JS decode may return a short buffer for garbage; keep the public error stable.
+    if (!(result instanceof Uint8Array) || result.length < 4) throw new Error('Brotli decoder returned truncated EXIF payload');
+    return result;
+  } catch (cause) {
+    throw new Error('Invalid JPEG XL brob EXIF Brotli data', { cause });
+  }
+}
+
+/** Synchronously reads plain or Brotli-wrapped Exif using the pure JS decoder. */
 export function readJxlExif(data: Uint8Array): ExifPayload | null {
+  if (rawCodestream(data)) return null;
+  for (const entry of jxlBoxes(data)) {
+    if (!isExifBox(data, entry)) continue;
+    const payload = data.subarray(entry.start + entry.headerSize, entry.end);
+    return parseExif(entry.type === 'brob' ? decompressBrob(payload) : payload);
+  }
+  return null;
+}
+
+/** Reads plain or Brotli-wrapped Exif, preferring platform Brotli when available. */
+export async function readJxlExifAsync(data: Uint8Array): Promise<ExifPayload | null> {
   if (rawCodestream(data)) return null;
   for (const entry of jxlBoxes(data)) {
     if (!isExifBox(data, entry)) continue;
     let payload = data.subarray(entry.start + entry.headerSize, entry.end);
     if (entry.type === 'brob') {
-      if (!decompress) throw new Error('Reading JPEG XL brob EXIF requires Node Brotli support; encode with compressBoxes: false or read in Node');
-      payload = decompress(payload.subarray(4));
+      let decompressor: DecompressionStream | undefined;
+      try {
+        // Older TypeScript DOM declarations do not yet include Brotli.
+        decompressor = new DecompressionStream('brotli' as CompressionFormat);
+      } catch {
+        // Chromium and older runtimes lack Brotli DecompressionStream support.
+      }
+      if (!decompressor) return parseExif(decompressBrob(payload));
+      try {
+        const stream = new Blob([new Uint8Array(payload.subarray(4))]).stream().pipeThrough(decompressor);
+        payload = new Uint8Array(await new Response(stream).arrayBuffer());
+      } catch (cause) {
+        throw new Error('Invalid JPEG XL brob EXIF Brotli data', { cause });
+      }
     }
-    if (payload.length < 4) throw new Error('Truncated JPEG XL Exif TIFF offset');
-    const offset = 4 + readU32(payload, 0);
-    if (offset >= payload.length) throw new Error('Invalid JPEG XL Exif TIFF offset');
-    return { bytes: normalizeJpegExif(payload.subarray(offset)), sourceMime: 'image/jxl' };
+    return parseExif(payload);
   }
   return null;
 }

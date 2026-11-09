@@ -1,14 +1,14 @@
 import { readAscii, readU16 } from '@browser-mc/binary';
 import { readAvifExif, rewriteAvifExif } from './avif.js';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
-import { isJxl, readJxlExif, rewriteJxlExif } from './jxl.js';
+import { isJxl, readJxlExif, readJxlExifAsync, rewriteJxlExif } from './jxl.js';
 import { JPEG_SOI, readJpegExif, rewriteJpegExif } from './jpeg.js';
 import { stripGpsFromExif } from './tiff.js';
 import type { ExifPayload, ImageMime } from './types.js';
 import { readWebpExif, rewriteWebpExif } from './webp.js';
 
 export type { ExifPayload, ImageMime } from './types.js';
-export { readJxlExif, rewriteJxlExif } from './jxl.js';
+export { readJxlExif, readJxlExifAsync, rewriteJxlExif } from './jxl.js';
 export { prepareJxlEncodeExif, hasGpsInExif, stripGpsFromExif } from './tiff.js';
 
 export function detectImageMime(data: Uint8Array): ImageMime {
@@ -26,7 +26,13 @@ export function readExif(data: Uint8Array, mime = detectImageMime(data)): ExifPa
   return readAvifExif(data);
 }
 
+/** Reads all supported formats, including JPEG XL brob EXIF in Node and browsers. */
+export async function readExifAsync(data: Uint8Array, mime = detectImageMime(data)): Promise<ExifPayload | null> {
+  return mime === 'image/jxl' ? readJxlExifAsync(data) : readExif(data, mime);
+}
+
 export const readExifPayload = readExif;
+export const readExifPayloadAsync = readExifAsync;
 
 export function removeExif(data: Uint8Array, mime = detectImageMime(data)): Uint8Array {
   if (mime === 'image/jxl') return rewriteJxlExif(data, null);
@@ -41,6 +47,12 @@ export function removeGpsExif(data: Uint8Array, mime = detectImageMime(data)): U
   return writeExif(data, stripGpsFromExif(exif.bytes), mime);
 }
 
+/** GPS-only removal, including compressed JPEG XL Exif. Writes uncompressed Exif. */
+export async function removeGpsExifAsync(data: Uint8Array, mime = detectImageMime(data)): Promise<Uint8Array> {
+  const exif = await readExifAsync(data, mime);
+  return exif ? writeExif(data, stripGpsFromExif(exif.bytes), mime) : data.slice();
+}
+
 export function writeExif(data: Uint8Array, exif: Uint8Array | ExifPayload, mime = detectImageMime(data)): Uint8Array {
   const bytes = exif instanceof Uint8Array ? exif : exif.bytes;
   if (mime === 'image/jxl') return rewriteJxlExif(data, bytes);
@@ -51,6 +63,12 @@ export function writeExif(data: Uint8Array, exif: Uint8Array | ExifPayload, mime
 
 export function transplantExif(source: Uint8Array, target: Uint8Array): Uint8Array {
   const exif = readExif(source);
+  return exif ? writeExif(target, exif) : removeExif(target);
+}
+
+/** Transplants Exif from any supported source, including JPEG XL brob. */
+export async function transplantExifAsync(source: Uint8Array, target: Uint8Array): Promise<Uint8Array> {
+  const exif = await readExifAsync(source);
   return exif ? writeExif(target, exif) : removeExif(target);
 }
 

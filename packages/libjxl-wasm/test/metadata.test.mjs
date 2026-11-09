@@ -6,7 +6,7 @@ import {brotliDecompressSync} from 'node:zlib';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createEncoder} from '../src/api.mjs';
-import {readExif, writeExif, removeExif, transplantExif, prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
+import {readExif, readExifAsync, writeExif, removeExif, transplantExif, prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 if (!process.env.TMPDIR) throw Error('Set TMPDIR to the repository build/tmp before tests');
@@ -76,7 +76,7 @@ for (const [name,input,encode] of [
       assert.ok(metadata.every(b=>b.compressed===compressBoxes));
       assert.deepEqual(metadata[0].payload,Uint8Array.from([0,0,0,0,...source.subarray(prefix?6:0)]));
       assert.deepEqual(metadata[1].payload,xmp);
-      assert.deepEqual(prepareJxlEncodeExif(readExif(bytes).bytes).tiff, source.subarray(prefix?6:0));
+      assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(bytes)).bytes).tiff, source.subarray(prefix?6:0));
       assert.deepEqual(source,saved);
       assert.deepEqual(await inspect(bytes),{width:2,height:3,orientation});
       assert.deepEqual(await inspect(bytes,true),orientation>=5
@@ -130,7 +130,7 @@ test('shared JPEG EXIF payload encodes; post-encode EXIF edits preserve codestre
   assert.ok(payload);
   const prepared = prepareJxlEncodeExif(payload.bytes);
   const encoded = encoder.encodeRgb(rgb, {exif:payload.bytes, xmp});
-  assert.deepEqual(prepareJxlEncodeExif(readExif(encoded).bytes).tiff, prepared.tiff);
+  assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(encoded)).bytes).tiff, prepared.tiff);
   assert.equal((await inspect(encoded)).orientation, prepared.orientation);
   const oriented = encoder.encodeRgb(rgb, {exif:exif(6), xmp});
   for (const edited of [writeExif(oriented, exif(3)), removeExif(oriented), transplantExif(jpeg, oriented)]) {

@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { brotliCompressSync } from 'node:zlib';
+import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
+import sharp from 'sharp';
 import { concat, u32 } from '@browser-mc/binary';
 import { box, boxes } from '@browser-mc/media-container';
 import { detectImageMime, readExif, writeExif, removeExif, transplantExif, removeGpsExif,
+  readExifAsync, readExifPayloadAsync, readJxlExif, readJxlExifAsync, transplantExifAsync, removeGpsExifAsync,
   hasGpsInExif, prepareJxlEncodeExif } from '../dist/index.js';
 
 const signature = box('JXL ', new Uint8Array([13, 10, 135, 10]));
@@ -61,9 +63,9 @@ test('Orientation 1..8 round-trips without changing the codestream or caller byt
   }
 });
 
-test('Brotli Exif, nonzero TIFF offset, replacement and duplicate removal', () => {
+test('Brotli Exif, nonzero TIFF offset, replacement and duplicate removal', async () => {
   const body = tiff(), compressed = container(brob(body), exifBox(tiff(3)));
-  assert.deepEqual(readExif(compressed).bytes, concat([prefix, body]));
+  assert.deepEqual((await readExifAsync(compressed)).bytes, concat([prefix, body]));
   const rewritten = writeExif(compressed, tiff(4));
   assert.deepEqual([...boxes(rewritten, 0, rewritten.length)].map(b => b.type), ['JXL ', 'ftyp', 'Exif', 'jxlc']);
   assert.deepEqual(readExif(rewritten).bytes, concat([prefix, tiff(4)]));
@@ -94,14 +96,90 @@ test('truncated boxes and bad Exif offsets fail clearly', () => {
   }
 });
 
-test('browser brob read gives actionable error; rewrite needs no decompressor', async () => {
-  const saved = globalThis.process;
-  let browser;
-  try { globalThis.process = undefined; browser = await import('../dist/jxl.js?browser'); }
-  finally { globalThis.process = saved; }
-  const image = container(brob(tiff()));
-  assert.throws(() => browser.readJxlExif(image), /compressBoxes: false.*Node/);
-  assert.deepEqual(browser.rewriteJxlExif(image, null), container());
+test('brob sync and async helpers preserve codestream', async () => {
+  const image = container(brob(tiff(6, true, true)));
+  const saved = image.slice();
+  const payload = await readJxlExifAsync(image);
+  assert.deepEqual(readExif(image), payload);
+  assert.deepEqual(readJxlExif(image), payload);
+  assert.deepEqual(readExif(transplantExif(image, raw)), payload);
+  assert.deepEqual(removeGpsExif(image), await removeGpsExifAsync(image));
+  assert.deepEqual(image, saved);
+  assert.deepEqual(await readExifPayloadAsync(image), payload);
+  assert.deepEqual(readExif(await transplantExifAsync(image, raw)), payload);
+  const stripped = await removeGpsExifAsync(image);
+  assert.equal(hasGpsInExif(readExif(stripped).bytes), false);
+  assert.equal(prepareJxlEncodeExif(readExif(stripped).bytes).orientation, 6);
+  assert.deepEqual(removeExif(stripped), container());
+  assert.deepEqual(await transplantExifAsync(raw, image), container());
+  assert.deepEqual(await removeGpsExifAsync(raw), raw);
+});
+
+test('async readers handle plain Exif, offsets, missing Exif and malformed brob', async () => {
+  for (const image of [raw, container(), writeExif(raw, tiff()),
+    container(box('Exif', u32(3), new Uint8Array(3), tiff()))]) {
+    assert.deepEqual(await readExifAsync(image), readExif(image));
+  }
+  await assert.rejects(readExifAsync(container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255])))), /Invalid JPEG XL brob/);
+  await assert.rejects(readExifAsync(container(brob(new Uint8Array()))), /TIFF offset/);
+  const saved = globalThis.DecompressionStream;
+  try {
+    const image = container(brob(tiff(8, false, true))), savedImage = image.slice();
+    for (const unsupported of [undefined, class {
+      constructor() { throw new TypeError('Unsupported compression format: brotli'); }
+    }]) {
+      globalThis.DecompressionStream = unsupported;
+      assert.deepEqual(await readExifAsync(image), readExif(image));
+      assert.deepEqual(await removeGpsExifAsync(image), removeGpsExif(image));
+      assert.deepEqual(await transplantExifAsync(image, raw), transplantExif(image, raw));
+      assert.ok(await readExifAsync(writeExif(raw, tiff())));
+      const malformed = container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255])));
+      assert.throws(() => readExif(malformed), /Invalid JPEG XL brob/);
+      await assert.rejects(readExifAsync(malformed), /Invalid JPEG XL brob/);
+    }
+    assert.deepEqual(image, savedImage);
+    assert.deepEqual(removeExif(image), container());
+  } finally { globalThis.DecompressionStream = saved; }
+});
+
+test('async brob reader prefers DecompressionStream when construction succeeds', async () => {
+  const saved = globalThis.DecompressionStream;
+  let constructions = 0;
+  try {
+    globalThis.DecompressionStream = class {
+      constructor(format) {
+        assert.equal(format, 'brotli');
+        constructions++;
+        const chunks = [];
+        return new TransformStream({
+          transform(chunk) { chunks.push(chunk); },
+          flush(controller) { controller.enqueue(brotliDecompressSync(concat(chunks))); },
+        });
+      }
+    };
+    const image = container(brob(tiff()));
+    assert.deepEqual(await readExifAsync(image), readExif(image));
+    assert.equal(constructions, 1);
+    globalThis.DecompressionStream = class {
+      constructor() {
+        return new TransformStream({ transform() { throw new Error('bad Brotli stream'); } });
+      }
+    };
+    await assert.rejects(readExifAsync(image), /Invalid JPEG XL brob/);
+  } finally { globalThis.DecompressionStream = saved; }
+});
+
+test('async helpers retain JPEG/WebP/AVIF behavior', async () => {
+  const pixel = sharp({ create: { width: 2, height: 3, channels: 3, background: '#808080' } });
+  for (const format of ['jpeg', 'webp', 'avif']) {
+    const bare = new Uint8Array(await pixel.clone().toFormat(format).toBuffer());
+    const image = writeExif(bare, tiff(7, true, true));
+    assert.deepEqual(await readExifAsync(image), readExif(image));
+    assert.deepEqual(await removeGpsExifAsync(image), removeGpsExif(image));
+    assert.deepEqual(await transplantExifAsync(image, bare), transplantExif(image, bare));
+    assert.equal(await readExifAsync(bare), null);
+    assert.deepEqual(await transplantExifAsync(bare, image), removeExif(image));
+  }
 });
 
 test('strict encode helper validates header, IFD0 bounds and Orientation', () => {
