@@ -30,6 +30,7 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 
 | Option | Values (default) | Notes |
 | --- | --- | --- |
+| `maxMemoryBytes` | positive safe integer bytes (536870912 = 512 MiB), at most 2080374784 = 1984 MiB | Per-encode WASM preflight budget; see below. |
 | `distance` / `effort` | (0,25] (1) / 1..3 (3) | |
 | `bitDepth` | planar: `'preserve'`\|8\|10\|12\|`'float32'` (`'preserve'` = source depth); RGB: 8/10/12/`'float32'` (`'float32'`) | Only the header signalling. Normalization always happens at source depth. |
 | `matrix`, `primaries`, `transfer`, `fullRange`, `chromaSiting`, `colorSpace` | see colour rules | Encode options override input fields. |
@@ -45,6 +46,60 @@ encoder.encodeRgb({width, height, data, colorMetadata: metadata}, {iccHeader: 'a
 - Odd sizes, unaligned offsets, padding and shared buffers all work.
 - Limits: 8192 px per axis, 4,194,304 px, and 64 MiB of validated source spans.
 - The source format determines the source depth.
+
+## Memory budget
+
+`encodeRgb(input, {maxMemoryBytes})` and `encodePlanarYuv(input,
+{maxMemoryBytes})` validate sizes and check a conservative memory reservation
+**before any WASM call or input/ICC copy**. The default is **512 MiB**: a mobile
+policy that avoids reserving most of a 1–2 GiB process for a single encode.
+This can reject a valid frame below the existing 4 MP limit. For example, at
+2048² the reservation is 482 MiB for tightly packed I420, 500 MiB for U8 RGB,
+and 608 MiB for Float32 RGB or I444A. The other input limits still apply.
+
+The formula (bytes, integer arithmetic with upward rounding) is:
+
+```text
+P = width * height
+S = packed RGB byteLength, or sum of validated plane spans (including padding)
+I = ICC byteLength, or zero
+V = 2*S + 4*I + P*(12 + 12 + 48 + A + O + R)
+estimate = 32 MiB + ceil(3*V/2)
+required = max(estimate, current WASM heap byteLength)
+```
+
+- `2*S` reserves the JS→WASM input copy and Rust's owned planar copy
+  (conservatively also reserved for RGB and borrowed alpha).
+- 12 B/pixel is float XYB; another 12 reserves RGB staging/callback buffers.
+  48 B/pixel is an allowance for libjxl working buffers and output growth/copy.
+- `A` is 16 B/pixel with alpha, otherwise zero, for float alpha staging and coding.
+- `O` is 25 B/pixel with `observe`, otherwise zero, reserving two float XYB
+  captures and the coverage bitmap even when only hashing is enabled.
+- `R` is 12 B/pixel for planar `rgbViaPlanar`, otherwise zero.
+- `4*I` allows ICC copies/parsing. The variable reservation gets 50% headroom;
+  the fixed 32 MiB covers runtime, stack, allocator, tables and row padding.
+
+`maxMemoryBytes` must be a positive safe integer no greater than **1984 MiB**
+(2 GiB minus 64 MiB), leaving wasm32 address-space headroom. For example, a
+caller on a known capable device can pass `{maxMemoryBytes: 1024*1024*1024}`.
+Invalid budgets throw `TypeError`; exceeding a valid budget throws `RangeError`
+starting with `WASM memory budget exceeded`, giving estimate, retained heap,
+budget and the ceiling. Budget errors do not trigger ICC fallback. The WASM
+heap retains its high-water size, so lowering the budget on a reused instance
+can reject even a small frame. Successful calls expose `estimatedMemoryBytes`
+and `maxMemoryBytes` in `encoder.stats`.
+
+This is a conservative admission policy, not an exact peak bound or a hard
+allocator limit. Device/process pressure, multiple encoder instances, caller's
+JS input/output and other JS allocations are outside it; a permitted encode
+can still fail allocation. The guard uses only dimensions, types and layouts,
+with no extra pixel scan. It lives in the JS API; direct native/WASM ABI users
+must manage their own budget. No WASM relink is needed for this JS-only change.
+
+No new chunked/streaming API is added: the existing internal chunked callbacks
+still feed an encoder that owns full-frame XYB and working buffers. Slicing the
+input alone would not bound peak memory; changing that ownership requires a
+larger libjxl/session redesign.
 
 ## Colour pipeline
 

@@ -33,6 +33,17 @@ published packages depends on this directory.
 | `round12/` | Gray ICC, `iccHeader` targets, integer/Float32 parity, PNG→AVIF metadata |
 | `real10/` | Optional genuine 10-bit Netflix fixtures (fetched locally, never committed) |
 
+## WASM memory guard
+
+`encodeRgb` / `encodePlanarYuv` preflight a **512 MiB** default reservation
+before copying input. Override per call with `{maxMemoryBytes}` (positive safe
+integer, at most **1984 MiB**). The estimate includes input copies, float XYB,
+RGB staging, working/output and optional alpha/observation buffers, with 50%
+headroom plus 32 MiB fixed overhead. Budget rejection is a clear `RangeError`.
+See [WASM.md](WASM.md#memory-budget) for the formula and limitations. This is a
+JS API policy; native callers manage memory themselves. Chunking remains
+internal and does not remove full-frame encoder buffers.
+
 ## Native path
 
 The native C ABI (`planar_session.h`) accepts U8 I420/I422/I444/NV12 and LE U16 10/12-bit

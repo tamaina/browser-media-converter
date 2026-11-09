@@ -90,6 +90,35 @@ const encoder = await createEncoder();
 served as-is. The experiment's test servers map `/libjxl-wasm/` to this directory.
 API and verification details: `experiments/jxl-planar-xyb/WASM.md`.
 
+## Memory budget
+
+Both `encodeRgb` and `encodePlanarYuv` accept `{maxMemoryBytes}` per call,
+defaulting to **512 MiB** to limit a single encode's reservation on mobile.
+The override is a positive safe integer up to **1984 MiB** (2 GiB − 64 MiB).
+Checks run before WASM calls/copies; an exceeded budget throws `RangeError`
+with `WASM memory budget exceeded`, the estimate, retained heap and budget.
+The existing 8192/axis, 4 MP, 64 MiB plane-span and 4 MiB ICC caps remain.
+
+The reservation is `32 MiB + ceil(1.5 * V)`, where `V` includes twice the input
+spans, four times the ICC size, and per-pixel reservations: 12 B float XYB,
+12 B RGB staging, 48 B working/output allowance, plus 16 B for alpha, 25 B
+for observation and 12 B for planar `rgbViaPlanar` when enabled. The fixed
+allowance and 50% margin cover runtime/allocator and uncertain working costs.
+The retained WASM heap must also fit the budget. Successful calls report
+`estimatedMemoryBytes` and `maxMemoryBytes` in `encoder.stats`.
+
+```js
+const bytes = encoder.encodeRgb(input, {maxMemoryBytes: 1024 * 1024 * 1024});
+```
+
+A valid 4 MP frame can exceed the default (Float32 RGB estimates 608 MiB).
+This admission estimate is not a hard allocator limit or a guarantee against
+device memory pressure; caller JS storage and other instances are outside it.
+Full-frame XYB/working buffers remain, so input slicing alone would not provide
+bounded-memory streaming. No new chunking API is added. See the complete
+[formula and limitations](../../experiments/jxl-planar-xyb/WASM.md#memory-budget).
+This JS-only guard needs no WASM or libjxl rebuild.
+
 ## HDR base
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts

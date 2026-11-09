@@ -24,6 +24,9 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Preflight WASM budget: default 512 MiB; safe integer 1..2080374784 (1984 MiB).
+   * Conservative estimate, not an allocator limit or device-memory guarantee. */
+  maxMemoryBytes?: number;
   distance?: number;
   effort?: 1 | 2 | 3;
   bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12;
@@ -54,6 +57,6 @@ export interface Encoder {
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
   encodeRgb(input: RgbInput, options?: EncodeOptions): Encoded;
-  readonly stats: {colorResolved?: ColorResolved; warnings?: string[]; [key: string]: unknown};
+  readonly stats: {estimatedMemoryBytes?: number; maxMemoryBytes?: number; colorResolved?: ColorResolved; warnings?: string[]; [key: string]: unknown};
 }
 export function createEncoder(options?: {locateFile?: (path: string, prefix: string) => string; [key: string]: unknown}): Promise<Encoder>;
