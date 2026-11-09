@@ -49,11 +49,24 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export interface JpegEncodeOptions {
+  /** Compress metadata boxes with Brotli (default true). EXIF/XMP are always kept. */
+  compressBoxes?: boolean;
+}
+export type JpegEncoded = Uint8Array & {
+  colorResolved: {policy: 'jpeg-lossless'; source: {profile: 'jpeg'}};
+  warnings: string[];
+};
 export interface Encoder {
+  /** Lossless JPEG recompression with bit-exact JPEG reconstruction data.
+   * EXIF orientation sets codestream orientation; the Exif box is preserved.
+   * No distance, effort, XYB or pixel colour options are accepted.
+   */
+  encodeJpeg(jpegBytes: Uint8Array, options?: JpegEncodeOptions): JpegEncoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
   encodeRgb(input: RgbInput, options?: EncodeOptions): Encoded;
-  readonly stats: {colorResolved?: ColorResolved; warnings?: string[]; [key: string]: unknown};
+  readonly stats: {colorResolved?: ColorResolved | JpegEncoded['colorResolved']; warnings?: string[]; [key: string]: unknown};
 }
 export function createEncoder(options?: {locateFile?: (path: string, prefix: string) => string; [key: string]: unknown}): Promise<Encoder>;

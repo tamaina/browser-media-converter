@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Native patched libjxl (shared), djxl, and the two native test tools.
+# Native patched libjxl (shared), djxl, and native verification tools.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 fetch_libjxl
@@ -12,7 +12,7 @@ configure() {
   -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS="$2" -DJPEGXL_EXTERNAL_CMS="$3" -DJPEGXL_ENABLE_BENCHMARK=OFF \
   -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_JNI=OFF \
   -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_SKCMS=OFF \
-  -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF \
+  -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=ON \
   -DJPEGXL_FORCE_SYSTEM_BROTLI=ON "${@:4}"
 }
 configure build/native OFF ON
@@ -41,3 +41,7 @@ system_cms="${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.
   "$system_jxl" "$system_cms" \
   -Wl,--disable-new-dtags,-rpath,"$(dirname "$system_jxl"):$(dirname "$system_cms")" -o build/decode-float
 # tools/tail_guard.cc needs the Rust CMS: see scripts/build-tail-guard.sh.
+
+# JPEG recompression smoke/header verifier (no system libjpeg needed).
+"$cxx" -std=c++17 -O2 -Wall -Wextra -Werror "${inc[@]}" tools/jpeg-info.cc \
+  "$PWD/build/native/lib/libjxl.so" -Wl,-rpath,"$PWD/build/native/lib" -o build/jpeg-info

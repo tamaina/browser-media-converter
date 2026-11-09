@@ -85,6 +85,13 @@ int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
   const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
+int w_jpeg(const uint8_t* p,size_t size,int compress_boxes) {
+  planar_free(&output);error[0]=0;
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_jpeg(p,size,compress_boxes,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
 const char* w_error(){return error;}
 const uint8_t* w_data(){return output.data;}
 size_t w_size(){return output.size;}

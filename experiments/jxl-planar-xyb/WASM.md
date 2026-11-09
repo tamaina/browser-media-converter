@@ -1,7 +1,7 @@
 # Planar YUV / RGB → XYB JPEG XL in WebAssembly — design and spec
 
 Patched libjxl v0.11.1 (794a5dcf), Highway four-lane SIMD, Emscripten `-O2 -msimd128`.
-The API is synchronous, supports planar HDR, and produces lossy XYB/VarDCT. Builds,
+The API is synchronous: pixel inputs produce lossy XYB/VarDCT (including planar HDR); JPEG byte input supports lossless non-XYB recompression. Builds,
 fixtures, logs and codestreams stay in the ignored `build/`. The libjxl build,
 bridge, Wasm exports and JS API are in `packages/libjxl-wasm` (its own ignored
 `build/`); this directory holds the Rust session and the suites. The full
@@ -188,16 +188,16 @@ Chrome 156.0.8078.47 (Playwright `channel:'chrome'`) on an i7-10510U. Distance 1
 | ICC pre-encoder XYB vs LCMS2 (sRGB, P3, Adobe / LUT) | ≤ 1.2e-5 max / 4.5e-4 max. ProPhoto 0.0111 comes from libjxl's absorbance clamp; 1.19e-4 once that is accounted for |
 | Gray ICC XYB vs LCMS2 (gamma 2.2, sRGB, table) | 1.79e-7, 1.64e-7, 9.07e-5 (exact table 2.12e-7) |
 | `encodeRgb` U8 2048², total ms (untagged / sRGB / P3 / Adobe / LUT) | 261.8 / 329.7 / 328.1 / 336.1 / 484.9 |
-| WASM size (`codec.wasm`) | 2,513,349 B raw / 967,625 B gzip (Python `gzip.compress(data, compresslevel=9, mtime=0)`; +31 / +27 vs 2,513,318 / 967,598 before removing the C CMS build) |
+| WASM size (`codec.wasm`, JPEG recompression enabled) | 2,563,282 B raw / 987,791 B gzip (Python `gzip.compress(data, compresslevel=9, mtime=0)`) |
 
-The C CMS was already absent from the previous WASM link. Removing its build
-and moving the rejecting default CMS into a static stub changes size only
-slightly; the benefit is avoiding CMS fetching, discovery and compilation.
+The previous documented WASM size was 2,513,349 B raw / 967,625 B gzip: this
+build is +49,933 B raw / +20,166 B gzip. No pre-build WASM artifact was present
+in this worktree, so the comparison uses that documented baseline.
 
 ## Known limitations
 
 - **HDR scope:** planar BT.2020 NCL 10/12-bit PQ/HLG through the row CMS path (see HDR base below).
-- No mastering metadata. The output is lossy, not integer-exact.
+- No mastering metadata. Pixel-input output is lossy, not integer-exact; JPEG byte recompression is lossless.
 - WebCodecs exposes no chroma siting; the default is left.
 - VP9 ignores bitstream colour, so pass `config.colorSpace`.
 - Chrome 156:
@@ -336,3 +336,28 @@ same descriptors. Tested Chrome 156 raw VideoFrame/copyTo accepted 8/10-bit
 alpha in all three layouts and preserved alpha bytes; AP12 enum values were
 rejected. Direct AP12 encoder input passed. WebCodecs association semantics
 are **unconfirmed** here; the caller must provide straight alpha values.
+
+## Lossless JPEG recompression
+
+| API | Input | Options / result |
+| --- | --- | --- |
+| `encodeJpeg(jpegBytes, options?)` | Original JPEG `Uint8Array` | `{compressBoxes?: boolean}` (true); owned bytes with `colorResolved.policy: 'jpeg-lossless'`, empty warnings |
+
+Native/WASM builds use `JPEGXL_ENABLE_TRANSCODE_JPEG=ON` with the existing
+EXTERNAL_CMS/patches. The internal JPEG parser needs no system libjpeg.
+`StoreJPEGMetadata(1)` + `AddJPEGFrame` preserves JPEG coefficients and stores
+reconstruction data for bit-exact `djxl input.jxl output.jpg`. Output may be
+larger than input. A fresh encoder infers `uses_original_profile=true` (non-XYB).
+
+EXIF/XMP are always kept with `JPEG_KEEP_*`; libjxl requires both for JPEG
+reconstruction. `InterpretExif` sets codestream orientation and retains the
+matching Exif box, without JS rotation or EXIF rewriting. Distance, effort,
+XYB, colour overrides, metadata removal and all unknown options are rejected.
+Malformed/unsupported JPEGs throw. Embedded ICC JPEGs can be rejected because
+the internal JPEG parser uses the rejecting default CMS instead of the
+encoder's installed CMS; there is no profile-stripping fallback.
+
+The Node API suite also runs native JPEG smoke encoding, reconstructs baseline,
+progressive, grayscale, orientation-6 and XMP inputs byte-for-byte, checks
+native codestream headers/Exif contents, and exercises corrupt input and API
+validation. See `packages/libjxl-wasm/README.md` for details.

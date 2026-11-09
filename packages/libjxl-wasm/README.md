@@ -14,7 +14,7 @@ so the root `pnpm build` / `pnpm test` do not need emsdk or Chrome.
 | `src/bridge.cc`: JxlEncoder calls, installs the Rust CMS (`JxlEncoderSetCms`) | Rust CMS `src/cms.rs` (stock `JxlCmsInterface`; moxcms `=0.9.2` for LUT ICC); `build.rs` compiles `src/bridge.cc` from here into the Rust cdylib |
 | `src/planar_session.h`: the C ABI the Rust session implements | oracle, Python/Chrome verification suites (Round 10–12, real10) |
 | `src/wasm_entry.cc`, `src/api.mjs`: Emscripten exports and JS API | |
-| `tools/decode_float.cc` (stock system libjxl decoder), `tools/tail_guard.cc` | |
+| `tools/decode_float.cc` (stock system libjxl decoder), `tools/tail_guard.cc`, `tools/jpeg-info.cc` (native JPEG smoke/header verifier) | |
 
 The dependency is two-way at link time: the Rust session calls `hdr_jxl_encode`
 / `bridge_*` in `bridge.cc`, and `bridge.cc` / `wasm_entry.cc` call the Rust
@@ -44,7 +44,7 @@ builds enable it and disable skcms: CMake skips skcms/LCMS2 discovery and compil
 only a tiny static `jxl_cms` stub whose `JxlGetDefaultCms` rejects all profiles
 and transforms. This replaces the former `wasm_entry.cc` stub. Native
 `libjxl.so` embeds the stub and has no `libjxl_cms.so` or LCMS2 dependency.
-The bridge must install the Rust CMS before encoding. Only Highway and Brotli
+For pixel input, the bridge installs the Rust CMS before encoding. Only Highway and Brotli
 submodules are initialized; neither skcms nor LCMS2 is fetched or compiled.
 
 The separate `build/native-reference` build keeps stock libjxl CMS code linked
@@ -59,11 +59,11 @@ not linked into either encoder.
 Run builds sequentially. Native C++ builds use up to six jobs
 (`LIBJXL_BUILD_JOBS` overrides this); Rust and Emscripten builds use one.
 Temporary files respect an existing `TMPDIR` (default `build/tmp`); caches stay
-in ignored build directories (`build/em-cache` for Emscripten).
+in ignored build directories (`$TMPDIR/em-cache` for Emscripten).
 
 ```sh
 bash scripts/build-native.sh   # build/native/lib/libjxl.so, build/native/tools/djxl,
-                               # build/decode-float
+                               # build/decode-float, build/jpeg-info
 # Native Rust side + tail guard (scripts/build-tail-guard.sh with a host staticlib)
 bash ../../experiments/jxl-planar-xyb/build.sh
 # Wasm: builds the Rust session staticlib, then runs scripts/build-wasm.sh
@@ -141,3 +141,42 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+## Lossless JPEG recompression
+
+`encoder.encodeJpeg(jpegBytes: Uint8Array, {compressBoxes?: boolean})` returns
+an owned `Uint8Array` with `colorResolved.policy: 'jpeg-lossless'` and empty
+`warnings`. `compressBoxes` defaults to true (Brotli metadata box compression).
+This uses `JxlEncoderStoreJPEGMetadata(1)` + `JxlEncoderAddJPEGFrame`: JPEG
+coefficients are recompressed losslessly, and reconstruction data enables a
+bit-exact return to the original JPEG with `djxl input.jxl output.jpg`.
+The output need not be smaller than the input, especially for tiny JPEGs.
+
+| API | Input | Output |
+| --- | --- | --- |
+| `encodeJpeg(bytes, options?)` | Original JPEG bytes, no pixel decode | Non-XYB JXL container with JPEG reconstruction data |
+
+Both builds enable `JPEGXL_ENABLE_TRANSCODE_JPEG=ON`, retaining EXTERNAL_CMS
+and the existing patches. This uses libjxl's internal JPEG bitstream parser;
+system libjpeg headers/libraries are not required. A fresh encoder lets
+AddJPEGFrame infer `uses_original_profile=true`; XYB is forbidden.
+
+EXIF/XMP are always retained using `JPEG_KEEP_EXIF`/`JPEG_KEEP_XMP` frame
+settings. libjxl requires both for reconstruction, so metadata removal is not
+exposed. AddJPEGFrame's `InterpretExif` applies EXIF orientation to codestream
+orientation and preserves the matching Exif box without rewriting orientation
+or rotating coefficients. No JS-side rotation or EXIF edits are performed.
+All other options (including distance, effort, XYB and pixel colour options)
+are rejected, since AddJPEGFrame supports only lossless JPEG recompression.
+
+Only JPEGs supported by libjxl's coefficient parser can be recompressed;
+malformed/unsupported input throws. The EXTERNAL_CMS rejecting default also
+limits embedded ICC JPEGs: libjxl's internal JPEG parser uses the default CMS,
+not the encoder's installed CMS, so such inputs can be rejected. There is no
+silent profile stripping or pixel fallback. Planar/RGB colour paths are unchanged.
+
+`node --test --test-isolation=none --test-concurrency=1 test/api.test.mjs`
+(from the package directory, after native and WASM builds) covers baseline,
+progressive, grayscale, EXIF orientation 6 and XMP JPEGs, exact reconstructed
+bytes, native header inspection (non-XYB/orientation), corrupt input, option
+validation and subsequent RGB calls. Test temporary files respect `TMPDIR`.

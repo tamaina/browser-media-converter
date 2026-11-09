@@ -338,3 +338,46 @@ extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
   const Alpha alpha=channels==4?Alpha{static_cast<const uint8_t*>(data)+3*(depth/8),size_t(c->width)*4*(depth/8),size_t(4*(depth/8)),unsigned(depth)}:Alpha{};
   return encode(c,&in,fill,nullptr,nullptr,result,error,error_size,alpha);
 }
+
+// Lossless JPEG coefficients + reconstruction data. A fresh encoder lets
+// AddJPEGFrame infer uses_original_profile=true (XYB is forbidden by libjxl).
+extern "C" int bridge_jpeg(const uint8_t* jpeg,size_t size,int compress_boxes,
+    Encoded* result,char* error,size_t error_size) {
+  *result={};
+  try {
+    if(!jpeg || !size) throw std::runtime_error("JPEG input is empty");
+    std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
+    if(!enc) throw std::runtime_error("encoder allocation failed");
+    auto check=[](JxlEncoderStatus status) {
+      if(status!=JXL_ENC_SUCCESS) throw std::runtime_error("lossless JPEG recompression failed (invalid or unsupported JPEG)");
+    };
+    check(JxlEncoderStoreJPEGMetadata(enc.get(),JXL_TRUE));
+    auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
+    if(!settings) throw std::runtime_error("frame settings allocation failed");
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_COMPRESS_BOXES,compress_boxes));
+    // Also interprets EXIF orientation and adds the matching Exif box.
+    check(JxlEncoderAddJPEGFrame(settings,jpeg,size));
+    JxlEncoderCloseInput(enc.get());
+    std::vector<uint8_t> bytes(4096);
+    size_t used=0;
+    for(;;) {
+      auto* next=bytes.data()+used;
+      size_t available=bytes.size()-used;
+      auto status=JxlEncoderProcessOutput(enc.get(),&next,&available);
+      used=bytes.size()-available;
+      if(status==JXL_ENC_SUCCESS) break;
+      if(status!=JXL_ENC_NEED_MORE_OUTPUT) check(status);
+      bytes.resize(bytes.size()*2);
+    }
+    auto* data=static_cast<uint8_t*>(std::malloc(used));
+    if(!data) throw std::runtime_error("output allocation failed");
+    std::memcpy(data,bytes.data(),used);
+    result->data=data;result->size=used;
+    return 0;
+  } catch(const std::exception& e) {
+    if(error && error_size) std::snprintf(error,error_size,"%s",e.what());
+    return 1;
+  }
+}

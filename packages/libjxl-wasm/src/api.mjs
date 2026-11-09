@@ -193,7 +193,27 @@ export async function createEncoder(options = {}) {
       return bytes;
     } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+  function encodeJpeg(jpeg, options = {}) {
+    if (!(jpeg instanceof Uint8Array) || jpeg.length === 0) fail('JPEG input must be a nonempty Uint8Array');
+    if (options === null || typeof options !== 'object' || Array.isArray(options)) fail('JPEG options must be an object');
+    for (const key of Object.keys(options)) {
+      if (key !== 'compressBoxes') fail(`unsupported JPEG option: ${key}; lossless recompression preserves EXIF/XMP and does not accept distance, effort or XYB options`);
+    }
+    if (options.compressBoxes !== undefined && typeof options.compressBoxes !== 'boolean') fail('compressBoxes must be boolean');
+    const start = performance.now();
+    const pointer = m._malloc(jpeg.length);
+    if (!pointer) throw Error('WASM allocation failed');
+    try {
+      m.HEAPU8.set(jpeg, pointer);
+      if (m._w_jpeg(pointer, jpeg.length, +(options.compressBoxes ?? true))) throw Error(m.UTF8ToString(m._w_error()));
+      const bytes = m.HEAPU8.slice(m._w_data(), m._w_data() + m._w_size());
+      const colorResolved = {policy:'jpeg-lossless', source:{profile:'jpeg'}};
+      Object.assign(bytes, {colorResolved, warnings:[]});
+      stats = {colorResolved, warnings:bytes.warnings, encodeMs:m._w_time(4), totalMs:performance.now()-start};
+      return bytes;
+    } finally {m._w_free();m._free(pointer);}
+  }
+  return {encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
     try{return run(i,o,true);}catch(error){
       if(o.iccFallback!=='srgb' || !error.message.startsWith('ICC:'))throw error;
       const clean=object=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
