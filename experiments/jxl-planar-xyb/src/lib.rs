@@ -7,6 +7,8 @@ use std::{
     slice,
 };
 mod cms;
+#[cfg(test)]
+mod cms_bench;
 
 #[repr(C)]
 #[derive(Clone, Copy)]

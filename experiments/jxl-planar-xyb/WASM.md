@@ -71,7 +71,7 @@ Each field resolves as: encode option > input field > `colorSpace` > (`encodeRgb
 
 - Defaults: bt709 matrix/primaries/transfer, limited range, left siting.
 - Each defaulted field adds a warning.
-- `colorResolved` reports the values plus `source` for each field (`option`|`colorSpace`|`default`). For ICC input it also reports `profile`, `path`, `header`, `iccModel` and `iccDescription`.
+- `colorResolved` reports the values plus `source` for each field (`option`|`colorSpace`|`colorMetadata`|`default`; direct input fields retain the `option` label). Partial `colorSpace` objects and null getters fall through to CICP independently for each field. Option `colorSpace` selects the object ahead of input `colorSpace`. For ICC input it also reports `profile`, `path`, `header`, `iccModel` and `iccDescription`.
 - `null`/`undefined` count as absent. Unknown values throw.
 - **Omitted planar transfer means BT.709 (gamma 2.4). Omitted `encodeRgb` transfer means sRGB** (kept for compatibility).
 
@@ -114,7 +114,7 @@ and pass both to `encodeRgb`.
 
 **CICP** (AVIF/PNG cICP).
 - Goes through the planar resolver, including the gamma 2.4 rule.
-- Numeric primaries 1/5/6/9/12 and transfers 1/5/6/8/13/14/15 are accepted.
+- Numeric primaries 1/5/6/9/12 and transfers 1/6/8/13/14/15 are accepted. Transfer 5 maps to `gamma28`, consistently with media-container, and is explicitly rejected because the encoder has no gamma-2.8 path.
 - The matrix/range are recorded but not applied to RGB that is already decoded.
 
 **Matrix/TRC profiles.**
@@ -139,6 +139,7 @@ and pass both to `encodeRgb`.
 
 **Integer input.**
 - U8/U16 are copied as-is and normalized in C++ through 256/65536-entry LUTs, with `float(double(v)/max)`.
+- RGB `depth`/input `bitDepth`, if supplied, must match the typed array: 8 for U8/U8Clamped, 16 for U16, 32 for Float32. `storage`, if supplied, must be `u8`, `u16le-lsb`, or `float32` respectively. U16 RGB always uses all 16 bits; declared RGB depth 10/12 is rejected. The encode option `bitDepth` controls output signalling independently.
 - The output is bit-identical to the equivalent Float32 input.
 
 ### Header choice (`iccHeader`) — the trade-off
@@ -227,6 +228,10 @@ JXL_INCLUDE="$PWD/../../packages/libjxl-wasm/build/libjxl/lib/include" \
 JXL_LIBRARY="$PWD/../../packages/libjxl-wasm/build/native/lib/libjxl.so" \
 LD_LIBRARY_PATH="$PWD/../../packages/libjxl-wasm/build/native/lib" \
 CARGO_TARGET_DIR="$PWD/build/target" cargo test --lib --locked --jobs 1
+# Opt-in native CMS callback timer (synthetic Display P3 matrix/TRC RGB f32).
+cargo test --lib --release --locked --jobs 1 cms_row_benchmark -- --ignored --nocapture --test-threads=1
+# API regressions against the existing built codec, no browser needed.
+node --test --test-isolation=none --test-concurrency=1 ../../packages/libjxl-wasm/test/api.test.mjs
 bash build-wasm.sh             # cargo (moxcms, Cargo.lock) session.a → packages/libjxl-wasm/build/wasm/codec.{mjs,wasm}
 node wasm/browser-test.mjs     # main suite, then round10 → round11 → round12 (each closes Chrome first)
 node wasm/browser-test.mjs --benchmark [--real10]   # timings → build/browser/benchmark-observations.json

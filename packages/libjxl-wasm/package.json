@@ -9,6 +9,7 @@
     "./codec.mjs": "./build/wasm/codec.mjs"
   },
   "scripts": {
+    "test:api": "node --test --test-isolation=none --test-concurrency=1 test/api.test.mjs",
     "build:native": "bash scripts/build-native.sh",
     "build:wasm": "bash ../../experiments/jxl-planar-xyb/build-wasm.sh"
   },
