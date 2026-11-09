@@ -75,6 +75,13 @@ encoder.encodeRgb({width, height, data}, {exif: tiffBytes, xmp: xmpBytes});
 encoder.encodePlanarYuv(input, {exif: app1ExifBytes, compressBoxes: false});
 ```
 
+EXIF payloads for JPEG XL encoding should come from `readExif(source)?.bytes`
+or shared helpers in `@browser-mc/exif-transplant`. The encode-time `exif`
+option sets codestream Orientation from IFD0; supply pixels before that transform.
+Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update only
+the Exif box and do not change codestream Orientation. `xmp?: Uint8Array` remains
+an opaque encoder option, with `compressBoxes` controlling both metadata boxes.
+
 **Input rules.**
 - U16 input must be LE and low-bit aligned. P010/MSB-aligned storage and samples above the declared depth are rejected.
 - Odd sizes, unaligned offsets, padding and shared buffers all work.

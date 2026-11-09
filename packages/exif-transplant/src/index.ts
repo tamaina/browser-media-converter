@@ -1,15 +1,18 @@
 import { readAscii, readU16 } from '@browser-mc/binary';
 import { readAvifExif, rewriteAvifExif } from './avif.js';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
+import { isJxl, readJxlExif, rewriteJxlExif } from './jxl.js';
 import { JPEG_SOI, readJpegExif, rewriteJpegExif } from './jpeg.js';
 import { stripGpsFromExif } from './tiff.js';
 import type { ExifPayload, ImageMime } from './types.js';
 import { readWebpExif, rewriteWebpExif } from './webp.js';
 
 export type { ExifPayload, ImageMime } from './types.js';
-export { hasGpsInExif, stripGpsFromExif } from './tiff.js';
+export { readJxlExif, rewriteJxlExif } from './jxl.js';
+export { prepareJxlEncodeExif, hasGpsInExif, stripGpsFromExif } from './tiff.js';
 
 export function detectImageMime(data: Uint8Array): ImageMime {
+  if (isJxl(data)) return 'image/jxl';
   if (data.length >= 12 && readAscii(data, 0, 4) === 'RIFF' && readAscii(data, 8, 4) === 'WEBP') return 'image/webp';
   if (data.length >= 12 && readAscii(data, 4, 4) === 'ftyp' && hasBrand(data, ['avif', 'avis', 'mif1', 'msf1'])) return 'image/avif';
   if (data.length >= 2 && readU16(data, 0) === JPEG_SOI) return 'image/jpeg';
@@ -17,6 +20,7 @@ export function detectImageMime(data: Uint8Array): ImageMime {
 }
 
 export function readExif(data: Uint8Array, mime = detectImageMime(data)): ExifPayload | null {
+  if (mime === 'image/jxl') return readJxlExif(data);
   if (mime === 'image/jpeg') return readJpegExif(data);
   if (mime === 'image/webp') return readWebpExif(data);
   return readAvifExif(data);
@@ -25,6 +29,7 @@ export function readExif(data: Uint8Array, mime = detectImageMime(data)): ExifPa
 export const readExifPayload = readExif;
 
 export function removeExif(data: Uint8Array, mime = detectImageMime(data)): Uint8Array {
+  if (mime === 'image/jxl') return rewriteJxlExif(data, null);
   if (mime === 'image/jpeg') return rewriteJpegExif(data, null);
   if (mime === 'image/webp') return rewriteWebpExif(data, null);
   return rewriteAvifExif(data, null);
@@ -38,6 +43,7 @@ export function removeGpsExif(data: Uint8Array, mime = detectImageMime(data)): U
 
 export function writeExif(data: Uint8Array, exif: Uint8Array | ExifPayload, mime = detectImageMime(data)): Uint8Array {
   const bytes = exif instanceof Uint8Array ? exif : exif.bytes;
+  if (mime === 'image/jxl') return rewriteJxlExif(data, bytes);
   if (mime === 'image/jpeg') return rewriteJpegExif(data, normalizeJpegExif(bytes));
   if (mime === 'image/webp') return rewriteWebpExif(data, stripExifHeader(bytes));
   return rewriteAvifExif(data, stripExifHeader(bytes));

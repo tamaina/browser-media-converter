@@ -9,7 +9,7 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-mc/binary`: shared byte, integer, and ASCII helpers.
 - `@browser-mc/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
 - `@browser-mc/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
-- `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
+- `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP/JPEG XL, and rewrites AVIF through the `media-container` minimal muxer.
 - `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware CPU preserve resize.
 - `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware CPU preserve resize, scene-keyframe forcing, and stream-only HLS output.
 - `@browser-mc/libjxl-wasm` (private, experimental): patched libjxl v0.11.1 native/Wasm builds, the C++ bridge, and the `createEncoder` JS API used by `experiments/jxl-planar-xyb`.
@@ -36,6 +36,13 @@ Malformed TIFF headers, IFD0 tables and Orientation entries are rejected;
 other EXIF tags and XMP bytes are preserved without interpreting their contents.
 Metadata is optional and applies only to that encode call. See
 [`WASM.md`](experiments/jxl-planar-xyb/WASM.md) for the full API and verification.
+
+EXIF payloads for JPEG XL encoding should come from `readExif(source)?.bytes`
+or shared helpers in `@browser-mc/exif-transplant`. The encode-time `exif`
+option sets codestream Orientation from IFD0; supply pixels before that transform.
+Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update only
+the Exif box and do not change codestream Orientation. `xmp?: Uint8Array` remains
+an opaque encoder option, with `compressBoxes` controlling both metadata boxes.
 
 ## Commands
 

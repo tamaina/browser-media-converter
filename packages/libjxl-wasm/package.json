@@ -17,6 +17,9 @@
     "build:native": "bash scripts/build-native.sh",
     "build:wasm": "bash ../../experiments/jxl-planar-xyb/build-wasm.sh"
   },
+  "dependencies": {
+    "@browser-mc/exif-transplant": "workspace:^"
+  },
   "files": [
     "src",
     "patches",

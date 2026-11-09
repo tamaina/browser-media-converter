@@ -1,5 +1,12 @@
 # @browser-mc/exif-transplant
 
+## 0.0.5 (unreleased)
+
+### Patch Changes
+
+- Add JPEG XL EXIF read/write/remove/transplant and GPS stripping, with Node Brotli reads and uncompressed box writes. Preserve codestream Orientation when editing boxes.
+- Export `prepareJxlEncodeExif` for shared strict TIFF/IFD0/Orientation validation at encode time.
+
 ## 0.0.4
 
 ### Patch Changes

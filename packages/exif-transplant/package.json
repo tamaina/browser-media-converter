@@ -21,7 +21,7 @@
     "typecheck": "pnpm --filter @browser-mc/exif-transplant... typecheck:package",
     "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && pnpm test:package",
-    "test:package": "node --test test/*.test.mjs && node test/smoke.mjs"
+    "test:package": "node --test --test-isolation=none --test-concurrency=1 test/*.test.mjs && node test/smoke.mjs"
   },
   "dependencies": {
     "@browser-mc/binary": "workspace:^",

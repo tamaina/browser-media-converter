@@ -90,7 +90,11 @@ importers:
         specifier: workspace:^
         version: link:../media-container
 
-  packages/libjxl-wasm: {}
+  packages/libjxl-wasm:
+    dependencies:
+      '@browser-mc/exif-transplant':
+        specifier: workspace:^
+        version: link:../exif-transplant
 
   packages/media-container:
     dependencies:

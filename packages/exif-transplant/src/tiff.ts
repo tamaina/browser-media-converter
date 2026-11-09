@@ -25,22 +25,24 @@ export function hasGpsInExif(exif: Uint8Array): boolean {
   return zeroth.entries.some((entry) => entry.tag === GPS_IFD_POINTER && entry.value > 0);
 }
 
-function parseTiff(data: Uint8Array) {
+function parseTiff(data: Uint8Array, strict = false) {
   if (data.length < 8) return null;
   const littleEndian = readAscii(data, 0, 2) === 'II';
   if (!littleEndian && readAscii(data, 0, 2) !== 'MM') return null;
   const magic = littleEndian ? readU16le(data, 2) : readU16(data, 2);
   if (magic !== 42) return null;
   const firstIfdOffset = littleEndian ? readU32le(data, 4) : readU32(data, 4);
-  if (firstIfdOffset + 2 > data.length) return null;
+  if (strict && firstIfdOffset === 0) return { littleEndian, firstIfdOffset };
+  if ((strict && firstIfdOffset < 8) || firstIfdOffset + 2 > data.length) return null;
   return { littleEndian, firstIfdOffset };
 }
 
-function readIfd(data: Uint8Array, offset: number, littleEndian: boolean) {
+function readIfd(data: Uint8Array, offset: number, littleEndian: boolean, strict = false) {
   const read16 = littleEndian ? readU16le : readU16;
   const read32 = littleEndian ? readU32le : readU32;
   if (offset + 2 > data.length) return { entries: [] };
   const count = read16(data, offset);
+  if (strict && offset + 2 + count * 12 + 4 > data.length) invalidEncodeExif();
   const entries = [];
   for (let i = 0; i < count; i++) {
     const entryOffset = offset + 2 + i * 12;
@@ -92,3 +94,28 @@ const TYPE_SIZES: Record<number, number> = {
   12: 8,  // DOUBLE
   13: 4,  // IFD
 };
+
+function invalidEncodeExif(): never {
+  throw new TypeError('exif: invalid TIFF header, IFD0 or Orientation');
+}
+
+/** Validate TIFF/IFD0 for JPEG XL encoding; pixels must remain pre-transform. */
+export function prepareJxlEncodeExif(exif: Uint8Array): { tiff: Uint8Array; orientation: number } {
+  if (!(exif instanceof Uint8Array)) throw new TypeError('exif must be Uint8Array');
+  const tiff = stripExifHeader(exif);
+  const header = parseTiff(tiff, true);
+  if (!header) invalidEncodeExif();
+  let orientation = 1;
+  if (header.firstIfdOffset !== 0) {
+    const ifd = readIfd(tiff, header.firstIfdOffset, header.littleEndian, true);
+    let found = false;
+    for (const entry of ifd.entries) {
+      if (entry.tag !== 0x112) continue;
+      if (found || entry.type !== 3 || entry.count !== 1) invalidEncodeExif();
+      orientation = (header.littleEndian ? readU16le : readU16)(tiff, entry.valueOffset);
+      if (orientation < 1 || orientation > 8) invalidEncodeExif();
+      found = true;
+    }
+  }
+  return { tiff, orientation };
+}

@@ -90,6 +90,13 @@ const encoder = await createEncoder();
 served as-is. The experiment's test servers map `/libjxl-wasm/` to this directory.
 API and verification details: `experiments/jxl-planar-xyb/WASM.md`.
 
+EXIF payloads for JPEG XL encoding should come from `readExif(source)?.bytes`
+or shared helpers in `@browser-mc/exif-transplant`. The encode-time `exif`
+option sets codestream Orientation from IFD0; supply pixels before that transform.
+Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update only
+the Exif box and do not change codestream Orientation. `xmp?: Uint8Array` remains
+an opaque encoder option, with `compressBoxes` controlling both metadata boxes.
+
 ## HDR base
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
