@@ -391,3 +391,36 @@ same descriptors. Tested Chrome 156 raw VideoFrame/copyTo accepted 8/10-bit
 alpha in all three layouts and preserved alpha bytes; AP12 enum values were
 rejected. Direct AP12 encoder input passed. WebCodecs association semantics
 are **unconfirmed** here; the caller must provide straight alpha values.
+
+## RGB rectangle sources
+
+`createEncoder().encodeRgb({width, height, format: 'RGB', depth: 8,
+provideRect(x, y, w, h) { /* return exactly w*h*3 packed samples */ }}, options)`
+streams input from JS into a reusable WASM rectangle scratch. Depth 8 (default)
+uses Uint8Array/Uint8ClampedArray, 16 uses Uint16Array (full range), and 32 uses
+Float32Array ([0,1]). Colour/ICC options are the same as the packed `data` API.
+Callbacks are synchronous, deterministic, may repeat, and must not reenter the
+encoder. Each request is at most 2048×2048; a provider can assemble a band one row
+at a time or return a tightly packed subarray. Wrong types/lengths and thrown
+values fail with cleanup. `data` and `provideRect` are mutually exclusive.
+
+For `S = min(width,2048)*min(height,2048)*3*(depth/8)`, preflight memory is
+`32 MiB + ceil(1.5*(S + 4*iccBytes + width*height*(72 + (observe ? 25 : 0))))`.
+This replaces the full-buffer path's `2*inputBytes` charge with `S`; the existing
+full-buffer estimate is unchanged. Float request buffers, XYB, encoder/output
+storage remain within the conservative encoder allowance. Retained heap also
+counts toward `maxMemoryBytes`; this is not a hard allocation cap. At 2048² the
+maximum rectangle can cover the whole image; larger or narrower images use
+smaller regions. No full-frame source allocation is required by this API.
+
+Requires the patched `JxlChunkedFrameInputSource` ABI (`experimental_borrowed`),
+not stock libjxl. RGB only: RGBA is still available through `data`, but streaming
+alpha is not implemented. Planar YUV and HDR via planar still own full planes in
+Rust; GIF/animation and JPEG recompression remain full-frame and are outside
+this change. JXL output is still returned as a complete byte array. The existing
+4 MP limit and SDR-only RGB policy are unchanged. See the package README for a
+complete provider example and incremental `--relink-only` build instructions.
+
+Libjxl may request a larger internal rectangle because streaming patches add
+border pixels. The bridge splits it into provider requests no larger than
+2048×2048; the float conversion buffer still covers the internal rectangle.

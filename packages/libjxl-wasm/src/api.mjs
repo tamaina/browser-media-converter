@@ -9,6 +9,7 @@ const MAX_MEMORY_BYTES = 2048 * MIB - 64 * MIB;
 export async function createEncoder(options = {}) {
   const m = await createModule(options);
   let stats = {};
+  let active = false;
   const fail = message => { throw new TypeError(message); };
   const integer = (v, min, max) => Number.isSafeInteger(v) && v >= min && v <= max;
   const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12','bt470bg'];
@@ -73,7 +74,8 @@ export async function createEncoder(options = {}) {
     if (i.alphaMode !== undefined && i.alphaMode !== 'straight') fail("alphaMode must be 'straight' (premultiplied alpha is unsupported)");
     if (rgb) {
       // Integer RGB is full-range U8/U16, never low-bit-depth codes in U16.
-      const depth = i.data instanceof Uint16Array ? 16 : i.data instanceof Float32Array ? 32 : 8;
+      const depth = i.provideRect !== undefined ? i.depth ?? 8 : i.data instanceof Uint16Array ? 16 : i.data instanceof Float32Array ? 32 : 8;
+      if (![8,16,32].includes(depth)) fail('RGB depth must be 8/16/32');
       const storage = depth === 32 ? 'float32' : depth === 16 ? 'u16le-lsb' : 'u8';
       if ((i.depth !== undefined && i.depth !== depth) || (i.bitDepth !== undefined && i.bitDepth !== depth) ||
           (i.storage !== undefined && i.storage !== storage)) fail(`RGB depth/storage mismatch: expected depth ${depth}, storage ${storage}`);
@@ -82,8 +84,9 @@ export async function createEncoder(options = {}) {
     if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
     return {distance,effort};
   }
-  function run(i,o,rgb) {
+  function run(i,o,rgb,sourceFailure) {
     const start=performance.now();
+    const chunked=rgb && i.provideRect !== undefined;
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
@@ -131,7 +134,7 @@ export async function createEncoder(options = {}) {
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     const formats=['I420','I422','I444','NV12'];
     const match=/^(I420|I422|I444)(A)?(?:P(10|12))?$/.exec(i.format??'');
-    const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
+    const sourceDepth=rgb?(chunked?i.depth??8:i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization) && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
     const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
@@ -145,7 +148,10 @@ export async function createEncoder(options = {}) {
     if (!integer(maxMemoryBytes,1,MAX_MEMORY_BYTES)) fail(`maxMemoryBytes must be a safe integer in 1..${MAX_MEMORY_BYTES} (1984 MiB)`);
     let inputBytes=0, hasAlpha=false;
     const layouts=[];
-    if (rgb) {
+    if (chunked) {
+      if (typeof i.provideRect !== 'function' || i.data !== undefined) fail('provideRect must be a function and cannot be combined with data');
+      if (i.format !== 'RGB') fail("provideRect requires format: 'RGB' (RGBA streaming unsupported)");
+    } else if (rgb) {
       const data=i.data;
       if (!(data instanceof Float32Array || data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) || ![3,4].includes(data.length/(i.width*i.height))) fail('RGB requires packed Float32Array or integer RGB/RGBA');
       const channels=data.length/(i.width*i.height);
@@ -171,16 +177,19 @@ export async function createEncoder(options = {}) {
       }
       hasAlpha=layouts.length===4;
     }
-    // Conservative reservation, not a measured libjxl peak: two input copies,
+    // Conservative reservation, not a measured libjxl peak: two input copies
+    // for full-buffer input, or one reusable packed scratch for provideRect,
     // XYB (12 B/px), RGB staging (12), working/output allowance (48), extras.
     // 50% variable headroom plus 32 MiB for runtime/stack/allocator/row padding.
     // Sizes are bounded above, so all arithmetic stays within safe integers.
-    const variableBytes=2*inputBytes + 4*(icc?.byteLength??0) + i.width*i.height*(72 + (hasAlpha?16:0) + (o.observe?25:0) + (!rgb && o.rgbViaPlanar?12:0));
+    const scratchBytes=chunked?Math.min(i.width,2048)*Math.min(i.height,2048)*3*(sourceDepth/8):0;
+    const variableBytes=(chunked?scratchBytes:2*inputBytes) + 4*(icc?.byteLength??0) + i.width*i.height*(72 + (hasAlpha?16:0) + (o.observe?25:0) + (!rgb && o.rgbViaPlanar?12:0));
     const estimatedMemoryBytes=32*MIB + Math.ceil(variableBytes*3/2);
     const before=m.HEAPU8.buffer.byteLength;
     const requiredMemoryBytes=Math.max(estimatedMemoryBytes,before);
     if (requiredMemoryBytes>maxMemoryBytes) throw new RangeError(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap ${before} bytes, budget ${maxMemoryBytes} bytes; reduce dimensions or raise maxMemoryBytes (maximum ${MAX_MEMORY_BYTES})`);
     const pointers=[];
+    let callback=0, callbackError;
     const alloc = bytes => {
       const p=m._malloc(bytes.byteLength); if (!p) throw Error('WASM allocation failed');
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
@@ -193,10 +202,29 @@ export async function createEncoder(options = {}) {
         const data=i.data;
         if(icc)m._w_icc(alloc(icc),icc.length);
         m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
-        const channels=data.length/(i.width*i.height);
-        status=data instanceof Float32Array && channels===3
-          ? m._w_rgb(alloc(data),data.length)
-          : m._w_rgb_integer(alloc(data),data.length,sourceDepth,channels);
+        if (chunked) {
+          const scratch=m._malloc(scratchBytes);
+          if (!scratch) throw Error('WASM allocation failed');
+          pointers.push(scratch);
+          callback=m.addFunction((x,y,w,h)=>{
+            if(callbackError)return 1;
+            try {
+              if(w>2048 || h>2048 || w*h*3*(sourceDepth/8)>scratchBytes) throw new RangeError('provideRect request exceeds scratch');
+              const pixels=i.provideRect(x,y,w,h);
+              const valid=sourceDepth===32?pixels instanceof Float32Array:sourceDepth===16?pixels instanceof Uint16Array:pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray;
+              if(!valid || pixels.length!==w*h*3) fail('provideRect must return the matching TypedArray with exactly w*h*3 samples');
+              m.HEAPU8.set(new Uint8Array(pixels.buffer,pixels.byteOffset,pixels.byteLength),scratch);
+              return 0;
+            } catch(error) {sourceFailure.failed=true;callbackError={error};return 1;}
+          },'iiiii');
+          status=m._w_rgb_chunked(callback,scratch,scratchBytes,sourceDepth);
+          if(callbackError)throw callbackError.error;
+        } else {
+          const channels=data.length/(i.width*i.height);
+          status=data instanceof Float32Array && channels===3
+            ? m._w_rgb(alloc(data),data.length)
+            : m._w_rgb_integer(alloc(data),data.length,sourceDepth,channels);
+        }
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
         for (let c=0;c<layouts.length;c++) {
@@ -210,13 +238,19 @@ export async function createEncoder(options = {}) {
       stats={estimatedMemoryBytes,maxMemoryBytes,colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes;
-    } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
+    } finally {if(callback)m.removeFunction(callback);m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
-    try{return run(i,o,true);}catch(error){
-      if(o.iccFallback!=='srgb' || !error.message.startsWith('ICC:'))throw error;
+  const guarded=(i,o,rgb,sourceFailure={})=>{
+    if(active)throw Error('Encoder is already encoding; provideRect must not reenter this instance');
+    active=true;
+    try{return run(i,o,rgb,sourceFailure);}finally{active=false;}
+  };
+  return {encodePlanarYuv:(i,o={})=>guarded(i,o,false),encodeRgb:(i,o={})=>{
+    const sourceFailure={};
+    try{return guarded(i,o,true,sourceFailure);}catch(error){
+      if(sourceFailure.failed || o.iccFallback!=='srgb' || !error?.message?.startsWith('ICC:'))throw error;
       const clean=object=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
-      const bytes=run(clean(i),clean(o),true);
+      const bytes=guarded(clean(i),clean(o),true);
       bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
       return bytes;
     }

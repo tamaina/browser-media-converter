@@ -254,3 +254,122 @@ test('retained WASM heap must fit even when the frame estimate is smaller', asyn
   });
   assert.ok(retained.encodeRgb(rgb(), {maxMemoryBytes:32 * MIB + 65536}).length > 0);
 });
+
+for (const [Type,depth] of [[Uint8Array,8],[Uint8ClampedArray,8],[Uint16Array,16],[Float32Array,32]]) {
+  test(`chunked RGB ${Type.name} matches full-buffer bytes across tile edges`, () => {
+    const width=2057,height=9,data=new Type(width*height*3);
+    for(let i=0;i<data.length;i++)data[i]=depth===32?(i%251)/250:depth===16?(i*257)%65536:i%256;
+    const expected=encoder.encodeRgb({width,height,data});
+    let calls=0;
+    const actual=encoder.encodeRgb({width,height,format:'RGB',depth,provideRect(x,y,w,h){
+      calls++;
+      assert.ok(w<=2048 && h<=2048 && x+w<=width && y+h<=height);
+      // Generate one row-band at a time, never a full-frame temporary.
+      const band=new Type(w*h*3);
+      for(let j=0;j<h;j++)band.set(data.subarray(((y+j)*width+x)*3,((y+j)*width+x+w)*3),j*w*3);
+      return band;
+    }});
+    assert.ok(calls>1);
+    assert.deepEqual([...actual],[...expected]);
+  });
+}
+
+test('chunked source errors release encoder state and preserve thrown values', () => {
+  const input={width:7,height:9,format:'RGB'};
+  const sentinel=new Error('source failed');
+  for(const provideRect of [()=>{throw sentinel;},()=>new Uint8Array(1),()=>new Float32Array(7*9*3),()=>Promise.resolve(new Uint8Array(189)),()=>encoder.encodeRgb(rgb())]) {
+    assert.throws(()=>encoder.encodeRgb({...input,provideRect}));
+    assert.ok(encoder.encodeRgb(rgb()).length>0);
+  }
+  assert.throws(()=>encoder.encodeRgb({...input,provideRect(){throw sentinel;}}),error=>error===sentinel);
+  assert.throws(()=>encoder.encodeRgb({...input,provideRect(){throw null;}}),error=>error===null);
+  for(const extra of [{data:new Uint8Array(189)},{format:'RGBA'},{depth:12},{provideRect:null}]) {
+    assert.throws(()=>encoder.encodeRgb({...input,provideRect:()=>new Uint8Array(189),...extra}),TypeError);
+  }
+});
+
+test('chunked memory estimate reserves scratch instead of two full input copies', async () => {
+  const e=await createTestEncoder();
+  const width=8,height=8,data=new Uint8Array(width*height*3);
+  e.encodeRgb({width,height,data});
+  const fullEstimate=e.stats.estimatedMemoryBytes;
+  const scratch=data.byteLength;
+  const estimate=32*1024*1024+Math.ceil((scratch+width*height*72)*1.5);
+  const input={width,height,format:'RGB',provideRect:()=>data};
+  assert.throws(()=>e.encodeRgb(input,{maxMemoryBytes:estimate-1}),RangeError);
+  e.encodeRgb(input,{maxMemoryBytes:estimate});
+  assert.equal(e.stats.estimatedMemoryBytes,estimate);
+  assert.equal(fullEstimate-estimate,scratch*1.5);
+});
+
+test('chunked RGB can generate vertical bands without retaining a JS source image', () => {
+  const width=9,height=2057;
+  const sample=(x,y,c)=>(x*17+y*11+c*67)&255;
+  const data=Uint8Array.from({length:width*height*3},(_,i)=>sample(Math.floor(i/3)%width,Math.floor(i/(width*3)),i%3));
+  const expected=encoder.encodeRgb({width,height,data});
+  let largest=0;
+  const actual=encoder.encodeRgb({width,height,format:'RGB',provideRect(x,y,w,h){
+    largest=Math.max(largest,w*h);
+    const band=new Uint8Array(w*h*3);
+    for(let row=0;row<h;row++)for(let col=0;col<w;col++)for(let c=0;c<3;c++)band[(row*w+col)*3+c]=sample(x+col,y+row,c);
+    return band;
+  }});
+  assert.ok(largest<width*height);
+  assert.deepEqual([...actual],[...expected]);
+});
+
+test('chunked RGB accepts subarray views with nonzero byte offsets', () => {
+  const width=23,height=17;
+  const storage=Uint8Array.from({length:width*height*3+33},(_,i)=>i%256);
+  const data=storage.subarray(33);
+  const expected=encoder.encodeRgb({width,height,data});
+  const actual=encoder.encodeRgb({width,height,format:'RGB',provideRect(x,y,w,h){
+    assert.equal(x,0);assert.equal(w,width);
+    return data.subarray(y*width*3,(y+h)*width*3);
+  }});
+  assert.deepEqual([...actual],[...expected]);
+});
+
+test('chunked RGB rejects HDR before calling the source', () => {
+  let calls=0;
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',transfer:'pq',provideRect(){calls++;return new Uint8Array(3);}}),/HDR/);
+  assert.equal(calls,0);
+});
+
+test('chunked RGB shares CICP colour and output-depth options', () => {
+  const width=17,height=13,data=Float32Array.from({length:width*height*3},(_,i)=>(i%97)/96);
+  const input={width,height,colorMetadata:cicp()};
+  const options={bitDepth:10,observe:true};
+  const full=encoder.encodeRgb({...input,data},options);
+  const chunked=encoder.encodeRgb({...input,format:'RGB',depth:32,provideRect:()=>data},options);
+  assert.deepEqual([...chunked],[...full]);
+  assert.deepEqual(chunked.colorResolved,full.colorResolved);
+});
+
+test('chunked RGB shares ICC interpretation and header policy', () => {
+  // Minimal self-contained matrix/TRC RGB ICC; no external fixture required.
+  const fixed=v=>Math.round(v*65536);
+  const xyz=values=>{const b=new Uint8Array(20),v=new DataView(b.buffer);b.set(new TextEncoder().encode('XYZ '));values.forEach((n,i)=>v.setInt32(8+i*4,fixed(n)));return b;};
+  const trc=new Uint8Array(14);trc.set(new TextEncoder().encode('curv'));new DataView(trc.buffer).setUint32(8,1);new DataView(trc.buffer).setUint16(12,Math.round(2.2*256));
+  const tags=[['wtpt',xyz([0.9642,1,0.8249])],['rXYZ',xyz([0.4361,0.2225,0.0139])],['gXYZ',xyz([0.3851,0.7169,0.0971])],['bXYZ',xyz([0.1431,0.0606,0.7142])],['rTRC',trc],['gTRC',trc],['bTRC',trc]];
+  const base=132+12*tags.length;
+  const icc=new Uint8Array(base+tags.reduce((n,[,b])=>n+Math.ceil(b.length/4)*4,0)),v=new DataView(icc.buffer);
+  v.setUint32(0,icc.length);v.setUint32(8,0x04300000);
+  icc.set(new TextEncoder().encode('mntrRGB XYZ '),12);icc.set(new TextEncoder().encode('acsp'),36);
+  [0.9642,1,0.8249].forEach((n,i)=>v.setInt32(68+i*4,fixed(n)));
+  v.setUint32(128,tags.length);
+  let offset=base;
+  tags.forEach(([name,b],i)=>{const at=132+i*12;icc.set(new TextEncoder().encode(name),at);v.setUint32(at+4,offset);v.setUint32(at+8,b.length);icc.set(b,offset);offset+=Math.ceil(b.length/4)*4;});
+  const width=17,height=13,data=Uint8Array.from({length:width*height*3},(_,i)=>i%256);
+  const full=encoder.encodeRgb({width,height,data,icc},{iccHeader:'exact'});
+  const chunked=encoder.encodeRgb({width,height,format:'RGB',provideRect:()=>data,icc},{iccHeader:'exact'});
+  assert.deepEqual([...chunked],[...full]);
+  assert.deepEqual(chunked.colorResolved,full.colorResolved);
+});
+
+
+test('ICC fallback never hides a provider exception', () => {
+  const error=new Error('ICC: provider failed');
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',provideRect(){throw error;}},{iccFallback:'srgb'}),value=>value===error);
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',provideRect(){throw null;}},{iccFallback:'srgb'}),value=>value===null);
+});
