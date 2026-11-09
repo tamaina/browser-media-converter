@@ -1,0 +1,17 @@
+[package]
+name = "jxl-planar-session"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT"
+
+[dependencies]
+# Pinned: LUT ICC profiles; 0.9.2 includes the upstream A2B0 fallback.
+moxcms = { version = "=0.9.2", default-features = false, features = ["lut", "extended_range"] }
+
+[lib]
+path = "rust/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 2

@@ -1,94 +1,85 @@
 # @browser-mc/libjxl-wasm
 
-Private, experimental. Everything in `experiments/jxl-planar-xyb` that depends on
-libjxl: the pinned libjxl v0.11.1 checkout and its patches, the native and
-Emscripten builds, the C++ bridge, the Wasm exports and the `createEncoder` JS API.
-It is not published to npm and has no `build:package`/`test:package` scripts,
-so the root `pnpm build` / `pnpm test` do not need emsdk or Chrome.
+Private package containing patched libjxl v0.11.1, a Rust planar session/CMS,
+a C++ C ABI bridge, and the `createEncoder` TypeScript API. No package dependencies
+or pnpm install are needed. Root workspace builds do not require Emscripten.
 
-## Split of roles
+## Layout
 
-| Here (`packages/libjxl-wasm`) | `experiments/jxl-planar-xyb` |
-| --- | --- |
-| libjxl clone, `patches/libjxl-xyb.patch` (planar XYB input only; see below) | Rust planar session `src/lib.rs`: validation, owned planes, YUV→XYB kernel |
-| `src/bridge.cc`: JxlEncoder calls, installs the Rust CMS (`JxlEncoderSetCms`) | Rust CMS `src/cms.rs` (stock `JxlCmsInterface`; moxcms `=0.9.2` for LUT ICC); `build.rs` compiles `src/bridge.cc` from here into the Rust cdylib |
-| `src/planar_session.h`: the C ABI the Rust session implements | oracle, Python/Chrome verification suites (Round 10–12, real10) |
-| `src/wasm_entry.cc`, `src/api.mjs`: Emscripten exports and JS API | |
-| `tools/decode_float.cc` (stock system libjxl decoder), `tools/tail_guard.cc`, `tools/jpeg-info.cc` (native JPEG smoke/header verifier) | |
+```text
+Cargo.toml / Cargo.lock / build.rs
+src/api.ts                 public API and types
+rust/                      planar session, CMS, Rust unit tests
+cpp/                       bridge.cc, wasm_entry.cc, planar_session.h
+patches/                   pinned libjxl patches
+scripts/                   native and Wasm builds
+tools/                     native decoder and guard-page tool
+test/api.test.ts           API tests against the real Wasm codec
+build/                     ignored libjxl checkout, caches, compiled artifacts
+target/                    ignored Cargo outputs
+```
 
-The dependency is two-way at link time: the Rust session calls `hdr_jxl_encode`
-/ `bridge_*` in `bridge.cc`, and `bridge.cc` / `wasm_entry.cc` call the Rust
-`planar_*` / `planar_cms_*` ABI. The Wasm link and `tail-guard` therefore take a
-prebuilt Rust staticlib.
+`patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
+SIMD kernel. `patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`:
+encoder builds use a rejecting default CMS stub and the bridge installs the
+Rust CMS with `JxlEncoderSetCms`. The CMS uses moxcms pinned to `=0.9.2` for
+LUT ICC profiles. Only Highway and Brotli submodules are needed; populated
+source trees are reused without a network fetch.
 
-## Patch inventory (libjxl v0.11.1, pin unchanged)
+## Build and test
 
-`patches/libjxl-xyb.patch` (303 lines; 473 before the Rust CMS) only adds input
-plumbing; the stock CMS interface is unchanged:
-
-| File | Kept hunk |
-| --- | --- |
-| `lib/include/jxl/encode.h` | `JxlExperimentalYuv*` structs; chunked-source fields (borrowed, YUV, fill_row, observe_xyb, timing) |
-| `lib/jxl/enc_frame.cc` | chunked fused YUV / fill_row / observe dispatch |
-| `lib/jxl/enc_xyb.cc`, `enc_xyb.h` | fused YUV→XYB SIMD kernel (`ExperimentalYuvToXYB`, `SourceTo709`, `FoldSourcePrimaries`) |
-| `lib/jxl/encode_internal.h` | skip the full-frame copy for borrowed sources |
-
-Removed in favour of `experiments/jxl-planar-xyb/src/cms.rs`: the source-ICC
-marking/header override in `color_encoding_internal.h` and `encode.cc`
-(`JxlEncoderExperimentalWantICC` / `JxlEncoderExperimentalICCHeader`), the
-`source_icc.h` matrix/TRC path and the built-in gamma/709 path in `ToXYB`, and
-the whole `skcms-xyb.patch` (XYZ-PCS A2B scaling; LUT profiles now go to moxcms).
-The Rust CMS is self-contained (`set_fields_from_icc` and PQ/HLG/DCI included):
-`patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`. Both encoder
-builds enable it and disable skcms: CMake skips skcms/LCMS2 discovery and compiles
-only a tiny static `jxl_cms` stub whose `JxlGetDefaultCms` rejects all profiles
-and transforms. This replaces the former `wasm_entry.cc` stub. Native
-`libjxl.so` embeds the stub and has no `libjxl_cms.so` or LCMS2 dependency.
-For pixel input, the bridge installs the Rust CMS before encoding. Only Highway and Brotli
-submodules are initialized; neither skcms nor LCMS2 is fetched or compiled.
-
-The separate `build/native-reference` build keeps stock libjxl CMS code linked
-to **system LCMS2**, solely for `djxl` regression comparisons that request
-original-profile, linear BT.709 and sRGB output. It does not compile LCMS2.
-`build/native/tools/djxl` is a wrapper that selects this reference library even
-when the encoder directory is in `LD_LIBRARY_PATH`. This reference decoder is
-not linked into either encoder.
-
-## Build
-
-Run builds sequentially. Native C++ builds use up to six jobs
-(`LIBJXL_BUILD_JOBS` overrides this); Rust and Emscripten builds use one.
-Temporary files respect an existing `TMPDIR` (default `build/tmp`); caches stay
-in ignored build directories (`$TMPDIR/em-cache` for Emscripten).
+Run from this package, sequentially. Emscripten defaults to
+`~/emsdk/emsdk_env.sh` (`EMSDK_ENV` overrides it); `CMAKE` overrides CMake.
+Emscripten's `--emit-tsd` also requires an existing `tsc` executable on `PATH`.
+Add an installed TypeScript toolchain to `PATH`; there is no need to install
+dependencies in this package. Node executes the API and tests without `tsc`.
 
 ```sh
-bash scripts/build-native.sh   # build/native/lib/libjxl.so, build/native/tools/djxl,
-                               # build/decode-float, build/jpeg-info
-# Native Rust side + tail guard (scripts/build-tail-guard.sh with a host staticlib)
-bash ../../experiments/jxl-planar-xyb/build.sh
-# Wasm: builds the Rust session staticlib, then runs scripts/build-wasm.sh
-bash ../../experiments/jxl-planar-xyb/build-wasm.sh   # build/wasm/codec.{mjs,wasm}, sizes.json
+export TMPDIR="$(cd ../.. && pwd)/build/tmp"
+export EM_CACHE="$PWD/build/em-cache"
+export CARGO_TARGET_DIR="$PWD/target"
+export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
+# Use the host compiler rather than an ambient cc wrapper.
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc
+mkdir -p "$TMPDIR" "$EM_CACHE"
+cargo test --lib --locked --jobs 1
+bash scripts/build-wasm.sh
+node --test --test-isolation=none --test-concurrency=1 test/api.test.ts
+```
+
+The Wasm entry builds the Rust staticlib, patched libjxl, then links
+`build/wasm/codec.mjs` and `codec.wasm` using `em++ --emit-tsd build/wasm/codec.d.ts`.
+An identical `codec.d.mts` accompanies the `.mjs` file for TypeScript module
+resolution. It retains the `extern "C"` ABI, `EXPORTED_FUNCTIONS`, and ESM `createModule`
+factory. No Embind is used. `sizes.json` records raw and gzip sizes.
+
+Node 26 runs `src/api.ts` and the tests with built-in type stripping. The
+package exports the TypeScript source and public types together; browser
+consumers need a TypeScript-aware bundler. `./codec.mjs` exports the generated
+module with its generated declaration. Keep the codec runtime and generated declarations together.
+No hand-maintained low-level `_w_*` declarations are used.
+
+For optional native tools, run `bash scripts/build-native.sh` (one job by
+default). This builds the patched encoder library, a separate reference decoder
+using system LCMS2, and `build/decode-float` plus `build/jpeg-info` (required by the JPEG tests). To link the native Rust cdylib,
+set `JXL_INCLUDE="$PWD/build/libjxl/lib/include"` and
+`JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"` before `cargo build --locked --jobs 1`.
+Without `JXL_INCLUDE`, Cargo builds the standalone Rust session/CMS; C ABI calls
+are resolved by the final C++ link. For the optional guard-page tool:
+
+```sh
+PLANAR_SESSION_ONLY=1 cargo rustc --lib --release --locked --jobs 1 --crate-type staticlib
+PLANAR_SESSION_LIB="$CARGO_TARGET_DIR/release/libjxl_planar_session.a" bash scripts/build-tail-guard.sh
 ./build/tail-guard
 ```
 
-`scripts/build-wasm.sh` alone needs `PLANAR_SESSION_LIB` (a
-`wasm32-unknown-emscripten` staticlib implementing `src/planar_session.h`) and
-emsdk (`EMSDK_ENV`, default `~/emsdk/emsdk_env.sh`). `CMAKE` overrides cmake.
-The native encoder links system Brotli. `decode-float` links the unmodified
-system `libjxl.so.0.11` and its system CMS as a second independent decoder;
-its RPATH takes precedence over the encoder's `LD_LIBRARY_PATH`.
-System LCMS2 is needed only by the reference decoders and Python ICC verifiers.
-
 ## Use
 
-```js
-import {createEncoder} from '@browser-mc/libjxl-wasm'; // src/api.mjs
+```ts
+import {createEncoder} from '@browser-mc/libjxl-wasm';
 const encoder = await createEncoder();
+const bytes = encoder.encodeRgb({width: 1, height: 1, data: new Uint8Array([64, 128, 192])});
 ```
-
-`src/api.mjs` imports `../build/wasm/codec.mjs`, so the package directory must be
-served as-is. The experiment's test servers map `/libjxl-wasm/` to this directory.
-API and verification details: `experiments/jxl-planar-xyb/WASM.md`.
 
 ## HDR base
 
@@ -112,11 +103,6 @@ Default `validation: 'clip'` clips reconstructed RGB to [0,1] for HDR as for SDR
 and emits a policy warning without an additional pixel scan. `strict` rejects
 out-of-range values. `masteringDisplay` and `contentLightLevel` produce warnings
 and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurposed.
-
-`node wasm/hdr-test.mjs` from `experiments/jxl-planar-xyb` verifies native/WASM
-XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
-and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
-`build/hdr/numeric.json`. **Real HDR display output is unverified.**
 
 ### Straight alpha
 
@@ -175,7 +161,7 @@ limits embedded ICC JPEGs: libjxl's internal JPEG parser uses the default CMS,
 not the encoder's installed CMS, so such inputs can be rejected. There is no
 silent profile stripping or pixel fallback. Planar/RGB colour paths are unchanged.
 
-`node --test --test-isolation=none --test-concurrency=1 test/api.test.mjs`
+`node --test --test-isolation=none --test-concurrency=1 test/api.test.ts`
 (from the package directory, after native and WASM builds) covers baseline,
 progressive, grayscale, EXIF orientation 6 and XMP JPEGs, exact reconstructed
 bytes, native header inspection (non-XYB/orientation), corrupt input, option
