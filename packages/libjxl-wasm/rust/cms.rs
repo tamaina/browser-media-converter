@@ -9,7 +9,7 @@
 //! * enum input (no ICC; transfer from `color_encoding`, never from an ICC):
 //!   linear / sRGB / BT.709 / pure gamma with any white point and primaries,
 //!   using the same float approximations as the fused YUV->XYB kernel;
-//!   DCI (gamma 2.6) and, native only, PQ / HLG as libjxl's default CMS does
+//!   DCI (gamma 2.6) and PQ / HLG as libjxl's default CMS does
 //!   (EOTF scaled by 10000 / intensity target; HLG inverse OETF + OOTF).
 //! `set_fields_from_icc` is a Rust port of libjxl's skcms variant (below), so
 //! no C CMS (skcms / LCMS2) is used; the Wasm build does not link one.
@@ -853,6 +853,8 @@ fn write_error(text: &str, out: *mut c_char, n: usize) {
 }
 /// Creates the per-encode CMS context. `icc` may be null (enum input).
 /// Returns null and writes `error` if the source ICC is rejected.
+/// catch_unwind contains native parser panics only; Wasm panic=abort traps and
+/// the JS owner must discard the entire instance. CMS callbacks must not panic.
 /// `path` reports 1 matrix/TRC, 2 LUT (moxcms), 3 gray kTRC.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn planar_cms_create(icc: *const u8, size: usize, mode: i32,
@@ -862,6 +864,10 @@ pub unsafe extern "C" fn planar_cms_create(icc: *const u8, size: usize, mode: i3
         if !icc.is_null() && size > 0 {
             let bytes = unsafe { std::slice::from_raw_parts(icc, size) }.to_vec();
             let inspected = inspect(&bytes).map_err(|e| format!("ICC: {e}"))?;
+            if tag_data(&bytes, b"cicp").is_some_and(|t|
+                t.len() >= 12 && &t[..4] == b"cicp" && matches!(t[9], 16 | 18)) {
+                return Err("ICC: HDR PQ/HLG CICP profiles are unsupported".into());
+            }
             if inspected.gray && mode > 1 { return Err("ICC: Gray profiles cannot select an RGB header target".into()); }
             let kind = match inspected.matrix {
                 Some(m) => SourceKind::Matrix(Arc::new(m)),
@@ -963,6 +969,34 @@ mod tests {
         let n = out.len() as u32;
         out[0..4].copy_from_slice(&n.to_be_bytes());
         out
+    }
+    // Deliberately inconsistent, structurally valid RGB matrix/TRC ICC fixture:
+    // sRGB curves and P3 colorants, but a PQ/HLG CICP tag.
+    fn hdr_cicp_fixture(tf: u8) -> Vec<u8> {
+        let base = p3_matrix_profile();
+        let signatures = [b"wtpt", b"chad", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC"];
+        let mut tags: Vec<(&[u8; 4], Vec<u8>)> = signatures.iter()
+            .map(|sig| (*sig, tag_data(&base, sig).unwrap().to_vec())).collect();
+        tags.push((b"cicp", vec![b'c', b'i', b'c', b'p', 0, 0, 0, 0, 12, tf, 0, 1]));
+        let mut icc = profile(&tags);
+        icc[4..128].copy_from_slice(&base[4..128]);
+        icc
+    }
+    #[test]
+    fn hdr_cicp_fixture_rejects_header_curve_mismatch() {
+        for tf in [16, 18] {
+            let icc = hdr_cicp_fixture(tf);
+            let inspected = inspect(&icc).unwrap();
+            let matrix = inspected.matrix.as_ref().unwrap();
+            let described = describe(&icc, false, Some(matrix)).unwrap();
+            assert_eq!(described.transfer_function, i32::from(tf));
+            let mut error = [0 as c_char; 256];
+            let ctx = unsafe { planar_cms_create(icc.as_ptr(), icc.len(), 0, error.as_mut_ptr(), error.len()) };
+            assert!(ctx.is_null());
+            assert!(unsafe { std::ffi::CStr::from_ptr(error.as_ptr()) }.to_str().unwrap().contains("ICC: HDR PQ/HLG"));
+            // Actual pixel math uses the ICC sRGB TRC, not PQ/HLG.
+            assert!((matrix.curves[0].eval(0.5) - 0.214).abs() < 0.001);
+        }
     }
     #[test]
     fn a2b0_only_lut_uses_upstream_fallback() {

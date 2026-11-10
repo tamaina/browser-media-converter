@@ -29,19 +29,27 @@ source trees are reused without a network fetch.
 ## Build and test
 
 Run from this package, sequentially. Emscripten defaults to
-`~/emsdk/emsdk_env.sh` (`EMSDK_ENV` overrides it); `CMAKE` overrides CMake.
+`~/emsdk/emsdk_env.sh` (`EMSDK_ENV` overrides it); CMake defaults to `cmake`
+on PATH, with `CMAKE` as an override. Rust (edition 2024) and Emscripten versions
+are not yet pinned; use a compatible installed toolchain.
 Emscripten's `--emit-tsd` also requires an existing `tsc` executable on `PATH`.
 Add an installed TypeScript toolchain to `PATH`; there is no need to install
 dependencies in this package. Node executes the API and tests without `tsc`.
 
 ```sh
-export TMPDIR="$(cd ../.. && pwd)/build/tmp"
+export TMPDIR="$PWD/build/tmp"
+export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache"
+export npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
 export EM_CACHE="$PWD/build/em-cache"
-export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_TARGET_DIR="$PWD/build/target"
 export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 # Use the host compiler rather than an ambient cc wrapper.
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc
-mkdir -p "$TMPDIR" "$EM_CACHE"
+mkdir -p "$TMPDIR" "$EM_CACHE" "$XDG_CACHE_HOME" "$npm_config_cache" "$EMCC_TEMP_DIR"
+bash scripts/build-native.sh
+export JXL_INCLUDE="$PWD/build/libjxl/lib/include"
+export JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"
+export LD_LIBRARY_PATH="$PWD/build/native/lib:${LD_LIBRARY_PATH:-}"
 cargo test --lib --locked --jobs 1
 bash scripts/build-wasm.sh
 node --test --test-isolation=none --test-concurrency=1 test/api.test.ts
@@ -57,14 +65,21 @@ Node 26 runs `src/api.ts` and the tests with built-in type stripping. The
 package exports the TypeScript source and public types together; browser
 consumers need a TypeScript-aware bundler. `./codec.mjs` exports the generated
 module with its generated declaration. Keep the codec runtime and generated declarations together.
-No hand-maintained low-level `_w_*` declarations are used.
+`typecheck/codec.d.ts` supplies ABI declarations for artifact-free checking;
+keep its signatures aligned with Emscripten's generated declarations.
+`pnpm typecheck:package` checks `src/` without Emscripten, native libjxl or a
+Wasm binary. `test:package` runs that static check, so the main-push release
+workflow includes it. There is no PR test workflow. Real Wasm API tests remain
+local (`pnpm test:api`) and require a rebuilt codec; release CI does not build
+or execute that codec.
 
 For optional native tools, run `bash scripts/build-native.sh` (one job by
 default). This builds the patched encoder library, a separate reference decoder
 using system LCMS2, and `build/decode-float`. To link the native Rust cdylib,
 set `JXL_INCLUDE="$PWD/build/libjxl/lib/include"` and
 `JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"` before `cargo build --locked --jobs 1`.
-Without `JXL_INCLUDE`, Cargo builds the standalone Rust session/CMS; C ABI calls
+`JXL_LIBRARY` is required when `JXL_INCLUDE` is set; never point it at an
+unpatched system library. Without `JXL_INCLUDE`, Cargo builds the standalone Rust session/CMS; C ABI calls
 are resolved by the final C++ link. For the optional guard-page tool:
 
 ```sh
@@ -79,7 +94,33 @@ PLANAR_SESSION_LIB="$CARGO_TARGET_DIR/release/libjxl_planar_session.a" bash scri
 import {createEncoder} from '@browser-mc/libjxl-wasm';
 const encoder = await createEncoder();
 const bytes = encoder.encodeRgb({width: 1, height: 1, data: new Uint8Array([64, 128, 192])});
+encoder.dispose();
 ```
+
+The synchronous codec supports browser windows and Web Workers (`web,worker`);
+use a Worker for large images. Each encoder owns one Wasm instance. `dispose()`
+is idempotent, releases live output/profile references and drops the instance;
+subsequent encodes reject. Wasm linear memory cannot shrink, so peak heap space
+is reclaimed only when the instance becomes garbage-collectable.
+
+Wasm is compiled with Rust `panic=abort`. Any exception escaping a module call
+poisons the encoder: cleanup calls are skipped and future encodes reject. Create
+a new encoder after such a failure. Native `catch_unwind` wrappers do not make
+Wasm panics recoverable, and do not contain panics in CMS callbacks.
+`iccFallback: 'srgb'` handles reported `ICC:` validation/compatibility errors
+only; it never retries after a Wasm trap. `stats` describes the last successful
+encode until the next attempt, which resets it (including on validation failure).
+
+RGB samples are already decoded and full-range; YUV matrix/range/siting metadata
+does not change them. Resolved RGB reports `matrix: 'rgb'`, `fullRange: true`,
+and no chroma siting. CICP 5 / `gamma28` / `bt470bg` transfer is rejected because
+gamma 2.8 is unsupported. `bt470bg` primaries and YUV matrix remain supported.
+
+RGB output defaults to float32. Explicit `bitDepth: 'preserve'` selects an 8-bit
+header for U8/U8Clamped input and float32 for Float32 input. U16 input also uses
+a float32 header: a 16-bit output header is not currently supported. Input U16
+samples retain their full normalization precision. These depth settings select
+decoder output defaults; XYB colour encoding is lossy according to `distance`.
 
 ## HDR base
 
@@ -87,7 +128,8 @@ Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
 `transfer: 'pq' | 'hlg'` (aliases `smpte2084` / `arib-std-b67`). It uses the
 non-fused row/CMS path. 8-bit HDR, BT.709 matrices, P3 HDR and `encodeRgb` HDR
 are rejected (including an 8-bit output override; float32 output remains available). HDR is recorded with PQ/HLG enum encoding; HDR ICC input is out
-of scope. HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
+of scope. ICC profiles carrying PQ/HLG CICP tags are rejected with an `ICC:`
+error (or explicitly fall back to untagged sRGB via `iccFallback`). HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
 
 `intensityTargetNits` on input or encode options (options win) is variable for
 HDR and SDR. Defaults are PQ 10000, HLG 1000, SDR 255 nits. Values must be
