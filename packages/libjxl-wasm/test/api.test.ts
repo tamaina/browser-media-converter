@@ -1,29 +1,33 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createEncoder} from '../src/api.mjs';
+import {createEncoder} from '@browser-mc/libjxl-wasm';
+import type {ColorOptions, EncodeOptions, Encoded, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
+// Count copy/encode exports so preflight tests can prove nothing reached WASM.
 let wasmCalls = 0;
 const createTestEncoder = (growPages = 0) => createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => {
-    if (growPages) instance.exports.memory.grow(growPages);
-    const exports = {...instance.exports};
+    if (growPages) (instance.exports.memory as WebAssembly.Memory).grow(growPages);
+    const exports: WebAssembly.Exports = {...instance.exports};
     for (const key of ['malloc', 'w_options', 'w_init', 'w_plane', 'w_rgb', 'w_rgb_integer', 'w_encode']) {
-      exports[key] = (...args) => { wasmCalls++; return instance.exports[key](...args); };
+      const original = instance.exports[key] as (...args: number[]) => number;
+      exports[key] = (...args: number[]) => { wasmCalls++; return original(...args); };
     }
-    receive({exports}, module);
+    receive({exports} as WebAssembly.Instance, module);
   });
   return {};
 }});
 const encoder = await createTestEncoder();
-const rgb = (extra = {}) => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
-const cicp = (transfer = 8) => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
+// Extra fields deliberately allow malformed inputs to exercise runtime validation.
+const rgb = (extra: Record<string, unknown> = {}): RgbInput => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
+const cicp = (transfer: number | string = 8): Extract<NonNullable<ColorOptions['colorMetadata']>, {type: 'cicp'}> => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
 
-const planar = (format, depth = 8, transfer = 'bt709') => {
+const planar = (format: PlanarInput['format'], depth = 8, transfer: ColorOptions['transfer'] = 'bt709'): PlanarInput => {
   const bytes = depth === 8 ? 1 : 2;
-  const plane = value => {
+  const plane = (value: number) => {
     const data = new Uint8Array(bytes);
     new DataView(data.buffer).setUint8(0, value & 255);
     if (bytes === 2) data[1] = value >> 8;
@@ -39,11 +43,11 @@ const planar = (format, depth = 8, transfer = 'bt709') => {
 for (const [format, depth, transfer] of [
   ['I420A', 8, 'bt709'], ['I444A', 8, 'bt709'],
   ['I444AP10', 10, 'pq'], ['I420AP12', 12, 'hlg']
-]) {
+] as const) {
   test(`${format} ${transfer} rejects sparse alpha planes`, () => {
     for (const makeSparse of [
-      planes => { planes.length = 3; planes.length = 4; },
-      planes => { delete planes[3]; }
+      (planes: PlanarInput['planes']) => { planes.length = 3; planes.length = 4; },
+      (planes: PlanarInput['planes']) => { delete planes[3]; }
     ]) {
       const input = planar(format, depth, transfer);
       makeSparse(input.planes);
@@ -62,7 +66,7 @@ for (const [format, depth, transfer] of [
 }
 
 test('every required plane rejects holes and non-object descriptors', () => {
-  for (const format of ['I444', 'I444A']) {
+  for (const format of ['I444', 'I444A'] as const) {
     const count = format === 'I444A' ? 4 : 3;
     for (let c = 0; c < count; c++) {
       for (const missing of [true, false]) {
@@ -70,7 +74,7 @@ test('every required plane rejects holes and non-object descriptors', () => {
           const input = planar(format);
           input.planes.length = count;
           if (missing) delete input.planes[c];
-          else input.planes[c] = value;
+          else (input.planes as unknown[])[c] = value;
           assert.throws(() => encoder.encodePlanarYuv(input), {
             name:'TypeError', message:`plane ${c} must be an object`
           });
@@ -128,6 +132,7 @@ test('CICP transfer 5 and gamma28 reject identically instead of using gamma2.4',
   });
   assert.equal(errors[0], errors[1]);
   assert.match(errors[0], /unsupported SDR transfer: gamma28/);
+  // @ts-expect-error Intentionally unsupported transfer must also reject at runtime.
   assert.throws(() => encoder.encodeRgb(rgb(), {transfer:'gamma28'}), /gamma28/);
 });
 
@@ -151,7 +156,7 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
     [new Uint8Array([17, 128, 255]), 8, 'u8', 255],
     [new Uint8ClampedArray([17, 128, 255]), 8, 'u8', 255],
     [new Uint16Array([1023, 32768, 65535]), 16, 'u16le-lsb', 65535]
-  ]) {
+  ] as const) {
     const expected = encoder.encodeRgb(rgb({data:Float32Array.from(data, v => v / max)}), {bitDepth:10});
     for (const declarations of [{}, {depth, bitDepth:depth, storage}]) {
       const actual = encoder.encodeRgb(rgb({data, ...declarations}), {bitDepth:10});
@@ -164,35 +169,41 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
 
 const MIB = 1024 * 1024;
 const ceiling = 1984 * MIB;
-function rejectsBeforeWasm(call, expected) {
+function rejectsBeforeWasm(call: () => unknown, expected: RegExp | {name?: string; message?: string | RegExp}) {
   const before = wasmCalls;
   assert.throws(call, expected);
   assert.equal(wasmCalls, before, 'preflight must precede WASM calls and input copies');
 }
 
 test('RGB and planar budgets accept the boundary and reject one byte below it', () => {
-  for (const [encode, input] of [
-    [encoder.encodeRgb, rgb()],
-    [encoder.encodeRgb, rgb({data:new Uint16Array([100, 200, 300, 65535])})],
-    [encoder.encodePlanarYuv, planar('I444A')],
-    [encoder.encodePlanarYuv, planar('I420AP10', 10, 'pq')]
-  ]) {
-    assert.ok(encode(input).length > 0);
+  const cases: ((options?: EncodeOptions) => Encoded)[] = [
+    options => encoder.encodeRgb(rgb(), options),
+    options => encoder.encodeRgb(rgb({data:new Uint16Array([100, 200, 300, 65535])}), options),
+    options => encoder.encodePlanarYuv(planar('I444A'), options),
+    options => encoder.encodePlanarYuv(planar('I420AP10', 10, 'pq'), options)
+  ];
+  for (const encode of cases) {
+    assert.ok(encode().length > 0);
     const {estimatedMemoryBytes, heapAfter, maxMemoryBytes} = encoder.stats;
     assert.equal(maxMemoryBytes, 512 * MIB);
-    const budget = Math.max(estimatedMemoryBytes, heapAfter);
-    rejectsBeforeWasm(() => encode(input, {maxMemoryBytes:budget - 1}), {
+    const budget = Math.max(estimatedMemoryBytes!, heapAfter as number);
+    rejectsBeforeWasm(() => encode({maxMemoryBytes:budget - 1}), {
       name:'RangeError', message:new RegExp(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap \\d+ bytes, budget ${budget - 1} bytes`)
     });
-    assert.ok(encode(input, {maxMemoryBytes:budget}).length > 0);
+    assert.ok(encode({maxMemoryBytes:budget}).length > 0);
     assert.equal(encoder.stats.maxMemoryBytes, budget);
   }
 });
 
 test('budget validation rejects unsafe values and accepts the wasm32 ceiling', () => {
-  for (const encode of [encoder.encodeRgb, (i, o) => encoder.encodePlanarYuv(planar('I444A'), o)]) {
+  const encoders: ((input: RgbInput, options?: EncodeOptions) => Encoded)[] = [
+    encoder.encodeRgb,
+    (_input, options) => encoder.encodePlanarYuv(planar('I444A'), options)
+  ];
+  for (const encode of encoders) {
     for (const maxMemoryBytes of [0, -1, 1.5, NaN, Infinity, -Infinity, '536870912', null, ceiling + 1, 2**32, Number.MAX_SAFE_INTEGER]) {
-      rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes}), /maxMemoryBytes must be a safe integer/);
+      // Non-number values deliberately exercise runtime validation.
+      rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes} as EncodeOptions), /maxMemoryBytes must be a safe integer/);
     }
     rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes:1}), /WASM memory budget exceeded/);
     assert.ok(encode(rgb(), {maxMemoryBytes:ceiling}).length > 0);
@@ -207,7 +218,7 @@ test('estimate includes typed input, alpha, observation and RGB staging extras',
       assert.equal(encoder.stats.estimatedMemoryBytes, 32 * MIB + Math.ceil(variable * 3 / 2));
     }
   }
-  const input = {width:2, height:3, format:'I444A', planes:Array.from({length:4}, () => ({data:new Uint8Array(32), offset:3, stride:7}))};
+  const input: PlanarInput = {width:2, height:3, format:'I444A', planes:Array.from({length:4}, () => ({data:new Uint8Array(32), offset:3, stride:7}))};
   // Each copied span is (3 - 1) * 7 + 2 = 16, excluding the prefix/tail.
   for (const rgbViaPlanar of [false, true]) {
     encoder.encodePlanarYuv(input, {rgbViaPlanar});
@@ -234,7 +245,7 @@ test('existing dimension and source-span limits remain independent of the budget
 
 
 test('odd NV12 uses the interleaved chroma span in its reservation', () => {
-  const input = {width:3, height:3, format:'NV12', planes:[
+  const input: PlanarInput = {width:3, height:3, format:'NV12', planes:[
     {data:new Uint8Array(9).fill(128), stride:3},
     {data:new Uint8Array(8).fill(128), stride:4}
   ]};

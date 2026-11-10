@@ -14,7 +14,10 @@ fetch_libjxl() {
   fi
   [[ $(git -C build/libjxl rev-parse HEAD) == "$LIBJXL_REVISION" ]]
   # Highway: both builds; Brotli: Wasm (native uses system Brotli).
-  git -C build/libjxl submodule update --init --depth 1 third_party/highway third_party/brotli
+  # Skip network submodule fetch when trees are already populated (offline/seeded worktrees).
+  if [[ ! -f build/libjxl/third_party/highway/CMakeLists.txt || ! -f build/libjxl/third_party/brotli/c/include/brotli/decode.h ]]; then
+    git -C build/libjxl submodule update --init --depth 1 third_party/highway third_party/brotli
+  fi
   apply_once build/libjxl "$PWD/patches/libjxl-xyb.patch"
   apply_once build/libjxl "$PWD/patches/libjxl-external-cms.patch"
 }

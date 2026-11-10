@@ -3,14 +3,17 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let host = env::var("HOST").unwrap();
     println!("cargo:rerun-if-env-changed=PLANAR_SESSION_ONLY");
-    if target == "wasm32-unknown-emscripten" || env::var_os("PLANAR_SESSION_ONLY").is_some() {
+    println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
+    println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
+    println!("cargo:rerun-if-env-changed=LIBJXL_WASM_DIR");
+    if target == "wasm32-unknown-emscripten" || env::var_os("PLANAR_SESSION_ONLY").is_some() || env::var_os("JXL_INCLUDE").is_none() {
         // Session/CMS staticlib only (build-wasm.sh, tail-guard): the C++ side
         // compiles bridge.cc itself and links libjxl (Wasm: without libjxl_cms).
         return;
     }
     assert_eq!(
         target, host,
-        "This native proof does not configure a C++ Wasm toolchain; use a matching Emscripten build before cross-linking."
+        "This native build does not configure a C++ Wasm toolchain; use a matching Emscripten build before cross-linking."
     );
     let include =
         env::var("JXL_INCLUDE").expect("set JXL_INCLUDE to matching libjxl development headers");
@@ -18,8 +21,8 @@ fn main() {
         env::var("JXL_LIBRARY").unwrap_or("/usr/lib/x86_64-linux-gnu/libjxl.so.0.11".into());
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let src =
-        PathBuf::from(env::var("LIBJXL_WASM_DIR").unwrap_or("../../packages/libjxl-wasm".into()))
-            .join("src");
+        PathBuf::from(env::var("LIBJXL_WASM_DIR").unwrap_or_else(|_| env::var("CARGO_MANIFEST_DIR").unwrap()))
+            .join("cpp");
     assert!(
         Command::new(env::var("CXX").unwrap_or("/usr/bin/g++".into()))
             .args([
@@ -62,8 +65,6 @@ fn main() {
         PathBuf::from(&library).parent().unwrap().display()
     );
     println!("cargo:rerun-if-changed={}", src.join("bridge.cc").display());
+    println!("cargo:rerun-if-changed={}", src.join("planar_session.h").display());
     println!("cargo:rerun-if-changed={include}/jxl/encode.h");
-    println!("cargo:rerun-if-env-changed=JXL_INCLUDE");
-    println!("cargo:rerun-if-env-changed=JXL_LIBRARY");
-    println!("cargo:rerun-if-env-changed=LIBJXL_WASM_DIR");
 }
