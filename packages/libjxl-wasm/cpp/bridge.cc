@@ -1,5 +1,5 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
-// Colour: the Rust CMS (experiments/jxl-planar-xyb/src/cms.rs) is installed
+// Colour: the Rust CMS (rust/cms.rs) is installed
 // through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>

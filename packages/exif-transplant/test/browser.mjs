@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { chromium } from 'playwright';
-import { createEncoder } from '../../libjxl-wasm/src/api.mjs';
+import { createEncoder } from '../../libjxl-wasm/src/api.ts';
 
 if (!process.env.TMPDIR) throw Error('Set TMPDIR to the repository build/tmp before browser tests');
 

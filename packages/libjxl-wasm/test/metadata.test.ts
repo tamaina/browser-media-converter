@@ -5,7 +5,8 @@ import {execFileSync} from 'node:child_process';
 import {brotliDecompressSync} from 'node:zlib';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createEncoder} from '../src/api.mjs';
+import {createEncoder} from '@browser-mc/libjxl-wasm';
+import type {EncodeOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
 import {readExif, readExifAsync, writeExif, removeExif, transplantExif, prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -23,19 +24,20 @@ const encoder = await createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));
   return {};
 }});
-const rgb = {width:2, height:3, data:new Uint8Array(18).fill(127)};
-const yuv = {width:2, height:3, format:'I444', planes:[64,128,128].map(value => ({data:new Uint8Array(6).fill(value),stride:2}))};
-function exif(orientation, little = true, prefix = false) {
+const rgb: RgbInput = {width:2, height:3, data:new Uint8Array(18).fill(127)};
+const yuv: PlanarInput = {width:2, height:3, format:'I444', planes:[64,128,128].map(value => ({data:new Uint8Array(6).fill(value),stride:2}))};
+function exif(orientation: number, little = true, prefix = false): Uint8Array {
   const tiff = new Uint8Array(26), v = new DataView(tiff.buffer);
   v.setUint16(0, little ? 0x4949 : 0x4d4d);
   v.setUint16(2,42,little);v.setUint32(4,8,little);v.setUint16(8,1,little);
   v.setUint16(10,0x112,little);v.setUint16(12,3,little);v.setUint32(14,1,little);v.setUint16(18,orientation,little);
   return prefix ? Uint8Array.from([69,120,105,102,0,0,...tiff]) : tiff;
 }
+type Box = {type: string; payload: Uint8Array; compressed: boolean};
 // Inspect the actual BMFF boxes, including Brotli payloads, independently of the API.
-function boxes(bytes) {
+function boxes(bytes: Uint8Array): Box[] {
   if (bytes[0] === 255 && bytes[1] === 10) return [];
-  const result = [], v = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  const result: Box[] = [], v = new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
   for (let at=0; at<bytes.length;) {
     assert.ok(at+8<=bytes.length);
     let size=v.getUint32(at), header=8;
@@ -50,7 +52,7 @@ function boxes(bytes) {
   }
   return result;
 }
-async function inspect(bytes, applyOrientation = false) {
+async function inspect(bytes: Uint8Array, applyOrientation = false): Promise<{width: number; height: number; orientation: number}> {
   const path=join(dir,'image.jxl');await writeFile(path,bytes);
   // File-backed stdio also works in sandboxes that restrict child-process pipes.
   const output=join(dir,'inspection.json'), file=await open(output,'w');
@@ -61,11 +63,12 @@ async function inspect(bytes, applyOrientation = false) {
   return JSON.parse(await readFile(output,'utf8'));
 }
 const xmp=new TextEncoder().encode('<x:xmpmeta xmlns:x="adobe:ns:meta/"><test>pixel metadata</test></x:xmpmeta>');
+type Encode = (input: RgbInput | PlanarInput, options?: EncodeOptions) => Uint8Array;
 for (const [name,input,encode] of [
-  ['RGB',rgb,(i,o)=>encoder.encodeRgb(i,o)],
-  ['planar',yuv,(i,o)=>encoder.encodePlanarYuv(i,o)],
-  ['planar RGB baseline',yuv,(i,o)=>encoder.encodePlanarYuv(i,{...o,rgbViaPlanar:true})]
-]) {
+  ['RGB',rgb,(i,o)=>encoder.encodeRgb(i as RgbInput,o)],
+  ['planar',yuv,(i,o)=>encoder.encodePlanarYuv(i as PlanarInput,o)],
+  ['planar RGB baseline',yuv,(i,o)=>encoder.encodePlanarYuv(i as PlanarInput,{...o,rgbViaPlanar:true})]
+] as [string, RgbInput | PlanarInput, Encode][]) {
   test(`${name}: EXIF orientations, XMP and compression round trip`, async () => {
     for(const compressBoxes of [true,false])for(let orientation=1;orientation<=8;orientation++) {
       const little=orientation%2===0, prefix=orientation%3===0;
@@ -76,7 +79,7 @@ for (const [name,input,encode] of [
       assert.ok(metadata.every(b=>b.compressed===compressBoxes));
       assert.deepEqual(metadata[0].payload,Uint8Array.from([0,0,0,0,...source.subarray(prefix?6:0)]));
       assert.deepEqual(metadata[1].payload,xmp);
-      assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(bytes)).bytes).tiff, source.subarray(prefix?6:0));
+      assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(bytes))!.bytes).tiff, source.subarray(prefix?6:0));
       assert.deepEqual(source,saved);
       assert.deepEqual(await inspect(bytes),{width:2,height:3,orientation});
       assert.deepEqual(await inspect(bytes,true),orientation>=5
@@ -85,7 +88,7 @@ for (const [name,input,encode] of [
   });
   test(`${name}: optional boxes and state reset`, async () => {
     const baseline=encode(input);
-    for(const options of [{exif:exif(6)},{xmp},{compressBoxes:false}]) {
+    for(const options of [{exif:exif(6)},{xmp},{compressBoxes:false}] as EncodeOptions[]) {
       const bytes=encode(input,options);
       assert.deepEqual(boxes(bytes).filter(b=>['Exif','xml '].includes(b.type)).map(b=>b.type),options.exif?['Exif']:options.xmp?['xml ']:[]);
       assert.equal((await inspect(bytes)).orientation,options.exif?6:1);
@@ -102,7 +105,8 @@ for (const [name,input,encode] of [
   });
 }
 test('metadata rejects types, oversized data and malformed orientation before encoding', () => {
-  const invalid=[{compressBoxes:1}];
+  // Deliberately malformed options exercise runtime validation.
+  const invalid: Record<string, unknown>[]=[{compressBoxes:1}];
   for(const key of ['exif','xmp'])for(const value of [null,[],new ArrayBuffer(4),new Uint8Array(),new Uint8Array(key==='exif'?65537:4*1024*1024+1)])invalid.push({[key]:value});
   for(const orientation of [0,9,65535])invalid.push({exif:exif(orientation)});
   for(const at of [0,2,4,8,12,14]){const bytes=exif(6);bytes[at]=255;invalid.push({exif:bytes});}
@@ -110,7 +114,7 @@ test('metadata rejects types, oversized data and malformed orientation before en
   const duplicate=new Uint8Array(38);duplicate.set(exif(6));
   duplicate[8]=2;duplicate.set(duplicate.slice(10,22),22);
   invalid.push({exif:duplicate});
-  for(const options of invalid)for(const encode of [()=>encoder.encodeRgb(rgb,options),()=>encoder.encodePlanarYuv(yuv,options)])assert.throws(encode,TypeError);
+  for(const options of invalid as EncodeOptions[])for(const encode of [()=>encoder.encodeRgb(rgb,options),()=>encoder.encodePlanarYuv(yuv,options)])assert.throws(encode,TypeError);
   const baseline=encoder.encodeRgb(rgb);
   assert.throws(()=>encoder.encodeRgb({...rgb,data:new Uint8Array(1)},{exif:exif(8)}));
   assert.deepEqual([...encoder.encodeRgb(rgb)],[...baseline]);
@@ -130,12 +134,12 @@ test('shared JPEG EXIF payload encodes; post-encode EXIF edits preserve codestre
   assert.ok(payload);
   const prepared = prepareJxlEncodeExif(payload.bytes);
   const encoded = encoder.encodeRgb(rgb, {exif:payload.bytes, xmp});
-  assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(encoded)).bytes).tiff, prepared.tiff);
+  assert.deepEqual(prepareJxlEncodeExif((await readExifAsync(encoded))!.bytes).tiff, prepared.tiff);
   assert.equal((await inspect(encoded)).orientation, prepared.orientation);
   const oriented = encoder.encodeRgb(rgb, {exif:exif(6), xmp});
   for (const edited of [writeExif(oriented, exif(3)), removeExif(oriented), transplantExif(jpeg, oriented)]) {
     assert.deepEqual(await inspect(edited), {width:2,height:3,orientation:6});
-    assert.deepEqual(boxes(edited).find(b=>b.type==='xml ').payload, xmp);
+    assert.deepEqual(boxes(edited).find(b=>b.type==='xml ')!.payload, xmp);
   }
   // The minimal raw-codestream wrapper remains decodable without changing orientation.
   const raw = encoder.encodeRgb(rgb);
