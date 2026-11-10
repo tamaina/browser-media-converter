@@ -168,7 +168,7 @@ fn check_config(c: &Config) -> Result<(), String> {
     need(
         matches!(
             (c.primaries, c.transfer),
-            (1 | 5 | 6 | 9 | 11, 1 | 8 | 13 | 1001) | (9, 16 | 18)
+            (1 | 5 | 6 | 9 | 11, 1 | 8 | 13 | 1001) | (1 | 9 | 11, 16 | 18)
         ),
         "unsupported primaries/transfer pair",
     )?;
@@ -213,7 +213,7 @@ impl Session {
             matches!(i.matrix, 1 | 6 | 9),
             "unsupported matrix (constant-luminance is not NCL)",
         )?;
-        need(!matches!(i.transfer,16|18) || i.matrix==9, "HDR proof requires BT2020 NCL matrix")?;
+        need(!matches!(i.transfer,16|18) || (i.matrix==9 && i.primaries==9), "HDR proof requires BT2020 primaries and NCL matrix")?;
         need(
             i.full_range <= 1 && i.siting <= 2 && i.origin_x == 0 && i.origin_y == 0,
             "explicit range, valid siting chroma and origin (0,0) required",

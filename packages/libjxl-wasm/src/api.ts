@@ -54,9 +54,9 @@ export interface PlanarInput extends Dimensions {
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
 export interface Encoder {
-  /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
+  /** HDR: BT.2020 NCL 10/12-bit; explicit PQ/HLG or matrix/TRC HDR CICP ICC. No tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
-  /** SDR RGB only. HDR ICC interpretation is unsupported. */
+  /** RGB with SDR ICC or matrix/TRC HDR CICP ICC (Float32/U16); no tone mapping. */
   encodeRgb(input: RgbInput, options?: EncodeOptions): Encoded;
   /** Release this instance. Wasm memory cannot shrink; it is reclaimed by GC. */
   dispose(): void;
@@ -113,7 +113,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
   const integer = (v: number, min: number, max: number) => Number.isSafeInteger(v) && v >= min && v <= max;
   const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12'];
   // Read properties, not Object.entries: VideoColorSpace getters live on its prototype.
-  function resolveColor(i: ColorOptions, o: EncodeOptions, rgb: boolean) {
+  function resolveColor(i: ColorOptions, o: EncodeOptions, rgb: boolean, hdrIcc = false) {
     const metadata = o.colorMetadata ?? i.colorMetadata;
     const mc: Record<string, string | boolean> = {};
     if (rgb && metadata?.type === 'cicp') {
@@ -144,7 +144,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     // Match media-container's CICP name; the encoder has no gamma-2.8 path.
     if (tf === 'gamma28' || tf === 'bt470bg') fail('unsupported SDR transfer: gamma28 (CICP 5)');
     const hdr = ['pq','hlg','smpte2084','arib-std-b67'].includes(tf);
-    if (hdr && (rgb || colorResolved.primaries !== 'bt2020' || colorResolved.matrix !== 'bt2020-ncl')) fail('HDR requires planar BT.2020 primaries and BT.2020 NCL matrix; encodeRgb HDR is unsupported');
+    if (hdr && ((rgb && !hdrIcc) || (!rgb && (colorResolved.primaries !== 'bt2020' || colorResolved.matrix !== 'bt2020-ncl')))) fail('HDR requires planar BT.2020 primaries and BT.2020 NCL matrix; encodeRgb HDR is unsupported');
     if (hdr && (['bt2020','p3'].includes(o.iccHeader ?? '') || o.iccFallback === 'srgb')) fail('HDR requires enum color encoding; SDR ICC header/fallback is unsupported');
     if (![...videoTransfers,'srgb','iec61966-2-1','linear','pq','hlg','smpte2084','arib-std-b67'].includes(tf)) fail('unsupported transfer');
     if (!['bt709','smpte170m','bt470bg','smpte432','bt2020'].includes(colorResolved.primaries)) fail('unsupported source primaries');
@@ -194,7 +194,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const declaredTransfer=o.transfer ?? i.transfer ?? (o.colorSpace ?? i.colorSpace)?.transfer ?? (metadata?.type==='cicp'?metadata.cicp?.transfer:undefined);
     if (rgb && ['pq','hlg','smpte2084','arib-std-b67',16,18].includes(declaredTransfer ?? '')) fail('encodeRgb HDR is unsupported; use planar BT.2020 NCL 10/12-bit input');
     const profile=o.icc ?? i.icc ?? (metadata?.type==='icc'?metadata.profile:undefined);
-    if (!rgb && (profile != null || metadata != null)) fail('ICC/colorMetadata is supported only by encodeRgb');
+    if (!rgb && metadata != null && metadata.type !== 'icc') fail('CICP colorMetadata is supported only by encodeRgb');
     if (profile != null && [o.primaries,o.transfer,i.primaries,i.transfer].some(v=>v!=null)) fail('ICC conflicts with explicit primaries/transfer');
     let icc: Uint8Array | undefined;
     if (profile != null) {
@@ -202,9 +202,28 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       icc=profile instanceof ArrayBuffer?new Uint8Array(profile):profile;
       if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
     }
+    // Mirror Rust apply_cicp: known RGB primaries, identity matrix, full range.
+    // The native CMS still validates the complete profile and matrix/TRC model.
+    let hdrCicp: {primaries: ColorOptions['primaries']; transfer: 'pq' | 'hlg'; whitePoint: string} | undefined;
+    if (icc) {
+      const v = new DataView(icc.buffer, icc.byteOffset, icc.byteLength), n = v.getUint32(128);
+      if (n <= (icc.length - 132) / 12) for (let k = 0; k < n; k++) {
+        const p = 132 + k * 12, offset = v.getUint32(p + 4), size = v.getUint32(p + 8);
+        if (v.getUint32(p) !== 0x63696370) continue;
+        if (size >= 12 && offset <= icc.length - size && v.getUint32(offset) === 0x63696370) {
+          const [cp, tf, mc, fr] = icc.subarray(offset + 8, offset + 12);
+          if ([1,9,11,12].includes(cp) && [16,18].includes(tf) && mc === 0 && fr === 1)
+            hdrCicp = {primaries: cp === 9 ? 'bt2020' : cp === 1 ? 'bt709' : 'smpte432', transfer: tf === 16 ? 'pq' : 'hlg', whitePoint: cp === 11 ? 'dci' : 'd65'};
+        }
+        break;
+      }
+    }
+    if (!rgb && icc && !hdrCicp) fail('ICC: planar ICC input requires HDR CICP');
+    if (hdrCicp && (o.iccHeader && o.iccHeader !== 'auto' || o.iccFallback === 'srgb')) fail('HDR CICP requires auto enum header; exact/SDR header/fallback unsupported');
     const {distance,effort}=config(i,o,rgb);
-    const {colorResolved,warnings}=resolveColor(icc?{}:i,icc?{intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits}:o,rgb);
-    if(rgb) {
+    const {colorResolved,warnings}=resolveColor(icc ? hdrCicp ? {...i,...hdrCicp} : {} : i,
+      icc ? hdrCicp ? {...o, primaries:hdrCicp?.primaries, transfer:hdrCicp?.transfer, colorSpace:undefined, colorMetadata:undefined, intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits} : {intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits} : o, rgb, !!hdrCicp);
+    if(rgb || icc) {
       Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
       if(icc) {
         colorResolved.source.profile=o.icc!=null?'option':i.icc!=null?'input':'colorMetadata';
@@ -224,18 +243,22 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
           break;
         }
         // Numeric defaults are not an interpretation of ICC pixels.
-        for(const key of ['primaries','transfer','linearization','matrix','fullRange','chromaSiting']) {delete colorResolved[key];delete colorResolved.source[key];}
+        if (!hdrCicp) for(const key of ['primaries','transfer','linearization','matrix','fullRange','chromaSiting']) {delete colorResolved[key];delete colorResolved.source[key];}
+        if (hdrCicp) {
+          colorResolved.whitePoint = hdrCicp.whitePoint;
+          for (const key of ['primaries','transfer','linearization']) colorResolved.source[key] = 'icc-cicp';
+        }
         warnings.length=0;
       } else if(metadata?.type==='cicp' && colorResolved.matrix!=='rgb') warnings.push('CICP matrix describes the pre-decoded source; ignored for already-decoded RGB');
     }
-    if (rgb && !icc) {
+    if (rgb && (!icc || hdrCicp)) {
       colorResolved.matrix = 'rgb'; colorResolved.fullRange = true;
       colorResolved.source.matrix = colorResolved.source.fullRange = 'decoded-rgb';
       delete colorResolved.chromaSiting; delete colorResolved.source.chromaSiting;
     }
     for (const key of ['masteringDisplay','contentLightLevel'] as const) if (o[key] !== undefined || i[key] !== undefined) warnings.push(`${key} is not stored (MDCV/CLLI unsupported)`);
     if (!rgb && o.validation !== 'strict') warnings.push('Reconstructed RGB outside [0,1] is clipped (validation: clip)');
-    i={...i,...(icc?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)} as RuntimeInput;
+    i={...i,...(icc && !hdrCicp?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)} as RuntimeInput;
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
@@ -243,6 +266,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization ?? '') && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
+    if (hdrCicp && rgb && sourceDepth === 8) fail('HDR output must be 10/12-bit or float32; 8-bit RGB source is unsupported');
     const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
     if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
     const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb && sourceDepth!==8?0:sourceDepth):bitDepth;
@@ -258,11 +282,11 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     };
     try {
       m._w_init(i.width,i.height,format,matrix,+i.fullRange!,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18} as Record<string, number>)[i.linearization!],({left:0,center:1,topleft:2} as Record<string, number>)[i.chromaSiting ?? 'left'],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9} as Record<string, number>)[i.primaries!],colorResolved.intensityTarget);
+      if(icc)m._w_icc(alloc(icc),icc.length);
+      m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
       let status;
       if (rgb) {
         const data=i.data!;
-        if(icc)m._w_icc(alloc(icc),icc.length);
-        m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
         if(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) {
           const channels=data.length/(i.width*i.height);
           if(![3,4].includes(channels)) fail('RGB integer input requires packed RGB or RGBA');
@@ -274,7 +298,6 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
           if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
           status=channels===4?m._w_rgb_integer(alloc(data),data.length,32,4):m._w_rgb(alloc(data),data.length);
         }
-        if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
         const expected=format===3?2:match?.[2]?4:3;
         if (!Array.isArray(i.planes) || i.planes.length !== expected) fail('plane count');
@@ -301,6 +324,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()) || 'Wasm encode failed (no error detail)');
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
+      if(icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       stats={colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;

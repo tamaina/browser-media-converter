@@ -156,16 +156,40 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
   assert.ok(encoder.encodeRgb(rgb({depth:32, bitDepth:32, storage:'float32'})).length > 0);
 });
 
-test('ICC matrix/TRC encodes; PQ/HLG CICP ICC rejects or explicitly falls back', () => {
+test('ICC matrix/TRC encodes; HDR CICP overrides dummy TRCs with enum HDR', () => {
   assert.ok(encoder.encodeRgb(rgb({icc:iccFixture()})).length > 0);
   for (const transfer of [16,18] as const) {
-    const input = rgb({icc:iccFixture(transfer)});
-    for (const iccHeader of ['auto','exact','bt2020','p3'] as const) {
-      assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /ICC: HDR PQ\/HLG/);
+    for (const primaries of [9,12]) {
+      const input = rgb({icc:iccFixture(transfer, primaries)});
+      const bytes = encoder.encodeRgb(input);
+      assert.ok(bytes.length > 0);
+      assert.equal(bytes.colorResolved.transfer, transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.primaries, primaries === 9 ? 'bt2020' : 'smpte432');
+      assert.equal(bytes.colorResolved.intensityTarget, transfer === 16 ? 10000 : 1000);
+      assert.equal(bytes.colorResolved.header, 'enum');
+      assert.equal(bytes.colorResolved.matrix,'rgb');
+      assert.equal(bytes.colorResolved.fullRange,true);
+      assert.equal(bytes.colorResolved.chromaSiting,undefined);
+      assert.equal(encoder.encodeRgb(input,{intensityTargetNits:300}).colorResolved.intensityTarget,300);
+      assert.ok(encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])}).length > 0);
+      assert.throws(() => encoder.encodeRgb({...input,data:new Uint8Array([100,120,140])}), /8-bit RGB source/);
+      assert.throws(() => encoder.encodeRgb(input,{bitDepth:8}), /HDR output/);
+      for (const iccHeader of ['exact','bt2020','p3'] as const)
+        assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /HDR CICP/);
+      assert.throws(() => encoder.encodeRgb(input, {iccFallback:'srgb'}), /HDR CICP/);
     }
-    const bytes = encoder.encodeRgb(input, {iccFallback:'srgb'});
-    assert.equal(bytes.colorResolved.profile, 'none');
-    assert.ok(bytes.warnings.some(w => /ICC fallback/.test(w)));
+    for (const depth of [10,12] as const) {
+      const input = planar(depth === 10 ? 'I444AP10' : 'I444AP12',depth,transfer === 16 ? 'pq' : 'hlg');
+      delete input.transfer; delete input.primaries;
+      input.icc=iccFixture(transfer);
+      const bytes=encoder.encodePlanarYuv(input);
+      assert.ok(bytes.length > 0);
+      assert.equal(bytes.colorResolved.header,'enum');
+      assert.equal(bytes.colorResolved.transfer,transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.intensityTarget,transfer === 16 ? 10000 : 1000);
+      const explicit=planar(depth === 10 ? 'I444AP10' : 'I444AP12',depth,transfer === 16 ? 'pq' : 'hlg');
+      assert.deepEqual([...bytes],[...encoder.encodePlanarYuv(explicit)]);
+    }
   }
 });
 

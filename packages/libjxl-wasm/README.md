@@ -126,10 +126,24 @@ decoder output defaults; XYB colour encoding is lossy according to `distance`.
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
 `transfer: 'pq' | 'hlg'` (aliases `smpte2084` / `arib-std-b67`). It uses the
-non-fused row/CMS path. 8-bit HDR, BT.709 matrices, P3 HDR and `encodeRgb` HDR
-are rejected (including an 8-bit output override; float32 output remains available). HDR is recorded with PQ/HLG enum encoding; HDR ICC input is out
-of scope. ICC profiles carrying PQ/HLG CICP tags are rejected with an `ICC:`
-error (or explicitly fall back to untagged sRGB via `iccFallback`). HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
+non-fused row/CMS path. 8-bit HDR, BT.709 matrices and explicit enum
+`encodeRgb` HDR are rejected (including an 8-bit output override).
+
+ICC v4 RGB matrix/TRC profiles with an accepted `cicp` tag (identity matrix,
+full range, known primaries, transfer 16/PQ or 18/HLG) use CICP primaries and
+transfer in preference to the ICC TRCs, which may be dummy SDR curves.
+`iccHeader: 'auto'` writes a PQ/HLG enum header. The CMS applies the real
+PQ/HLG EOTF and intensity scaling, plus HLG OOTF, before computing XYB.
+This accepts Float32 and full-range U16 RGB (including Display P3 HDR);
+U16 follows the existing float32 output default/preserve policy, with optional
+10/12-bit output. U8 RGB is rejected regardless of output depth.
+BT.2020 NCL 10/12-bit planar input also accepts these HDR ICC profiles;
+its YUV matrix/range must describe the source planes.
+HDR CICP rejects `iccHeader: 'exact'` (dummy TRCs would misdescribe the pixels),
+SDR header overrides (`'bt2020'` / `'p3'`) and `iccFallback: 'srgb'`.
+Gray HDR CICP and LUT-only HDR CICP are rejected. ICC.2/ICC v5 spectral or HDR
+LUT profiles, detecting HDR from curves/LUTs without CICP, and tone mapping
+are unsupported. The moxcms version is unchanged.
 
 `intensityTargetNits` on input or encode options (options win) is variable for
 HDR and SDR. Defaults are PQ 10000, HLG 1000, SDR 255 nits. Values must be
