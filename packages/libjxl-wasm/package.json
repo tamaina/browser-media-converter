@@ -18,7 +18,9 @@
   "scripts": {
     "test:api": "node --test --test-isolation=none --test-concurrency=1 test/api.test.ts",
     "build:native": "bash scripts/build-native.sh",
-    "build:wasm": "bash scripts/build-wasm.sh"
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "typecheck:package": "tsc -p tsconfig.json",
+    "test:package": "tsc -p tsconfig.json"
   },
   "files": [
     "src",

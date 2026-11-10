@@ -3,6 +3,7 @@
 #include <hwy/targets.h>
 #include <hwy/detect_targets.h>
 #include <cstdlib>
+#include <cstdio>
 // Internal transfer codes: 1 = BT.1886 Lb=0; 13 = sRGB; 1001 = inverse709.
 static PlanarInput input{};
 static PlanarPlane alpha{};
@@ -49,7 +50,8 @@ int w_encode(int mode) {
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
   int status=planar_create_profile(&input,&session,mode!=0 && validation==0?2:validation,times,error,sizeof(error));
-  if(!status) status=planar_set_bit_depth(session,output_depth);
+  if(!status && (status=planar_set_bit_depth(session,output_depth)))
+    std::snprintf(error,sizeof(error),"output bit depth rejected");
   times[5]=times[2];
   times[2]=planar_clock_ms()-start;
   float* rgb=nullptr;
@@ -57,7 +59,9 @@ int w_encode(int mode) {
     start=planar_clock_ms();
     size_t count=size_t(input.width)*input.height*3;
     rgb=static_cast<float*>(std::malloc(count*sizeof(float)));
-    status=!rgb || planar_region(session,0,0,input.width,input.height,rgb,count);
+    if(!rgb) {status=1;std::snprintf(error,sizeof(error),"RGB allocation failed");}
+    else if((status=planar_region(session,0,0,input.width,input.height,rgb,count)))
+      std::snprintf(error,sizeof(error),"planar region conversion failed");
     if(!status && mode==1) planar_quantize_rgb_depth(rgb,count,input.depth);
     times[3]=planar_clock_ms()-start;
   }
@@ -69,7 +73,9 @@ int w_encode(int mode) {
     } else status=planar_encode_alpha(session,alpha.data?&alpha:nullptr,&output,error,sizeof(error));
   }
   times[4]=planar_clock_ms()-start;
-  std::free(rgb);planar_destroy(session);return status;
+  std::free(rgb);planar_destroy(session);
+  if(status && !error[0]) std::snprintf(error,sizeof(error),"planar encode failed");
+  return status;
 }
 int w_rgb(const float* p,size_t count) {
   PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,input.intensity,uint32_t(output_depth)};

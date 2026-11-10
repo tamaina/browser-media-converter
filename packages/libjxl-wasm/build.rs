@@ -18,7 +18,7 @@ fn main() {
     let include =
         env::var("JXL_INCLUDE").expect("set JXL_INCLUDE to matching libjxl development headers");
     let library =
-        env::var("JXL_LIBRARY").unwrap_or("/usr/lib/x86_64-linux-gnu/libjxl.so.0.11".into());
+        env::var("JXL_LIBRARY").expect("set JXL_LIBRARY to the matching patched native libjxl.so (see README native tests)");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
     let src =
         PathBuf::from(env::var("LIBJXL_WASM_DIR").unwrap_or_else(|_| env::var("CARGO_MANIFEST_DIR").unwrap()))
