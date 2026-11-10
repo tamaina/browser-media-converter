@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 fetch_libjxl
 cmake="${CMAKE:-cmake}"
-jobs="${LIBJXL_BUILD_JOBS:-6}"
+jobs="${LIBJXL_BUILD_JOBS:-1}"
 configure() {
   "$cmake" -S build/libjxl -B "$1" \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER="${CXX:-g++}" -DCMAKE_C_COMPILER="${CC:-gcc}" \

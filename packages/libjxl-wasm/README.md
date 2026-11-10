@@ -1,123 +1,148 @@
 # @browser-mc/libjxl-wasm
 
-Private, experimental. Everything in `experiments/jxl-planar-xyb` that depends on
-libjxl: the pinned libjxl v0.11.1 checkout and its patches, the native and
-Emscripten builds, the C++ bridge, the Wasm exports and the `createEncoder` JS API.
-It is not published to npm and has no `build:package`/`test:package` scripts,
-so the root `pnpm build` / `pnpm test` do not need emsdk or Chrome.
+Private package containing patched libjxl v0.11.1, a Rust planar session/CMS,
+a C++ C ABI bridge, and the `createEncoder` TypeScript API. No package dependencies
+or pnpm install are needed. Root workspace builds do not require Emscripten.
 
-## Split of roles
+## Layout
 
-| Here (`packages/libjxl-wasm`) | `experiments/jxl-planar-xyb` |
-| --- | --- |
-| libjxl clone, `patches/libjxl-xyb.patch` (planar XYB input only; see below) | Rust planar session `src/lib.rs`: validation, owned planes, YUV→XYB kernel |
-| `src/bridge.cc`: JxlEncoder calls, installs the Rust CMS (`JxlEncoderSetCms`) | Rust CMS `src/cms.rs` (stock `JxlCmsInterface`; moxcms `=0.9.2` for LUT ICC); `build.rs` compiles `src/bridge.cc` from here into the Rust cdylib |
-| `src/planar_session.h`: the C ABI the Rust session implements | oracle, Python/Chrome verification suites (Round 10–12, real10) |
-| `src/wasm_entry.cc`, `src/api.mjs`: Emscripten exports and JS API | |
-| `tools/decode_float.cc` (stock system libjxl decoder), `tools/tail_guard.cc` | |
+```text
+Cargo.toml / Cargo.lock / build.rs
+src/api.ts                 public API and types
+rust/                      planar session, CMS, Rust unit tests
+cpp/                       bridge.cc, wasm_entry.cc, planar_session.h
+patches/                   pinned libjxl patches
+scripts/                   native and Wasm builds
+tools/                     native decoder and guard-page tool
+test/api.test.ts           API tests against the real Wasm codec
+build/                     ignored libjxl checkout, caches, compiled artifacts
+target/                    ignored Cargo outputs
+```
 
-The dependency is two-way at link time: the Rust session calls `hdr_jxl_encode`
-/ `bridge_*` in `bridge.cc`, and `bridge.cc` / `wasm_entry.cc` call the Rust
-`planar_*` / `planar_cms_*` ABI. The Wasm link and `tail-guard` therefore take a
-prebuilt Rust staticlib.
+`patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
+SIMD kernel. `patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`:
+encoder builds use a rejecting default CMS stub and the bridge installs the
+Rust CMS with `JxlEncoderSetCms`. The CMS uses moxcms pinned to `=0.9.2` for
+LUT ICC profiles. Only Highway and Brotli submodules are needed; populated
+source trees are reused without a network fetch.
 
-## Patch inventory (libjxl v0.11.1, pin unchanged)
+## Build and test
 
-`patches/libjxl-xyb.patch` (303 lines; 473 before the Rust CMS) only adds input
-plumbing; the stock CMS interface is unchanged:
-
-| File | Kept hunk |
-| --- | --- |
-| `lib/include/jxl/encode.h` | `JxlExperimentalYuv*` structs; chunked-source fields (borrowed, YUV, fill_row, observe_xyb, timing) |
-| `lib/jxl/enc_frame.cc` | chunked fused YUV / fill_row / observe dispatch |
-| `lib/jxl/enc_xyb.cc`, `enc_xyb.h` | fused YUV→XYB SIMD kernel (`ExperimentalYuvToXYB`, `SourceTo709`, `FoldSourcePrimaries`) |
-| `lib/jxl/encode_internal.h` | skip the full-frame copy for borrowed sources |
-
-Removed in favour of `experiments/jxl-planar-xyb/src/cms.rs`: the source-ICC
-marking/header override in `color_encoding_internal.h` and `encode.cc`
-(`JxlEncoderExperimentalWantICC` / `JxlEncoderExperimentalICCHeader`), the
-`source_icc.h` matrix/TRC path and the built-in gamma/709 path in `ToXYB`, and
-the whole `skcms-xyb.patch` (XYZ-PCS A2B scaling; LUT profiles now go to moxcms).
-The Rust CMS is self-contained (`set_fields_from_icc` and PQ/HLG/DCI included):
-`patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`. Both encoder
-builds enable it and disable skcms: CMake skips skcms/LCMS2 discovery and compiles
-only a tiny static `jxl_cms` stub whose `JxlGetDefaultCms` rejects all profiles
-and transforms. This replaces the former `wasm_entry.cc` stub. Native
-`libjxl.so` embeds the stub and has no `libjxl_cms.so` or LCMS2 dependency.
-The bridge must install the Rust CMS before encoding. Only Highway and Brotli
-submodules are initialized; neither skcms nor LCMS2 is fetched or compiled.
-
-The separate `build/native-reference` build keeps stock libjxl CMS code linked
-to **system LCMS2**, solely for `djxl` regression comparisons that request
-original-profile, linear BT.709 and sRGB output. It does not compile LCMS2.
-`build/native/tools/djxl` is a wrapper that selects this reference library even
-when the encoder directory is in `LD_LIBRARY_PATH`. This reference decoder is
-not linked into either encoder.
-
-## Build
-
-Run builds sequentially. Native C++ builds use up to six jobs
-(`LIBJXL_BUILD_JOBS` overrides this); Rust and Emscripten builds use one.
-Temporary files respect an existing `TMPDIR` (default `build/tmp`); caches stay
-in ignored build directories (`build/em-cache` for Emscripten).
+Run from this package, sequentially. Emscripten defaults to
+`~/emsdk/emsdk_env.sh` (`EMSDK_ENV` overrides it); `CMAKE` overrides CMake.
+Emscripten's `--emit-tsd` also requires an existing `tsc` executable on `PATH`.
+Add an installed TypeScript toolchain to `PATH`; there is no need to install
+dependencies in this package. Node executes the API and tests without `tsc`.
 
 ```sh
-bash scripts/build-native.sh   # build/native/lib/libjxl.so, build/native/tools/djxl,
-                               # build/decode-float
-# Native Rust side + tail guard (scripts/build-tail-guard.sh with a host staticlib)
-bash ../../experiments/jxl-planar-xyb/build.sh
-# Wasm: builds the Rust session staticlib, then runs scripts/build-wasm.sh
-bash ../../experiments/jxl-planar-xyb/build-wasm.sh   # build/wasm/codec.{mjs,wasm}, sizes.json
+export TMPDIR="$(cd ../.. && pwd)/build/tmp"
+export EM_CACHE="$PWD/build/em-cache"
+export CARGO_TARGET_DIR="$PWD/target"
+export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
+# Use the host compiler rather than an ambient cc wrapper.
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc
+mkdir -p "$TMPDIR" "$EM_CACHE"
+cargo test --lib --locked --jobs 1
+bash scripts/build-wasm.sh
+node --test --test-isolation=none --test-concurrency=1 test/api.test.ts
+```
+
+The Wasm entry builds the Rust staticlib, patched libjxl, then links
+`build/wasm/codec.mjs` and `codec.wasm` using `em++ --emit-tsd build/wasm/codec.d.ts`.
+An identical `codec.d.mts` accompanies the `.mjs` file for TypeScript module
+resolution. It retains the `extern "C"` ABI, `EXPORTED_FUNCTIONS`, and ESM `createModule`
+factory. No Embind is used. `sizes.json` records raw and gzip sizes.
+
+Node 26 runs `src/api.ts` and the tests with built-in type stripping. The
+package exports the TypeScript source and public types together; browser
+consumers need a TypeScript-aware bundler. `./codec.mjs` exports the generated
+module with its generated declaration. Keep the codec runtime and generated declarations together.
+No hand-maintained low-level `_w_*` declarations are used.
+
+For optional native tools, run `bash scripts/build-native.sh` (one job by
+default). This builds the patched encoder library, a separate reference decoder
+using system LCMS2, and `build/decode-float`. To link the native Rust cdylib,
+set `JXL_INCLUDE="$PWD/build/libjxl/lib/include"` and
+`JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"` before `cargo build --locked --jobs 1`.
+Without `JXL_INCLUDE`, Cargo builds the standalone Rust session/CMS; C ABI calls
+are resolved by the final C++ link. For the optional guard-page tool:
+
+```sh
+PLANAR_SESSION_ONLY=1 cargo rustc --lib --release --locked --jobs 1 --crate-type staticlib
+PLANAR_SESSION_LIB="$CARGO_TARGET_DIR/release/libjxl_planar_session.a" bash scripts/build-tail-guard.sh
 ./build/tail-guard
 ```
 
-`scripts/build-wasm.sh` alone needs `PLANAR_SESSION_LIB` (a
-`wasm32-unknown-emscripten` staticlib implementing `src/planar_session.h`) and
-emsdk (`EMSDK_ENV`, default `~/emsdk/emsdk_env.sh`). `CMAKE` overrides cmake.
-The native encoder links system Brotli. `decode-float` links the unmodified
-system `libjxl.so.0.11` and its system CMS as a second independent decoder;
-its RPATH takes precedence over the encoder's `LD_LIBRARY_PATH`.
-System LCMS2 is needed only by the reference decoders and Python ICC verifiers.
-
 ## Use
 
-```js
-import {createEncoder} from '@browser-mc/libjxl-wasm'; // src/api.mjs
+```ts
+import {createEncoder} from '@browser-mc/libjxl-wasm';
 const encoder = await createEncoder();
+const bytes = encoder.encodeRgb({width: 1, height: 1, data: new Uint8Array([64, 128, 192])});
 ```
-
-`src/api.mjs` imports `../build/wasm/codec.mjs`, so the package directory must be
-served as-is. The experiment's test servers map `/libjxl-wasm/` to this directory.
-API and verification details: `experiments/jxl-planar-xyb/WASM.md`.
 
 ## Memory budget
 
-Both `encodeRgb` and `encodePlanarYuv` accept `{maxMemoryBytes}` per call,
-defaulting to **512 MiB** to limit a single encode's reservation on mobile.
-The override is a positive safe integer up to **1984 MiB** (2 GiB − 64 MiB).
-Checks run before WASM calls/copies; an exceeded budget throws `RangeError`
-with `WASM memory budget exceeded`, the estimate, retained heap and budget.
-The existing 8192/axis, 4 MP, 64 MiB plane-span and 4 MiB ICC caps remain.
+`encodeRgb(input, {maxMemoryBytes})` and `encodePlanarYuv(input,
+{maxMemoryBytes})` validate sizes and check a conservative memory reservation
+in `src/api.ts` **before any WASM call or input/ICC copy**. The default is
+**512 MiB**: a mobile policy that avoids reserving most of a 1–2 GiB process
+for a single encode. The override must be a positive safe integer no greater
+than **1984 MiB** (2080374784 bytes; 2 GiB minus 64 MiB), leaving wasm32
+address-space headroom. The existing 8192 px/axis, 4 MP, 64 MiB plane-span and
+4 MiB ICC caps still apply.
 
-The reservation is `32 MiB + ceil(1.5 * V)`, where `V` includes twice the input
-spans, four times the ICC size, and per-pixel reservations: 12 B float XYB,
-12 B RGB staging, 48 B working/output allowance, plus 16 B for alpha, 25 B
-for observation and 12 B for planar `rgbViaPlanar` when enabled. The fixed
-allowance and 50% margin cover runtime/allocator and uncertain working costs.
-The retained WASM heap must also fit the budget. Successful calls report
-`estimatedMemoryBytes` and `maxMemoryBytes` in `encoder.stats`.
-
-```js
+```ts
 const bytes = encoder.encodeRgb(input, {maxMemoryBytes: 1024 * 1024 * 1024});
 ```
 
-A valid 4 MP frame can exceed the default (Float32 RGB estimates 608 MiB).
-This admission estimate is not a hard allocator limit or a guarantee against
-device memory pressure; caller JS storage and other instances are outside it.
-Full-frame XYB/working buffers remain, so input slicing alone would not provide
-bounded-memory streaming. No new chunking API is added. See the complete
-[formula and limitations](../../experiments/jxl-planar-xyb/WASM.md#memory-budget).
-This JS-only guard needs no WASM or libjxl rebuild.
+The default can reject a valid frame below the 4 MP limit. For example, at
+2048² the reservation is 482 MiB for tightly packed I420, 500 MiB for U8 RGB,
+and 608 MiB for Float32 RGB or I444A. The formula (bytes, integer arithmetic
+with upward rounding) is:
+
+```text
+P = width * height
+S = packed RGB byteLength, or sum of validated plane spans (including padding)
+I = ICC byteLength, or zero
+V = 2*S + 4*I + P*(12 + 12 + 48 + A + O + R)
+estimate = 32 MiB + ceil(3*V/2)
+required = max(estimate, current WASM heap byteLength)
+```
+
+- `2*S` reserves the JS→WASM input copy and Rust's owned planar copy
+  (conservatively also reserved for RGB and borrowed alpha).
+- 12 B/pixel is float XYB; another 12 reserves RGB staging/callback buffers.
+  48 B/pixel is an allowance for libjxl working buffers and output growth/copy.
+- `A` is 16 B/pixel with alpha, otherwise zero, for float alpha staging and coding.
+- `O` is 25 B/pixel with `observe`, otherwise zero, reserving two float XYB
+  captures and the coverage bitmap even when only hashing is enabled.
+- `R` is 12 B/pixel for planar `rgbViaPlanar`, otherwise zero.
+- `4*I` allows ICC copies/parsing. The variable reservation gets 50% headroom;
+  the fixed 32 MiB covers runtime, stack, allocator, tables and row padding.
+
+Invalid budgets throw `TypeError`; exceeding a valid budget throws `RangeError`
+starting with `WASM memory budget exceeded`, giving estimate, retained heap,
+budget and the ceiling. Budget errors do not trigger ICC fallback. The WASM
+heap retains its high-water size, so lowering the budget on a reused instance
+can reject even a small frame. Successful calls expose `estimatedMemoryBytes`
+and `maxMemoryBytes` in `encoder.stats`.
+
+This is a conservative admission policy, not an exact peak bound or a hard
+allocator limit. Device/process pressure, multiple encoder instances, caller's
+JS input/output and other JS allocations are outside it; a permitted encode
+can still fail allocation. The guard uses only dimensions, types and layouts,
+with no extra pixel scan. It lives in the TypeScript API; direct native/WASM
+ABI users must manage their own budget. No WASM relink is needed for it.
+
+The formula above is the full-buffer (`data` / `planes`) estimate and is
+unchanged. `encodeRgb({provideRect})` (see [Streaming RGB input](#streaming-rgb-input))
+replaces `2*S` with one reusable packed scratch
+`S = min(width,2048)*min(height,2048)*3*(depth/8)`, giving
+`32 MiB + ceil(1.5 * (S + 4*I + P*(72 + O)))` (RGB only, so `A = R = 0`). That
+path removes the full-source WASM copy but not full-frame ownership: the
+encoder still owns full-frame XYB and working buffers, and output is returned
+whole. Bounding peak memory further requires a larger libjxl/session redesign.
 
 ## HDR base
 
@@ -141,11 +166,6 @@ Default `validation: 'clip'` clips reconstructed RGB to [0,1] for HDR as for SDR
 and emits a policy warning without an additional pixel scan. `strict` rejects
 out-of-range values. `masteringDisplay` and `contentLightLevel` produce warnings
 and are **not stored** (MDCV/CLLI); `min_nits` and other fields are not repurposed.
-
-`node wasm/hdr-test.mjs` from `experiments/jxl-planar-xyb` verifies native/WASM
-XYB, PQ absolute nits, HLG OOTF, monotonicity, finite output, gamut, headers,
-and djxl's actual output ICC against the jxl-oxide oracle. Evidence goes to
-`build/hdr/numeric.json`. **Real HDR display output is unverified.**
 
 ### Straight alpha
 
@@ -192,6 +212,8 @@ const bytes = encoder.encodeRgb({
 }, {distance: 1, effort: 3});
 ```
 
+The input type is `ChunkedRgbInput` (`encodeRgb(input: RgbInput | ChunkedRgbInput)`
+in `src/api.ts`); `data` is typed `never` there and `format` must be `'RGB'`.
 Use `Uint8Array`/`Uint8ClampedArray` for depth 8, `Uint16Array` for full-range
 16-bit samples, or `Float32Array` for nominal [0,1] samples at depth 32.
 Colour/ICC options and output options are shared with `encodeRgb({data})`.
@@ -222,10 +244,13 @@ This requires this repository's **patched chunked ABI**, particularly
 `experimental_borrowed`; it cannot link against unpatched upstream libjxl.
 Existing packed-buffer calls keep their encoding path and output bytes.
 
-For an incremental WASM link with existing libjxl archives, set
-`PLANAR_SESSION_LIB` to the matching Rust Emscripten staticlib and run
-`bash scripts/build-wasm.sh --relink-only` from this package. It skips libjxl
-fetch/configure/build; a complete first build is still required.
+For an incremental WASM link with existing libjxl archives, run
+`bash scripts/build-wasm.sh --relink-only` from this package. It still rebuilds
+the Rust staticlib (cargo, `CARGO_TARGET_DIR`) and relinks `codec.mjs`/`codec.wasm`
+plus the `codec.d.ts`/`codec.d.mts` typings, but skips libjxl
+fetch/configure/build; a complete first build is still required. The link
+exports `_w_rgb_chunked` and needs `-sALLOW_TABLE_GROWTH=1` with
+`addFunction`/`removeFunction` for the provider callback.
 
 Libjxl may request a larger internal rectangle because streaming patches add
 border pixels. The bridge splits it into provider requests no larger than

@@ -1,7 +1,7 @@
 // Node benchmark: one warm-up + five measured synchronous encodes per path.
 // Synthetic 2048² U8 RGB, untagged sRGB defaults, distance 1, effort 3.
 import {readFile} from 'node:fs/promises';
-import {createEncoder} from '../src/api.mjs';
+import {createEncoder} from '../src/api.ts';
 const wasm=await readFile(new URL('../build/wasm/codec.wasm',import.meta.url));
 const e=await createEncoder({instantiateWasm(imports,receive){WebAssembly.instantiate(wasm,imports).then(({instance,module})=>receive(instance,module));return {};}});
 const width=2048,height=2048,data=new Uint8Array(width*height*3);
