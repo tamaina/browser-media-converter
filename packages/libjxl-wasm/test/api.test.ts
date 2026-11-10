@@ -5,7 +5,14 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {openSync, closeSync, writeFileSync, readFileSync, mkdtempSync, rmSync, mkdirSync} from 'node:fs';
 import {join} from 'node:path';
+import {createEncoder} from '@browser-mc/libjxl-wasm';
+import type {AnimationInput, ColorOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
 
+// Decoded animation summary printed by tools/inspect_animation.cc.
+interface Inspected {
+  haveAnimation: boolean; tpsNumerator: number; tpsDenominator: number; loops: number;
+  frames: {duration: number; last: boolean; pixels: number[]}[];
+}
 const inspector = fileURLToPath(new URL('../build/inspect-animation', import.meta.url));
 execFileSync(process.env.CXX || '/usr/bin/g++', [
   '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
@@ -15,12 +22,12 @@ execFileSync(process.env.CXX || '/usr/bin/g++', [
   '/usr/lib/x86_64-linux-gnu/libjxl.so.0.11',
   '-Wl,--disable-new-dtags,-rpath,/usr/lib/x86_64-linux-gnu', '-o', inspector
 ], {stdio:'inherit'});
-const inspect = bytes => {
+const inspect = (bytes: Uint8Array): Inspected => {
   // File-backed subprocess I/O also works in sandboxes that disallow pipes.
   const root = fileURLToPath(new URL('../build/tmp/', import.meta.url));
   mkdirSync(root, {recursive:true});
   const dir = mkdtempSync(join(root, 'animation-api-'));
-  const descriptors = [];
+  const descriptors: number[] = [];
   try {
     writeFileSync(join(dir, 'input.jxl'), bytes);
     const input = openSync(join(dir, 'input.jxl'), 'r'); descriptors.push(input);
@@ -32,7 +39,6 @@ const inspect = bytes => {
     rmSync(dir, {recursive:true, force:true});
   }
 };
-import {createEncoder} from '../src/api.mjs';
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
@@ -40,12 +46,13 @@ const encoder = await createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));
   return {};
 }});
-const rgb = (extra = {}) => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
-const cicp = (transfer = 8) => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
+// Extra fields deliberately allow malformed inputs to exercise runtime validation.
+const rgb = (extra: Record<string, unknown> = {}): RgbInput => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
+const cicp = (transfer: number | string = 8): Extract<NonNullable<ColorOptions['colorMetadata']>, {type: 'cicp'}> => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
 
-const planar = (format, depth = 8, transfer = 'bt709') => {
+const planar = (format: PlanarInput['format'], depth = 8, transfer: ColorOptions['transfer'] = 'bt709'): PlanarInput => {
   const bytes = depth === 8 ? 1 : 2;
-  const plane = value => {
+  const plane = (value: number) => {
     const data = new Uint8Array(bytes);
     new DataView(data.buffer).setUint8(0, value & 255);
     if (bytes === 2) data[1] = value >> 8;
@@ -61,11 +68,11 @@ const planar = (format, depth = 8, transfer = 'bt709') => {
 for (const [format, depth, transfer] of [
   ['I420A', 8, 'bt709'], ['I444A', 8, 'bt709'],
   ['I444AP10', 10, 'pq'], ['I420AP12', 12, 'hlg']
-]) {
+] as const) {
   test(`${format} ${transfer} rejects sparse alpha planes`, () => {
     for (const makeSparse of [
-      planes => { planes.length = 3; planes.length = 4; },
-      planes => { delete planes[3]; }
+      (planes: PlanarInput['planes']) => { planes.length = 3; planes.length = 4; },
+      (planes: PlanarInput['planes']) => { delete planes[3]; }
     ]) {
       const input = planar(format, depth, transfer);
       makeSparse(input.planes);
@@ -84,7 +91,7 @@ for (const [format, depth, transfer] of [
 }
 
 test('every required plane rejects holes and non-object descriptors', () => {
-  for (const format of ['I444', 'I444A']) {
+  for (const format of ['I444', 'I444A'] as const) {
     const count = format === 'I444A' ? 4 : 3;
     for (let c = 0; c < count; c++) {
       for (const missing of [true, false]) {
@@ -92,7 +99,7 @@ test('every required plane rejects holes and non-object descriptors', () => {
           const input = planar(format);
           input.planes.length = count;
           if (missing) delete input.planes[c];
-          else input.planes[c] = value;
+          else (input.planes as unknown[])[c] = value;
           assert.throws(() => encoder.encodePlanarYuv(input), {
             name:'TypeError', message:`plane ${c} must be an object`
           });
@@ -150,6 +157,7 @@ test('CICP transfer 5 and gamma28 reject identically instead of using gamma2.4',
   });
   assert.equal(errors[0], errors[1]);
   assert.match(errors[0], /unsupported SDR transfer: gamma28/);
+  // @ts-expect-error Intentionally unsupported transfer must also reject at runtime.
   assert.throws(() => encoder.encodeRgb(rgb(), {transfer:'gamma28'}), /gamma28/);
 });
 
@@ -173,7 +181,7 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
     [new Uint8Array([17, 128, 255]), 8, 'u8', 255],
     [new Uint8ClampedArray([17, 128, 255]), 8, 'u8', 255],
     [new Uint16Array([1023, 32768, 65535]), 16, 'u16le-lsb', 65535]
-  ]) {
+  ] as const) {
     const expected = encoder.encodeRgb(rgb({data:Float32Array.from(data, v => v / max)}), {bitDepth:10});
     for (const declarations of [{}, {depth, bitDepth:depth, storage}]) {
       const actual = encoder.encodeRgb(rgb({data, ...declarations}), {bitDepth:10});
@@ -187,11 +195,13 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
 for (const [name, Type, max] of [
   ['U8', Uint8Array, 255], ['U8Clamped', Uint8ClampedArray, 255],
   ['U16', Uint16Array, 65535], ['Float32', Float32Array, 1]
-]) {
+] as const) {
   test(`animation ${name}: independent decode preserves frames, timing, loops and straight alpha`, () => {
     const colors = [[1,0,0,1], [0,1,0,0.5], [0,0,1,0]];
+    const pack = (values: number[]): RgbInput['data'] =>
+      (Type as {from(values: number[]): RgbInput['data']}).from(values.map(x => Type === Float32Array ? x : Math.round(x*max)));
     const bytes = encoder.encodeAnimation({width:2, height:2, format:'RGBA', loops:3,
-      frames:colors.map((c, n) => ({data:Type.from(Array(4).fill(c).flat(), x => Type === Float32Array ? x : Math.round(x*max)), durationMs:[12.4, 27.6, 0.1][n]}))
+      frames:colors.map((c, n) => ({data:pack(Array<number[]>(4).fill(c).flat()), durationMs:[12.4, 27.6, 0.1][n]}))
     }, {bitDepth:8});
     const decoded = inspect(bytes);
     assert.equal(decoded.haveAnimation, true);
@@ -220,7 +230,7 @@ test('animation supports default infinite loops, RGB and a single displayed fram
     assert.equal(decoded.haveAnimation, true);
     assert.equal(decoded.loops, 0);
     assert.deepEqual(decoded.frames.map(f => f.duration), Array(count).fill(33));
-    assert.equal(decoded.frames.at(-1).last, true);
+    assert.equal(decoded.frames.at(-1)?.last, true);
   }
   const still = inspect(encoder.encodeRgb(rgb()));
   assert.equal(still.haveAnimation, false);
@@ -229,10 +239,11 @@ test('animation supports default infinite loops, RGB and a single displayed fram
 
 test('animation rejects invalid sequences and releases state after a failed frame', () => {
   const frame = {data:rgb().data, durationMs:20};
-  const input = {width:1, height:1, frames:[frame]};
+  const input: AnimationInput = {width:1, height:1, frames:[frame]};
+  // Malformed sequences deliberately bypass the static frame type to exercise runtime validation.
   for (const frames of [[], new Array(1), Array(257).fill(frame), [null],
     [frame, {...frame, data:new Uint8Array(3)}], [frame, {...frame, data:new Float32Array(4)}],
-    [{...frame, disposal:1}], [{...frame, data:new Float32Array(2)}]]) {
+    [{...frame, disposal:1}], [{...frame, data:new Float32Array(2)}]] as unknown as AnimationInput['frames'][]) {
     assert.throws(() => encoder.encodeAnimation({...input, frames}), TypeError);
   }
   for (const durationMs of [0,-1,NaN,Infinity,2**32]) {

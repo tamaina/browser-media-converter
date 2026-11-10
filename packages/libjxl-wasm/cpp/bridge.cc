@@ -1,5 +1,5 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
-// Colour: the Rust CMS (experiments/jxl-planar-xyb/src/cms.rs) is installed
+// Colour: the Rust CMS (rust/cms.rs) is installed
 // through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>
@@ -388,7 +388,7 @@ extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
     if(gray && (sample(i*channels)!=sample(i*channels+1) || sample(i*channels)!=sample(i*channels+2)))return bad("ICC: Gray profile requires R=G=B");
   }
   // `depth` describes full-range typed storage (8 or 16), not 10/12-bit
-  // code values in U16. api.mjs rejects conflicting source declarations.
+  // code values in U16. src/api.ts rejects conflicting source declarations.
   // Double division then float cast exactly reproduces JS Float32Array assignment.
   static const auto u8=[] {std::array<float,256> a{};for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/255.0);return a;}();
   static const auto u16=[] {std::vector<float> a(65536);for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/65535.0);return a;}();

@@ -1,5 +1,5 @@
 [package]
-name = "jxl-planar-xyb-proof"
+name = "jxl-planar-session"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -10,6 +10,7 @@ license = "MIT"
 moxcms = { version = "=0.9.2", default-features = false, features = ["lut", "extended_range"] }
 
 [lib]
+path = "rust/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [profile.release]
