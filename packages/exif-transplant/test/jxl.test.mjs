@@ -6,7 +6,7 @@ import { concat, u32 } from '@browser-mc/binary';
 import { box, boxes } from '@browser-mc/media-container';
 import { detectImageMime, readExif, writeExif, removeExif, transplantExif, removeGpsExif,
   readExifAsync, readExifPayloadAsync, readJxlExif, readJxlExifAsync, transplantExifAsync, removeGpsExifAsync,
-  hasGpsInExif, prepareJxlEncodeExif } from '../dist/index.js';
+  hasGpsInExif, prepareJxlEncodeExif, stripGpsFromExif } from '../dist/index.js';
 
 const signature = box('JXL ', new Uint8Array([13, 10, 135, 10]));
 const ftyp = box('ftyp', new TextEncoder().encode('jxl '), u32(0), new TextEncoder().encode('jxl '));
@@ -96,14 +96,29 @@ test('truncated boxes and bad Exif offsets fail clearly', () => {
   }
 });
 
-test('brob sync and async helpers preserve codestream', async () => {
+const useAsync = /Brotli-compressed \(brob\).*readExifAsync, readJxlExifAsync, transplantExifAsync or removeGpsExifAsync/;
+
+test('sync readers throw on brob and point at async APIs; sync box edits still work', () => {
+  const image = container(brob(tiff(6, true, true))), saved = image.slice();
+  assert.throws(() => readExif(image), useAsync);
+  assert.throws(() => readJxlExif(image), useAsync);
+  assert.throws(() => transplantExif(image, raw), useAsync);
+  assert.throws(() => removeGpsExif(image), useAsync);
+  // A later brob is never reached when a plain Exif box comes first.
+  assert.deepEqual(readExif(container(exifBox(tiff(2)), brob(tiff(3)))).bytes, concat([prefix, tiff(2)]));
+  // Box rewrites need no decompression, even for brob input.
+  assert.deepEqual(removeExif(image), container());
+  assert.deepEqual(readExif(writeExif(image, tiff(4))).bytes, concat([prefix, tiff(4)]));
+  assert.deepEqual(transplantExif(writeExif(raw, tiff(5)), image), writeExif(image, tiff(5)));
+  assert.deepEqual(image, saved);
+});
+
+test('brob async helpers preserve codestream', async () => {
   const image = container(brob(tiff(6, true, true)));
   const saved = image.slice();
   const payload = await readJxlExifAsync(image);
-  assert.deepEqual(readExif(image), payload);
-  assert.deepEqual(readJxlExif(image), payload);
-  assert.deepEqual(readExif(transplantExif(image, raw)), payload);
-  assert.deepEqual(removeGpsExif(image), await removeGpsExifAsync(image));
+  assert.deepEqual(payload, { bytes: concat([prefix, tiff(6, true, true)]), sourceMime: 'image/jxl' });
+  assert.deepEqual(await readExifAsync(image), payload);
   assert.deepEqual(image, saved);
   assert.deepEqual(await readExifPayloadAsync(image), payload);
   assert.deepEqual(readExif(await transplantExifAsync(image, raw)), payload);
@@ -124,17 +139,21 @@ test('async readers handle plain Exif, offsets, missing Exif and malformed brob'
   await assert.rejects(readExifAsync(container(brob(new Uint8Array()))), /TIFF offset/);
   const saved = globalThis.DecompressionStream;
   try {
-    const image = container(brob(tiff(8, false, true))), savedImage = image.slice();
+    const body = tiff(8, false, true), expected = { bytes: concat([prefix, body]), sourceMime: 'image/jxl' };
+    const image = container(brob(body)), savedImage = image.slice();
+    const malformed = container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255])));
     for (const unsupported of [undefined, class {
       constructor() { throw new TypeError('Unsupported compression format: brotli'); }
     }]) {
+      // Pure-JS fallback path (as in Chromium).
       globalThis.DecompressionStream = unsupported;
-      assert.deepEqual(await readExifAsync(image), readExif(image));
-      assert.deepEqual(await removeGpsExifAsync(image), removeGpsExif(image));
-      assert.deepEqual(await transplantExifAsync(image, raw), transplantExif(image, raw));
+      assert.deepEqual(await readExifAsync(image), expected);
+      assert.deepEqual(await readJxlExifAsync(image), expected);
+      assert.deepEqual(await removeGpsExifAsync(image), writeExif(image, stripGpsFromExif(expected.bytes)));
+      assert.deepEqual(await transplantExifAsync(image, raw), writeExif(raw, expected.bytes));
       assert.ok(await readExifAsync(writeExif(raw, tiff())));
-      const malformed = container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255])));
-      assert.throws(() => readExif(malformed), /Invalid JPEG XL brob/);
+      // Sync must refuse before any Brotli work, so malformed data gets the "use async" error.
+      assert.throws(() => readExif(malformed), useAsync);
       await assert.rejects(readExifAsync(malformed), /Invalid JPEG XL brob/);
     }
     assert.deepEqual(image, savedImage);
@@ -158,8 +177,10 @@ test('async brob reader prefers DecompressionStream when construction succeeds',
       }
     };
     const image = container(brob(tiff()));
-    assert.deepEqual(await readExifAsync(image), readExif(image));
+    assert.deepEqual(await readExifAsync(image), { bytes: concat([prefix, tiff()]), sourceMime: 'image/jxl' });
     assert.equal(constructions, 1);
+    assert.throws(() => readExif(image), useAsync);
+    assert.equal(constructions, 1, 'sync reader must not construct a decompressor');
     globalThis.DecompressionStream = class {
       constructor() {
         return new TransformStream({ transform() { throw new Error('bad Brotli stream'); } });

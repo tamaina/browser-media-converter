@@ -19,6 +19,10 @@ export function detectImageMime(data: Uint8Array): ImageMime {
   throw new Error('Unsupported image format');
 }
 
+/**
+ * Synchronous read for JPEG/WebP/AVIF and uncompressed JPEG XL Exif. Throws on JPEG XL
+ * Brotli (`brob`) Exif instead of decompressing; use `readExifAsync` for those.
+ */
 export function readExif(data: Uint8Array, mime = detectImageMime(data)): ExifPayload | null {
   if (mime === 'image/jxl') return readJxlExif(data);
   if (mime === 'image/jpeg') return readJpegExif(data);
@@ -41,6 +45,7 @@ export function removeExif(data: Uint8Array, mime = detectImageMime(data)): Uint
   return rewriteAvifExif(data, null);
 }
 
+/** Sync GPS-only removal. Throws on JPEG XL `brob` Exif; use `removeGpsExifAsync`. */
 export function removeGpsExif(data: Uint8Array, mime = detectImageMime(data)): Uint8Array {
   const exif = readExif(data, mime);
   if (!exif) return data.slice();
@@ -61,6 +66,7 @@ export function writeExif(data: Uint8Array, exif: Uint8Array | ExifPayload, mime
   return rewriteAvifExif(data, stripExifHeader(bytes));
 }
 
+/** Sync transplant. Throws when the source has JPEG XL `brob` Exif; use `transplantExifAsync`. */
 export function transplantExif(source: Uint8Array, target: Uint8Array): Uint8Array {
   const exif = readExif(source);
   return exif ? writeExif(target, exif) : removeExif(target);

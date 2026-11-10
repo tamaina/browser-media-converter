@@ -1,6 +1,5 @@
 import { concat, readAscii, readU32, startsWith, u32 } from '@browser-mc/binary';
 import { box, readBox, type IsobmffBox } from '@browser-mc/media-container';
-import { decompress } from 'brotli/decompress.js';
 import { normalizeJpegExif, stripExifHeader } from './exif-bytes.js';
 import type { ExifPayload } from './types.js';
 
@@ -39,24 +38,52 @@ function parseExif(payload: Uint8Array): ExifPayload {
   return { bytes: normalizeJpegExif(payload.subarray(offset)), sourceMime: 'image/jxl' };
 }
 
-function decompressBrob(payload: Uint8Array): Uint8Array {
+const BROB_ERROR = 'Invalid JPEG XL brob EXIF Brotli data';
+
+/** Async-only fallback when DecompressionStream('brotli') is unavailable (e.g. Chromium). Loaded lazily. */
+async function decompressBrobPureJs(compressed: Uint8Array): Promise<Uint8Array> {
+  const { decompress } = await import('brotli/decompress.js');
   try {
-    const result = decompress(payload.subarray(4));
+    const result = decompress(compressed);
     // Pure-JS decode may return a short buffer for garbage; keep the public error stable.
     if (!(result instanceof Uint8Array) || result.length < 4) throw new Error('Brotli decoder returned truncated EXIF payload');
     return result;
   } catch (cause) {
-    throw new Error('Invalid JPEG XL brob EXIF Brotli data', { cause });
+    throw new Error(BROB_ERROR, { cause });
   }
 }
 
-/** Synchronously reads plain or Brotli-wrapped Exif using the pure JS decoder. */
+async function decompressBrob(payload: Uint8Array): Promise<Uint8Array> {
+  const compressed = payload.subarray(4);
+  let decompressor: DecompressionStream | undefined;
+  try {
+    // Older TypeScript DOM declarations do not yet include Brotli.
+    decompressor = new DecompressionStream('brotli' as CompressionFormat);
+  } catch {
+    // Chromium and older runtimes lack Brotli DecompressionStream support.
+  }
+  if (!decompressor) return decompressBrobPureJs(compressed);
+  try {
+    const stream = new Blob([new Uint8Array(compressed)]).stream().pipeThrough(decompressor);
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch (cause) {
+    throw new Error(BROB_ERROR, { cause });
+  }
+}
+
+/**
+ * Synchronously reads uncompressed JPEG XL Exif. Brotli-compressed (`brob`) Exif is
+ * never decompressed here: it throws, and must be read with `readJxlExifAsync`.
+ */
 export function readJxlExif(data: Uint8Array): ExifPayload | null {
   if (rawCodestream(data)) return null;
   for (const entry of jxlBoxes(data)) {
     if (!isExifBox(data, entry)) continue;
-    const payload = data.subarray(entry.start + entry.headerSize, entry.end);
-    return parseExif(entry.type === 'brob' ? decompressBrob(payload) : payload);
+    if (entry.type === 'brob') {
+      throw new Error('JPEG XL Exif is Brotli-compressed (brob) and synchronous readers do not decompress it; '
+        + 'use readExifAsync, readJxlExifAsync, transplantExifAsync or removeGpsExifAsync');
+    }
+    return parseExif(data.subarray(entry.start + entry.headerSize, entry.end));
   }
   return null;
 }
@@ -66,24 +93,8 @@ export async function readJxlExifAsync(data: Uint8Array): Promise<ExifPayload | 
   if (rawCodestream(data)) return null;
   for (const entry of jxlBoxes(data)) {
     if (!isExifBox(data, entry)) continue;
-    let payload = data.subarray(entry.start + entry.headerSize, entry.end);
-    if (entry.type === 'brob') {
-      let decompressor: DecompressionStream | undefined;
-      try {
-        // Older TypeScript DOM declarations do not yet include Brotli.
-        decompressor = new DecompressionStream('brotli' as CompressionFormat);
-      } catch {
-        // Chromium and older runtimes lack Brotli DecompressionStream support.
-      }
-      if (!decompressor) return parseExif(decompressBrob(payload));
-      try {
-        const stream = new Blob([new Uint8Array(payload.subarray(4))]).stream().pipeThrough(decompressor);
-        payload = new Uint8Array(await new Response(stream).arrayBuffer());
-      } catch (cause) {
-        throw new Error('Invalid JPEG XL brob EXIF Brotli data', { cause });
-      }
-    }
-    return parseExif(payload);
+    const payload = data.subarray(entry.start + entry.headerSize, entry.end);
+    return parseExif(entry.type === 'brob' ? await decompressBrob(payload) : payload);
   }
   return null;
 }

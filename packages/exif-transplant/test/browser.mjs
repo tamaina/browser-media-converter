@@ -55,11 +55,24 @@ try {
       const payload = await api.readExifAsync(image);
       check(api.prepareJxlEncodeExif(payload.bytes).orientation === 6, 'Orientation 6 read');
       check(equal((await api.readJxlExifAsync(image)).bytes, payload.bytes), 'low-level reader');
-      check(equal(api.readExif(image).bytes, payload.bytes), 'sync plain/brob read');
-      check(equal(api.readJxlExif(image).bytes, payload.bytes), 'sync low-level read');
-      check(equal(api.readExif(api.transplantExif(image, image)).bytes, payload.bytes), 'sync transplant');
-      const syncStripped = api.removeGpsExif(image);
-      check(!api.hasGpsInExif(api.readExif(syncStripped).bytes), 'sync GPS removed');
+      let syncStripped;
+      if (i === 0) {
+        // Plain Exif: light sync APIs work directly.
+        check(equal(api.readExif(image).bytes, payload.bytes), 'sync plain read');
+        check(equal(api.readJxlExif(image).bytes, payload.bytes), 'sync low-level read');
+        check(equal(api.readExif(api.transplantExif(image, image)).bytes, payload.bytes), 'sync transplant');
+        syncStripped = api.removeGpsExif(image);
+        check(!api.hasGpsInExif(api.readExif(syncStripped).bytes), 'sync GPS removed');
+      } else {
+        // brob: sync readers refuse (no Brotli work) and point at the async APIs.
+        for (const call of [() => api.readExif(image), () => api.readJxlExif(image),
+          () => api.transplantExif(image, image), () => api.removeGpsExif(image)]) {
+          let message = '';
+          try { call(); } catch (error) { message = String(error?.message); }
+          check(/brob.*readExifAsync/.test(message), `sync brob must throw use-async error, got: ${message}`);
+        }
+        syncStripped = await api.removeGpsExifAsync(image);
+      }
       const bare = api.removeExif(image);
       check(await api.readExifAsync(bare) === null, 'remove compressed/plain Exif');
       const rewritten = api.writeExif(image, new Uint8Array(replacement));
@@ -80,7 +93,7 @@ try {
     return { fixtures: fixtures.length, brotliStream, orientation: '6 → 3 tag edit; codestream bytes unchanged' };
   }, { fixtures, replacement: Array.from(tiff(3)) });
   assert.equal(result.fixtures, 2);
-  console.log(`Chromium ${browser.version()}: plain + brob EXIF sync/async read/write/remove/transplant/GPS passed (Brotli DS: ${result.brotliStream}); ${result.orientation}`);
+  console.log(`Chromium ${browser.version()}: plain EXIF sync+async, brob EXIF async (sync throws) read/write/remove/transplant/GPS passed (Brotli DS: ${result.brotliStream}); ${result.orientation}`);
 } finally {
   await browser?.close();
 }

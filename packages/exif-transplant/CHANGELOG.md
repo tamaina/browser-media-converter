@@ -4,8 +4,8 @@
 
 ### Patch Changes
 
-- Add JPEG XL EXIF read/write/remove/transplant and GPS stripping, with pure-JS Brotli reads in Node and browsers and uncompressed box writes. Preserve codestream Orientation when editing boxes.
-- Support plain and brob Exif in synchronous readers, transplant and GPS removal using `brotli`. Add `readExifAsync`, `readJxlExifAsync`, `readExifPayloadAsync`, `transplantExifAsync`, and `removeGpsExifAsync` with `DecompressionStream('brotli')` preferred when available and the same pure-JS fallback otherwise. Chromium (including Chrome 157) lacks Brotli DecompressionStream support. Remove Node imports and top-level await from the library.
+- Add JPEG XL EXIF read/write/remove/transplant and GPS stripping, with uncompressed box writes. Preserve codestream Orientation when editing boxes.
+- Only heavy work is async. Synchronous readers (`readExif`, `readJxlExif`, and `transplantExif` / `removeGpsExif`, which use them) handle plain JPEG XL `Exif` boxes. They throw an error pointing to the async APIs on Brotli `brob` Exif instead of decompressing it. `writeExif`, `removeExif` and `rewriteJxlExif` stay synchronous for all input. Add `readExifAsync`, `readJxlExifAsync`, `readExifPayloadAsync`, `transplantExifAsync`, and `removeGpsExifAsync`, which read `brob` Exif in Node and browsers. They prefer `DecompressionStream('brotli')` and fall back to a lazily loaded pure-JS `brotli` decoder when it is unavailable. Chromium (including Chrome 157) lacks Brotli DecompressionStream support. Remove Node imports and top-level await from the library.
 - Export `prepareJxlEncodeExif` for shared strict TIFF/IFD0/Orientation validation at encode time.
 
 ## 0.0.4

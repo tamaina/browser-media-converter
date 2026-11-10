@@ -44,7 +44,7 @@ GPS removal is byte-level and ExifReader-free. It clears the TIFF `GPSInfoIFDPoi
 
 - JPEG: read, remove, write, GPS-only remove.
 - WebP: read, remove, write `EXIF` RIFF chunks, GPS-only remove.
-- JPEG XL: reads/writes/removes `Exif` boxes, including GPS-only removal. Sync and async APIs read Brotli `brob`-wrapped EXIF in Node and browsers using a pure-JS decoder, with async APIs preferring `DecompressionStream('brotli')` when available; writes uncompressed `Exif` boxes while preserving other boxes and codestream bytes. Raw codestream input is wrapped in a signature + `ftyp` + `Exif` + `jxlc` container when adding EXIF. Removing absent EXIF leaves raw codestream input raw.
+- JPEG XL: reads/writes/removes `Exif` boxes, including GPS-only removal. Sync readers handle uncompressed `Exif` boxes; Brotli `brob`-wrapped EXIF is read only by the `*Async` APIs (sync readers throw for it), which prefer `DecompressionStream('brotli')` and fall back to a pure-JS decoder. Writes produce uncompressed `Exif` boxes while preserving other boxes and codestream bytes. Raw codestream input is wrapped in a signature + `ftyp` + `Exif` + `jxlc` container when adding EXIF. Removing absent EXIF leaves raw codestream input raw.
 - AVIF: reads item-addressed `Exif` metadata and rewrites AVIF through `@browser-mc/media-container`'s minimal AVIF muxer. Nonessential original AVIF boxes/properties are not preserved.
 
 The smoke test covers JPEG EXIF read/remove/restore against `fujioka.jpg` and AVIF/WebP rewrite paths when local generated inputs are available.
@@ -80,9 +80,24 @@ It does not impose encoder payload caps or validate other opaque TIFF tags.
 
 ### Sync and async readers
 
-`readExif` and `readJxlExif` stay synchronous and return `ExifPayload | null`.
-They support both plain and brob JPEG XL Exif. Compressed reads use the pure-JS
-`brotli` decoder, including in `transplantExif` and `removeGpsExif`.
+Only heavy work is async. Brotli decompression of JPEG XL `brob` Exif boxes is the
+only heavy step, so everything else stays synchronous:
+
+| Sync (light) | Async (may decompress `brob`) |
+| --- | --- |
+| `detectImageMime`, `isJxl`, `hasGpsInExif`, `stripGpsFromExif`, `prepareJxlEncodeExif` | — |
+| `writeExif`, `removeExif`, `rewriteJxlExif` (also on `brob` input) | — |
+| `readExif` / `readExifPayload` / `readJxlExif` | `readExifAsync` / `readExifPayloadAsync` / `readJxlExifAsync` |
+| `transplantExif`, `removeGpsExif` | `transplantExifAsync`, `removeGpsExifAsync` |
+
+`readExif` and `readJxlExif` return `ExifPayload | null` for JPEG, WebP, AVIF and
+**uncompressed** JPEG XL Exif. If the first JPEG XL Exif box is `brob`, they never
+decompress it. They throw an `Error` naming `readExifAsync`, `readJxlExifAsync`,
+`transplantExifAsync` and `removeGpsExifAsync`. Malformed `brob` data gets the same error, because no
+Brotli work is attempted. `transplantExif` and `removeGpsExif` read through
+`readExif`, so they throw the same way on a `brob` source. `writeExif`,
+`removeExif` and `rewriteJxlExif` never decompress, so they stay synchronous
+even for `brob` input: the old box is dropped and an uncompressed `Exif` box is written.
 
 `readExifAsync` and `readJxlExifAsync` return `Promise<ExifPayload | null>` and
 support both plain and brob Exif. `readExifPayloadAsync` aliases `readExifAsync`.
@@ -99,19 +114,21 @@ const withoutGps = await removeGpsExifAsync(source);
 
 Async Brotli decompression prefers the platform `DecompressionStream('brotli')`
 when its constructor succeeds. Chromium (including Chrome 157) does not support
-Brotli DecompressionStream, so it falls back to the same pure-JS `brotli` decoder
-used by synchronous APIs. Missing DecompressionStream also uses this fallback.
+Brotli DecompressionStream, so the async APIs fall back to the pure-JS `brotli`
+decoder (loaded lazily via dynamic `import()` and used only by the async APIs).
+Missing DecompressionStream also uses this fallback.
 Node, Firefox and Safari can use their native Brotli streams when supported.
 There are no Node imports or top-level await in the library. Malformed compressed
-data throws/rejects with a Brotli error. `prepareJxlEncodeExif` remains synchronous.
+data rejects with `Invalid JPEG XL brob EXIF Brotli data`. `prepareJxlEncodeExif` remains synchronous.
 `writeExif` and `removeExif` need no decompressor, even for brob input; writes
 always produce uncompressed Exif boxes. All edits retain the same codestream
 Orientation/pixel preservation guarantees described above.
 XMP remains on the encoder; no XMP transplant API is added.
 
 The Chromium test bundles the published entry for browsers and exercises plain
-and encoder-produced brob Exif in `page.evaluate`, covering sync and async reads,
-transplant and GPS removal. It injects the browser bundle into a blank page and
+and encoder-produced brob Exif in `page.evaluate`. Plain Exif covers sync and async
+reads, transplant and GPS removal. For brob it checks that the sync readers throw the "use
+async" error and covers the async APIs, which exercise the pure-JS fallback in Chromium. It injects the browser bundle into a blank page and
 needs no localhost server. Set `TMPDIR` to the repository's
 `packages/libjxl-wasm/build/tmp` and `PLAYWRIGHT_BROWSERS_PATH` to an existing
 Playwright browser cache when needed. Optionally set `CHROME_EXECUTABLE_PATH` to
