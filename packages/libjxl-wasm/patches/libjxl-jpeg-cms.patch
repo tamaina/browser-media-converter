@@ -1,0 +1,86 @@
+--- a/lib/jxl/jpeg/enc_jpeg_data.h
++++ b/lib/jxl/jpeg/enc_jpeg_data.h
+@@ -28,7 +28,8 @@
+                       const CompressParams& cparams);
+ 
+ Status SetColorEncodingFromJpegData(const jpeg::JPEGData& jpg,
+-                                    ColorEncoding* color_encoding);
++                                    ColorEncoding* color_encoding,
++                                    const JxlCmsInterface* cms = nullptr);
+ Status SetChromaSubsamplingFromJpegData(const JPEGData& jpg,
+                                         YCbCrChromaSubsampling* cs);
+ Status SetColorTransformFromJpegData(const JPEGData& jpg,
+@@ -38,7 +39,8 @@
+  * Decodes bytes containing JPEG codestream into a CodecInOut as coefficients
+  * only, for lossless JPEG transcoding.
+  */
+-Status DecodeImageJPG(Span<const uint8_t> bytes, CodecInOut* io);
++Status DecodeImageJPG(Span<const uint8_t> bytes, CodecInOut* io,
++                      const JxlCmsInterface* cms = nullptr);
+ 
+ }  // namespace jpeg
+ }  // namespace jxl
+--- a/lib/jxl/jpeg/enc_jpeg_data.cc
++++ b/lib/jxl/jpeg/enc_jpeg_data.cc
+@@ -224,7 +224,8 @@
+ }  // namespace
+ 
+ Status SetColorEncodingFromJpegData(const jpeg::JPEGData& jpg,
+-                                    ColorEncoding* color_encoding) {
++                                    ColorEncoding* color_encoding,
++                                    const JxlCmsInterface* cms) {
+   IccBytes icc_profile;
+   if (!ParseChunkedMarker(jpg, kApp2, ByteSpan(kIccProfileTag), &icc_profile)) {
+     JXL_WARNING("ReJPEG: corrupted ICC profile\n");
+@@ -236,7 +237,8 @@
+     *color_encoding = ColorEncoding::SRGB(is_gray);
+   } else {
+     JXL_RETURN_IF_ERROR(
+-        color_encoding->SetICC(std::move(icc_profile), JxlGetDefaultCms()));
++        color_encoding->SetICC(std::move(icc_profile),
++                               cms ? cms : JxlGetDefaultCms()));
+   }
+   return true;
+ }
+@@ -389,7 +391,8 @@
+   return true;
+ }
+ 
+-Status DecodeImageJPG(const Span<const uint8_t> bytes, CodecInOut* io) {
++Status DecodeImageJPG(const Span<const uint8_t> bytes, CodecInOut* io,
++                      const JxlCmsInterface* cms) {
+   if (!IsJPG(bytes)) return false;
+   JxlMemoryManager* memory_manager = io->memory_manager;
+   io->frames.clear();
+@@ -402,7 +405,8 @@
+     return JXL_FAILURE("Error reading JPEG");
+   }
+   JXL_RETURN_IF_ERROR(
+-      SetColorEncodingFromJpegData(*jpeg_data, &io->metadata.m.color_encoding));
++      SetColorEncodingFromJpegData(*jpeg_data, &io->metadata.m.color_encoding,
++                                   cms));
+   JXL_RETURN_IF_ERROR(SetBlobsFromJpegData(*jpeg_data, &io->blobs));
+   JXL_RETURN_IF_ERROR(SetChromaSubsamplingFromJpegData(
+       *jpeg_data, &io->Main().chroma_subsampling));
+--- a/lib/jxl/encode.cc
++++ b/lib/jxl/encode.cc
+@@ -2091,7 +2091,8 @@
+   }
+ 
+   jxl::CodecInOut io{&frame_settings->enc->memory_manager};
+-  if (!jxl::jpeg::DecodeImageJPG(jxl::Bytes(buffer, size), &io)) {
++  if (!jxl::jpeg::DecodeImageJPG(jxl::Bytes(buffer, size), &io,
++                                  &frame_settings->enc->cms)) {
+     return JXL_API_ERROR(frame_settings->enc, JXL_ENC_ERR_BAD_INPUT,
+                          "Error during decode of input JPEG");
+   }
+@@ -2099,7 +2100,8 @@
+   if (!frame_settings->enc->color_encoding_set) {
+     if (!SetColorEncodingFromJpegData(
+             *io.Main().jpeg_data,
+-            &frame_settings->enc->metadata.m.color_encoding)) {
++            &frame_settings->enc->metadata.m.color_encoding,
++            &frame_settings->enc->cms)) {
+       return JXL_API_ERROR(
+           frame_settings->enc, JXL_ENC_ERR_BAD_INPUT,
+           "Error decoding the ICC profile embedded in the input JPEG");

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Native patched libjxl (shared), djxl, and the two native test tools.
+# Native patched libjxl (shared), djxl, and native verification tools.
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
 fetch_libjxl
@@ -12,11 +12,17 @@ configure() {
   -DBUILD_TESTING=OFF -DJPEGXL_ENABLE_TOOLS="$2" -DJPEGXL_EXTERNAL_CMS="$3" -DJPEGXL_ENABLE_BENCHMARK=OFF \
   -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_JPEGLI=OFF -DJPEGXL_ENABLE_JNI=OFF \
   -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_SKCMS=OFF \
-  -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF \
+  -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_TRANSCODE_JPEG=ON \
   -DJPEGXL_FORCE_SYSTEM_BROTLI=ON "${@:4}"
 }
 configure build/native OFF ON
 "$cmake" --build build/native --target jxl --parallel "$jobs"
+cxx="${CXX:-/usr/bin/g++}"
+inc=(-Ibuild/libjxl/lib/include -Ibuild/native/lib/include)
+# JPEG recompression header verifier (no system libjpeg needed).
+"$cxx" -std=c++17 -O2 -Wall -Wextra -Werror "${inc[@]}" tools/jpeg_info.cc \
+  "$PWD/build/native/lib/libjxl.so" -Wl,-rpath,"$PWD/build/native/lib" -o build/jpeg-info
+
 # Only the independent reference decoder needs a real default CMS. Its separate
 # build uses system LCMS2 (never fetches/builds LCMS2), not the encoder library.
 configure build/native-reference ON OFF -DJPEGXL_FORCE_SYSTEM_LCMS2=ON
@@ -32,8 +38,6 @@ export LD_LIBRARY_PATH="$reference/lib:${LD_LIBRARY_PATH:-}"
 exec "$reference/tools/djxl" "$@"
 WRAPPER
 chmod +x build/native/tools/djxl
-cxx="${CXX:-/usr/bin/g++}"
-inc=(-Ibuild/libjxl/lib/include -Ibuild/native/lib/include)
 # Independent decoder: pin the system library search ahead of LD_LIBRARY_PATH.
 system_jxl="${SYSTEM_JXL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl.so.0.11}"
 system_cms="${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.11}"

@@ -22,7 +22,7 @@
     "typecheck:package": "tsc -p tsconfig.json --noEmit",
     "test:electron": "pnpm build && env -u ELECTRON_RUN_AS_NODE xvfb-run -a node test/electron-smoke.mjs",
     "test": "pnpm build && pnpm test:package",
-    "test:package": "node --test --test-concurrency=1 test/source-color-metadata.test.mjs"
+    "test:package": "node --test --test-concurrency=1 test/source-color-metadata.test.mjs test/source-exif.test.mjs"
   },
   "dependencies": {
     "@browser-mc/binary": "workspace:^",
