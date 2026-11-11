@@ -2,7 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile, writeFile, mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {accessSync, statSync, constants} from 'node:fs';
+import {join, delimiter, isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -161,42 +162,51 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
   assert.ok(encoder.encodeRgb(rgb({depth:32, bitDepth:32, storage:'float32'})).length > 0);
 });
 
-// djxl reconstructs the JPEG bitstream, rather than decoding/re-encoding pixels.
-const djxl = fileURLToPath(new URL('../build/native/tools/djxl', import.meta.url));
-for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp']) {
-  test(`JPEG ${fixture} reconstructs byte-for-byte with either box compression setting`, async () => {
+// Optional independent native verifiers. Keep WASM encoding coverage even in a
+// WASM-only checkout; DJXL/JPEG_INFO may point to executables or PATH commands.
+function nativeTool(override: string | undefined, fallback: string) {
+  const value = override ?? fileURLToPath(new URL(fallback, import.meta.url));
+  const candidates = isAbsolute(value) || value.includes('/') ? [value] : (process.env.PATH ?? '').split(delimiter).map(p => join(p, value));
+  return candidates.find(p => {try {accessSync(p, constants.X_OK); return statSync(p).isFile();} catch {return false;}});
+}
+const djxl = nativeTool(process.env.DJXL, '../build/native/tools/djxl');
+const jpegInfo = nativeTool(process.env.JPEG_INFO, '../build/jpeg-info');
+for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp', 'icc-srgb', 'icc-p3', 'large-444', 'restart-422-tail']) {
+  test(`JPEG ${fixture} encodes with either box compression setting`, async t => {
     const jpeg = new Uint8Array(await readFile(new URL(`./fixtures/${fixture}.jpg`, import.meta.url)));
     const directory = await mkdtemp(join(tmpdir(), 'jpeg-roundtrip-'));
     try {
-      const nativeJxl = join(directory, 'native.jxl'), nativeJpeg = join(directory, 'native.jpg');
-      await runFile(fileURLToPath(new URL('../build/jpeg-info', import.meta.url)), [
-        '--encode', fileURLToPath(new URL(`./fixtures/${fixture}.jpg`, import.meta.url)), nativeJxl
-      ]);
-      await runFile(djxl, [nativeJxl, nativeJpeg]);
-      assert.deepEqual(new Uint8Array(await readFile(nativeJpeg)), jpeg, 'native JPEG reconstruction');
       for (const compressBoxes of [undefined, false, true]) {
-        // Exercise a nonzero byteOffset too.
         const padded = new Uint8Array(jpeg.length + 11); padded.set(jpeg, 7);
         const encoded = encoder.encodeJpeg(padded.subarray(7, 7 + jpeg.length), {compressBoxes});
         assert.equal(encoded.colorResolved.policy, 'jpeg-lossless');
         assert.deepEqual(encoded.warnings, []);
+        assert.equal(encoder.stats.colorResolved, undefined);
+        assert.deepEqual(encoder.stats.jpegColorResolved, encoded.colorResolved);
+        if (fixture === 'large-444') assert.ok(encoded.length > 4096, 'forces NEED_MORE_OUTPUT and buffer growth');
         const input = join(directory, 'input.jxl'), output = join(directory, 'output.jpg');
         await writeFile(input, encoded);
-        const {stdout} = await runFile(fileURLToPath(new URL('../build/jpeg-info', import.meta.url)), [input]);
-        const info = stdout.trim();
-        assert.equal(info, `9 7 ${fixture === 'oriented' ? 6 : 1} 1`, 'original-profile, non-XYB header and EXIF orientation');
-        await runFile(djxl, [input, output]);
-        assert.deepEqual(new Uint8Array(await readFile(output)), jpeg);
+        await t.test(`byte-exact reconstruction (compressBoxes=${compressBoxes})`, {
+          skip: djxl ? false : 'djxl absent; build native tools or set DJXL'
+        }, async () => {
+          await runFile(djxl!, [input, output]);
+          assert.deepEqual(new Uint8Array(await readFile(output)), jpeg);
+        });
+        await t.test(`independent header inspection (compressBoxes=${compressBoxes})`, {
+          skip: jpegInfo ? false : 'jpeg-info absent; build native tools or set JPEG_INFO'
+        }, async () => {
+          const {stdout} = await runFile(jpegInfo!, [input]);
+          const dimensions = fixture === 'large-444' ? '160 128' : fixture === 'restart-422-tail' ? '33 17' : '9 7';
+          assert.equal(stdout.trim(), `${dimensions} ${fixture === 'oriented' ? 6 : 1} 1`, 'original-profile, non-XYB header and EXIF orientation');
+        });
         if (fixture === 'oriented' && compressBoxes === false) {
           const marker = Buffer.from(encoded).indexOf('Exif');
           assert.ok(marker > 0, 'Exif box retained');
-          // Box payload: 4-byte TIFF offset followed by the original TIFF bytes.
           const original = Buffer.from(jpeg).indexOf(Buffer.from('Exif\0\0'));
           const length = new DataView(jpeg.buffer, jpeg.byteOffset).getUint16(original - 2) - 8;
           assert.deepEqual(encoded.subarray(marker + 8, marker + 8 + length), jpeg.subarray(original + 6, original + 6 + length));
         }
       }
-      // No JPEG-specific state leaks into the existing pixel path.
       assert.ok(encoder.encodeRgb(rgb()).length > 0);
     } finally {await rm(directory, {recursive:true, force:true});}
   });
@@ -205,21 +215,56 @@ for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp']) {
 test('JPEG rejects corrupt input and recovers for the next call', async () => {
   const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
   for (const bytes of [new Uint8Array([1,2,3]), jpeg.subarray(0, 32), new Uint8Array([255,216,255,217])]) {
-    assert.throws(() => encoder.encodeJpeg(bytes), /invalid or unsupported JPEG/);
+    assert.throws(() => encoder.encodeJpeg(bytes), /BAD_INPUT/);
   }
+  assert.throws(() => encoder.encodeJpeg(jpeg.subarray(0, jpeg.length - 20)), /lossless JPEG recompression failed \(BAD_INPUT:/);
   assert.ok(encoder.encodeJpeg(jpeg).length > 0);
 });
 
 test('JPEG rejects misleading pixel/lossy and metadata removal options', () => {
   const jpeg = new Uint8Array([255,216]);
   for (const option of ['distance','effort','xyb','uses_original_profile','keepExif','keepXmp','bitDepth','icc']) {
-    assert.throws(() => encoder.encodeJpeg(jpeg, {[option]:false}), /unsupported JPEG option/);
+    assert.throws(() => encoder.encodeJpeg(jpeg, {[option]:false} as never), /unsupported JPEG option/);
   }
   for (const input of [null, [], new ArrayBuffer(3), new Uint8Array()]) {
-    assert.throws(() => encoder.encodeJpeg(input), /nonempty Uint8Array/);
+    assert.throws(() => encoder.encodeJpeg(input as never), /nonempty Uint8Array/);
   }
   for (const compressBoxes of [0, null, 'true']) {
-    assert.throws(() => encoder.encodeJpeg(jpeg, {compressBoxes}), /compressBoxes must be boolean/);
+    assert.throws(() => encoder.encodeJpeg(jpeg, {compressBoxes} as never), /compressBoxes must be boolean/);
   }
-  assert.throws(() => encoder.encodeJpeg(jpeg, null), /JPEG options must be an object/);
+  assert.throws(() => encoder.encodeJpeg(jpeg, null as never), /JPEG options must be an object/);
+});
+
+test('JPEG rejects oversized bytes and SOF dimensions before encoding', async () => {
+  assert.throws(() => encoder.encodeJpeg(new Uint8Array(64 * 1024 * 1024 + 1)), /size limit: 64 MiB/);
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const sof = jpeg.findIndex((v, i) => v === 0xff && jpeg[i + 1] === 0xc0);
+  assert.ok(sof > 0);
+  for (const [width, height] of [[8193, 1], [1, 8193], [2049, 2048], [65535, 65535]]) {
+    const input = jpeg.slice();
+    const view = new DataView(input.buffer);
+    view.setUint16(sof + 5, height); view.setUint16(sof + 7, width);
+    assert.throws(() => encoder.encodeJpeg(input), /JPEG dimension limit/);
+  }
+  const truncated = jpeg.slice(0, sof + 6);
+  assert.throws(() => encoder.encodeJpeg(truncated), /BAD_INPUT/);
+  assert.ok(encoder.encodeJpeg(jpeg).length > 0);
+});
+
+test('JPEG failures clear previous statistics and refresh totalMs', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  for (const invalid of [new Uint8Array(), jpeg.subarray(0, jpeg.length - 20)]) {
+    encoder.encodeJpeg(jpeg);
+    assert.ok(encoder.stats.jpegColorResolved);
+    assert.throws(() => encoder.encodeJpeg(invalid));
+    assert.equal(encoder.stats.jpegColorResolved, undefined);
+    assert.equal(encoder.stats.encodeMs, undefined);
+    assert.equal(typeof encoder.stats.totalMs, 'number');
+  }
+});
+
+test('CMYK JPEG reports an unsupported coefficient input and recovers', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/cmyk.jpg', import.meta.url)));
+  assert.throws(() => encoder.encodeJpeg(jpeg), /BAD_INPUT|NOT_SUPPORTED/);
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
 });

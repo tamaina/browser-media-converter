@@ -20,4 +20,5 @@ fetch_libjxl() {
   fi
   apply_once build/libjxl "$PWD/patches/libjxl-xyb.patch"
   apply_once build/libjxl "$PWD/patches/libjxl-external-cms.patch"
+  apply_once build/libjxl "$PWD/patches/libjxl-jpeg-cms.patch"
 }

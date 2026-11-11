@@ -22,7 +22,9 @@ target/                    ignored Cargo outputs
 `patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
 SIMD kernel. `patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`:
 encoder builds use a rejecting default CMS stub and the bridge installs the
-Rust CMS with `JxlEncoderSetCms`. The CMS uses moxcms pinned to `=0.9.2` for
+Rust CMS with `JxlEncoderSetCms`. `patches/libjxl-jpeg-cms.patch` routes JPEG
+coefficient parsing and colour setup through that installed CMS.
+The CMS uses moxcms pinned to `=0.9.2` for
 LUT ICC profiles. Only Highway and Brotli submodules are needed; populated
 source trees are reused without a network fetch.
 
@@ -152,17 +154,39 @@ settings. libjxl requires both for reconstruction, so metadata removal is not
 exposed. AddJPEGFrame's `InterpretExif` applies EXIF orientation to codestream
 orientation and preserves the matching Exif box without rewriting orientation
 or rotating coefficients. No JS-side rotation or EXIF edits are performed.
-All other options (including distance, effort, XYB and pixel colour options)
-are rejected, since AddJPEGFrame supports only lossless JPEG recompression.
+Effort is explicitly fixed at 3, matching the pixel API default. libjxl also
+supports other efforts for JPEG recompression (speed/size only); this API does
+not expose them. Only `compressBoxes` is configurable. Distance, effort, XYB
+and pixel colour options are rejected by this API.
+
+Inputs are limited to 64 MiB, 4,194,304 pixels and 8192 pixels per axis, matching
+the pixel API's dimension policy. A bounded SOF marker walk enforces dimensions
+before copying input into WASM. These caps reduce peak memory use; they do not
+guarantee allocation success. The synchronous encoder can block the calling
+thread; use a Worker for interactive applications.
 
 Only JPEGs supported by libjxl's coefficient parser can be recompressed;
-malformed/unsupported input throws. The EXTERNAL_CMS rejecting default also
-limits embedded ICC JPEGs: libjxl's internal JPEG parser uses the default CMS,
-not the encoder's installed CMS, so such inputs can be rejected. There is no
-silent profile stripping or pixel fallback. Planar/RGB colour paths are unchanged.
+malformed/unsupported input throws. The JPEG ICC path is patched to use the
+installed Rust CMS instead of the EXTERNAL_CMS rejecting default. Embedded
+sRGB and Display-P3 matrix/TRC profiles can be interpreted without transforming
+JPEG coefficients, and the original ICC bytes are preserved for reconstruction.
+Profiles outside the Rust CMS's supported header interpretation may still be
+rejected. There is no silent profile stripping or pixel fallback.
 
-`node --test --test-isolation=none --test-concurrency=1 test/api.test.ts`
-(from the package directory, after native and WASM builds) covers baseline,
-progressive, grayscale, EXIF orientation 6 and XMP JPEGs, exact reconstructed
-bytes, native header inspection (non-XYB/orientation), corrupt input, option
-validation and subsequent RGB calls. Test temporary files respect `TMPDIR`.
+Encoder errors include libjxl's category: `BAD_INPUT` (invalid input or an
+unsupported ICC), `JBRD` (reconstruction data cannot be represented), `OOM`,
+`NOT_SUPPORTED`, `API_USAGE`, or `GENERIC`. Input validation throws TypeError;
+encoder failures throw Error. After a failed `encodeJpeg`, stats contain only the new
+`totalMs`. JPEG results retain their `colorResolved.policy = 'jpeg-lossless'`;
+statistics expose that value as `stats.jpegColorResolved`. The existing
+`stats.colorResolved?: ColorResolved` remains reserved for pixel encodes.
+
+`pnpm --filter @browser-mc/libjxl-wasm test:api` (after a WASM build)
+covers baseline, progressive, grayscale, EXIF orientation 6, XMP, sRGB/Display-P3 ICC,
+4:4:4 output-buffer growth, 4:2:2 restart markers and trailing data, CMYK
+rejection, input limits, errors, statistics and subsequent RGB calls.
+Byte-exact reconstruction and independent header inspection use optional
+native tools: `DJXL` and `JPEG_INFO` override executable paths (or PATH names),
+otherwise `build/native/tools/djxl` and `build/jpeg-info` are used. Missing
+tools skip only their verification subtests with a reason; WASM encoding still
+runs. Test temporary files respect `TMPDIR`.

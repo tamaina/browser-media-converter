@@ -17,6 +17,12 @@ configure() {
 }
 configure build/native OFF ON
 "$cmake" --build build/native --target jxl --parallel "$jobs"
+cxx="${CXX:-/usr/bin/g++}"
+inc=(-Ibuild/libjxl/lib/include -Ibuild/native/lib/include)
+# JPEG recompression header verifier (no system libjpeg needed).
+"$cxx" -std=c++17 -O2 -Wall -Wextra -Werror "${inc[@]}" tools/jpeg_info.cc \
+  "$PWD/build/native/lib/libjxl.so" -Wl,-rpath,"$PWD/build/native/lib" -o build/jpeg-info
+
 # Only the independent reference decoder needs a real default CMS. Its separate
 # build uses system LCMS2 (never fetches/builds LCMS2), not the encoder library.
 configure build/native-reference ON OFF -DJPEGXL_FORCE_SYSTEM_LCMS2=ON
@@ -32,8 +38,6 @@ export LD_LIBRARY_PATH="$reference/lib:${LD_LIBRARY_PATH:-}"
 exec "$reference/tools/djxl" "$@"
 WRAPPER
 chmod +x build/native/tools/djxl
-cxx="${CXX:-/usr/bin/g++}"
-inc=(-Ibuild/libjxl/lib/include -Ibuild/native/lib/include)
 # Independent decoder: pin the system library search ahead of LD_LIBRARY_PATH.
 system_jxl="${SYSTEM_JXL_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl.so.0.11}"
 system_cms="${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.11}"
@@ -41,7 +45,3 @@ system_cms="${SYSTEM_JXL_CMS_LIBRARY:-/usr/lib/x86_64-linux-gnu/libjxl_cms.so.0.
   "$system_jxl" "$system_cms" \
   -Wl,--disable-new-dtags,-rpath,"$(dirname "$system_jxl"):$(dirname "$system_cms")" -o build/decode-float
 # tools/tail_guard.cc needs the Rust CMS: see scripts/build-tail-guard.sh.
-
-# JPEG recompression smoke/header verifier (no system libjpeg needed).
-"$cxx" -std=c++17 -O2 -Wall -Wextra -Werror "${inc[@]}" tools/jpeg-info.cc \
-  "$PWD/build/native/lib/libjxl.so" -Wl,-rpath,"$PWD/build/native/lib" -o build/jpeg-info

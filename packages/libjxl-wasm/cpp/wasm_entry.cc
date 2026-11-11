@@ -13,6 +13,7 @@ int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" int bridge_jpeg(const uint8_t*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
 extern "C" int bridge_icc_path();

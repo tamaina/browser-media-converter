@@ -1,6 +1,6 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
 // Colour: the Rust CMS (rust/cms.rs) is installed
-// through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
+// through JxlEncoderSetCms, including the patched JPEG ICC header path.
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>
 #include <algorithm>
@@ -198,7 +198,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
-    if(!settings) throw std::runtime_error("frame settings allocation failed");
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
     #ifdef __EMSCRIPTEN__
     check(JxlEncoderSetFrameDistance(settings,wasm_distance));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
@@ -271,7 +271,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       out.resize(out.size()*2);
     }
     result->data=static_cast<uint8_t*>(std::malloc(used));
-    if(!result->data) throw std::runtime_error("output allocation failed");
+    if(!result->data) throw std::runtime_error("OOM: output allocation failed");
     std::memcpy(result->data,out.data(),used); result->size=used;
     if(!source.captured.empty()) {
       if(std::find(source.captured_pixels.begin(),source.captured_pixels.end(),0)!=source.captured_pixels.end())
@@ -346,14 +346,31 @@ extern "C" int bridge_jpeg(const uint8_t* jpeg,size_t size,int compress_boxes,
   *result={};
   try {
     if(!jpeg || !size) throw std::runtime_error("JPEG input is empty");
+    // Keep the CMS alive until after the encoder is destroyed. JPEG coefficients
+    // are never transformed; this CMS only interprets the embedded ICC header.
+    std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
+        planar_cms_create(nullptr,0,0,error,error_size),planar_cms_destroy);
+    if(!cms) throw std::runtime_error("JPEG CMS allocation failed (OOM)");
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
-    if(!enc) throw std::runtime_error("encoder allocation failed");
-    auto check=[](JxlEncoderStatus status) {
-      if(status!=JXL_ENC_SUCCESS) throw std::runtime_error("lossless JPEG recompression failed (invalid or unsupported JPEG)");
+    if(!enc) throw std::runtime_error("OOM: encoder allocation failed");
+    JxlEncoderSetCms(enc.get(),planar_cms_interface(cms.get()));
+    auto check=[&](JxlEncoderStatus status) {
+      if(status==JXL_ENC_SUCCESS) return;
+      const char* reason;
+      switch(JxlEncoderGetError(enc.get())) {
+        case JXL_ENC_ERR_BAD_INPUT: reason="BAD_INPUT: invalid JPEG or unsupported ICC profile"; break;
+        case JXL_ENC_ERR_JBRD: reason="JBRD: JPEG reconstruction data cannot be represented"; break;
+        case JXL_ENC_ERR_OOM: reason="OOM: encoder out of memory"; break;
+        case JXL_ENC_ERR_NOT_SUPPORTED: reason="NOT_SUPPORTED: JPEG feature is unsupported"; break;
+        case JXL_ENC_ERR_API_USAGE: reason="API_USAGE: invalid encoder configuration"; break;
+        default: reason="GENERIC: internal encoder failure"; break;
+      }
+      throw std::runtime_error(std::string("lossless JPEG recompression failed (")+reason+")");
     };
     check(JxlEncoderStoreJPEGMetadata(enc.get(),JXL_TRUE));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
-    if(!settings) throw std::runtime_error("frame settings allocation failed");
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF,1));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP,1));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_COMPRESS_BOXES,compress_boxes));
@@ -372,7 +389,7 @@ extern "C" int bridge_jpeg(const uint8_t* jpeg,size_t size,int compress_boxes,
       bytes.resize(bytes.size()*2);
     }
     auto* data=static_cast<uint8_t*>(std::malloc(used));
-    if(!data) throw std::runtime_error("output allocation failed");
+    if(!data) throw std::runtime_error("OOM: output allocation failed");
     std::memcpy(data,bytes.data(),used);
     result->data=data;result->size=used;
     return 0;
