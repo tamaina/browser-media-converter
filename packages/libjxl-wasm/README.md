@@ -1,20 +1,23 @@
 # @browser-mc/libjxl-wasm
 
 Private package containing patched libjxl v0.11.1, a Rust planar session/CMS,
-a C++ C ABI bridge, and the `createEncoder` TypeScript API. No package dependencies
-or pnpm install are needed. Root workspace builds do not require Emscripten.
+a C++ C ABI bridge, and the `createEncoder` TypeScript API. Its only package
+dependency is the workspace `@browser-mc/exif-transplant` (EXIF validation for
+metadata boxes). Root workspace builds do not require Emscripten.
 
 ## Layout
 
 ```text
 Cargo.toml / Cargo.lock / build.rs
 src/api.ts                 public API and types
+src/metadata.ts            EXIF/XMP option validation and Orientation
 rust/                      planar session, CMS, Rust unit tests
 cpp/                       bridge.cc, wasm_entry.cc, planar_session.h
 patches/                   pinned libjxl patches
 scripts/                   native and Wasm builds
-tools/                     native decoder and guard-page tool
+tools/                     native decoder, metadata inspector, guard-page tool
 test/api.test.ts           API tests against the real Wasm codec
+test/metadata.test.ts      EXIF/XMP box and Orientation tests (needs native build)
 build/                     ignored libjxl checkout, caches, compiled artifacts
 target/                    ignored Cargo outputs
 ```
@@ -35,8 +38,13 @@ Run from this package, sequentially. Emscripten defaults to
 on PATH, with `CMAKE` as an override. Rust (edition 2024) and Emscripten versions
 are not yet pinned; use a compatible installed toolchain.
 Emscripten's `--emit-tsd` also requires an existing `tsc` executable on `PATH`.
-Add an installed TypeScript toolchain to `PATH`; there is no need to install
-dependencies in this package. Node executes the API and tests without `tsc`.
+Install workspace dependencies with `pnpm install --frozen-lockfile` from the
+repository root, then build the EXIF validator and its workspace dependencies:
+`pnpm --filter @browser-mc/exif-transplant build`. This is required even for
+metadata-free encodes. The encoder imports the narrow `@browser-mc/exif-transplant/tiff`
+entry, which does not load container rewriters or a Brotli decoder.
+Add the installed TypeScript toolchain to `PATH`. Node executes the API and tests
+without compiling them with `tsc`.
 
 ```sh
 export TMPDIR="$PWD/build/tmp"
@@ -54,8 +62,13 @@ export JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"
 export LD_LIBRARY_PATH="$PWD/build/native/lib:${LD_LIBRARY_PATH:-}"
 cargo test --lib --locked --jobs 1
 bash scripts/build-wasm.sh
-node --test --test-isolation=none --test-concurrency=1 test/api.test.ts
+node --test --test-isolation=none --test-concurrency=1 test/api.test.ts test/metadata.test.ts
 ```
+
+For a bridge-only change, `LINK_ONLY=1 bash scripts/build-wasm.sh` reruns Cargo
+(incremental) and relinks against the already built `build/wasm-codec` libjxl
+libraries without fetching or rebuilding libjxl. Those libraries must match
+the current patches with boxes and JPEG transcoding enabled.
 
 The Wasm entry builds the Rust staticlib, patched libjxl, then links
 `build/wasm/codec.mjs` and `codec.wasm` using `em++ --emit-tsd build/wasm/codec.d.ts`.
@@ -136,6 +149,65 @@ a float32 header: a 16-bit output header is not currently supported. Input U16
 samples retain their full normalization precision. These depth settings select
 decoder output defaults; XYB colour encoding is lossy according to `distance`.
 
+`src/api.ts` imports `../build/wasm/codec.mjs`, so the package directory must be
+served or bundled with `build/wasm/` alongside `src/`.
+
+## EXIF/XMP and orientation
+
+The pixel methods (`encodeRgb` and `encodePlanarYuv`) accept these metadata options (`src/metadata.ts`):
+
+| Option | Values (default) | Notes |
+| --- | --- | --- |
+| `exif` | `Uint8Array`, 1..65536 bytes | Raw TIFF or `Exif\0\0` + TIFF; the limit includes the optional prefix. |
+| `xmp` | `Uint8Array`, 1 byte..4 MiB | Opaque XML/XMP, stored in an `xml ` box (type ends in a space). |
+| `compressBoxes` | boolean (`true`) | Brotli-compress the metadata into `brob` boxes; `false` stores uncompressed boxes. |
+
+```ts
+encoder.encodeRgb({width, height, data}, {exif: tiffBytes, xmp: xmpBytes});
+encoder.encodePlanarYuv(input, {exif: app1ExifBytes, compressBoxes: false});
+```
+
+Metadata options apply only to the current call, including the `rgbViaPlanar`
+baseline path. Supplying EXIF or XMP enables the JPEG XL container. Omitting
+both preserves the existing output; `compressBoxes` alone adds no boxes.
+
+The optional `Exif\0\0` prefix is removed. The `Exif` box payload is four zero
+bytes (the big-endian offset to TIFF) followed by the original TIFF bytes.
+Both little- and big-endian TIFF are accepted. The header and IFD0 table are
+validated (synchronously, by `prepareJxlEncodeExif` from
+`@browser-mc/exif-transplant`); IFD0 Orientation must be a single SHORT with
+value 1..8. Duplicate, malformed or out-of-range Orientation entries throw
+`TypeError` before encoding. Other EXIF tags remain opaque, and XMP is copied
+without XML validation. Caller buffers are preserved. Non-boolean `compressBoxes`,
+wrong payload types, and empty or oversized payloads throw `TypeError`.
+`encodeJpeg` retains metadata from the JPEG and accepts only `compressBoxes`;
+`exif`/`xmp` overrides are rejected.
+
+The encode-time `exif` option sets the codestream's Orientation from IFD0
+without rotating or mirroring pixels. Pass pixels and `width`/`height`
+**before** the EXIF transform. A decoder normally applies that transform for
+display (orientations 5..8 swap displayed dimensions). Missing Orientation,
+including TIFF with no IFD0, means identity. If the pixels have already been
+oriented, remove Orientation or set it to 1 before encoding to avoid applying
+the transform twice. XMP orientation is not interpreted or reconciled with EXIF.
+
+EXIF payloads for JPEG XL encoding should come from `(await readExifAsync(source))?.bytes`
+or shared helpers in `@browser-mc/exif-transplant`. Post-encode `writeExif` /
+`transplantExif` / `removeExif` on JPEG XL update the Exif box and drop dependent `jbrd` reconstruction data. They do
+**not** change codestream Orientation.
+
+`test/metadata.test.ts` compiles `tools/inspect_metadata.cc` into
+`build/inspect-metadata`, linked against the native decoder from
+`scripts/build-native.sh` (`JXL_INCLUDE` / `JXL_LIBRARY` override the paths).
+It checks EXIF/XMP payloads independently (including Brotli decompression),
+all eight orientations with retained and displayed dimensions, RGB and planar
+paths, per-call reset, payload caps, malformed metadata rejection, and that
+post-encode Exif edits keep codestream Orientation. It uses `TMPDIR` or the package's `build/tmp`. If the native library, headers,
+or C++ compiler are absent, metadata tests skip with an explicit reason; the
+Wasm API suite still runs. Override `CXX`, `JXL_INCLUDE`, and `JXL_LIBRARY` for
+other native installations. Compilation failures with present prerequisites
+remain test failures.
+
 ## HDR base
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
@@ -183,6 +255,11 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+EXIF is validated strictly before encoding. For camera metadata with invalid
+Orientation (including 0 or non-SHORT entries), sanitize first; for structurally
+truncated TIFF, omit EXIF and report a warning. See the
+[`EXIF sanitation guide`](../exif-transplant/README.md#sanitizing-exif-before-encoding).
 
 ## Lossless JPEG recompression
 

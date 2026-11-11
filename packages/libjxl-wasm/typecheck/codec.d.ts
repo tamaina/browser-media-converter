@@ -19,6 +19,7 @@ namespace RuntimeExports {
     let HEAPU8: Uint8Array;
 }
 interface WasmModule {
+  _w_metadata(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): void;
   _w_icc_header_mode(_0: number): void;
   _w_icc(_0: number, _1: number): void;
   _w_icc_path(): number;

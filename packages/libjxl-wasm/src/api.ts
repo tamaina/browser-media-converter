@@ -24,6 +24,13 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes. Four zero offset bytes are added internally.
+   * IFD0 Orientation (1..8) sets codestream orientation; supply pixels before that transform. */
+  exif?: Uint8Array;
+  /** Opaque XML/XMP bytes, 1 byte..4 MiB, stored as an xml-space box. */
+  xmp?: Uint8Array;
+  /** Brotli-compress metadata boxes (default true). */
+  compressBoxes?: boolean;
   distance?: number;
   effort?: 1 | 2 | 3;
   /** RGB preserve: U8 -> 8, Float32/U16 -> float32 (16-bit header unsupported). */
@@ -74,6 +81,7 @@ export interface Encoder {
 }
 
 import createModule from '../build/wasm/codec.mjs';
+import {metadataOptions} from './metadata.ts';
 
 export type ModuleOptions = Parameters<typeof createModule>[0] & {
   locateFile?: (path: string, prefix: string) => string;
@@ -199,6 +207,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (!module) throw Error(`Encoder is ${state}`);
     stats = {};
     const start=performance.now();
+    const boxes=metadataOptions(o);
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader ?? ''))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
@@ -270,6 +279,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     };
     try {
       m._w_init(i.width,i.height,format,matrix,+i.fullRange!,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18} as Record<string, number>)[i.linearization!],({left:0,center:1,topleft:2} as Record<string, number>)[i.chromaSiting ?? 'left'],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9} as Record<string, number>)[i.primaries!],colorResolved.intensityTarget);
+      m._w_metadata(boxes.exif ? alloc(boxes.exif) : 0, boxes.exif?.length ?? 0,
+        boxes.xmp ? alloc(boxes.xmp) : 0, boxes.xmp?.length ?? 0, boxes.orientation, +boxes.compressBoxes);
       let status;
       if (rgb) {
         const data=i.data!;

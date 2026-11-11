@@ -214,6 +214,23 @@ for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp', 'ic
   });
 }
 
+test('pixel metadata and JPEG reconstruction boxes remain independent across calls', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const xmp = new TextEncoder().encode('<xmp>pixel-only</xmp>');
+  const exif = new Uint8Array([73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
+  const pixelBaseline = encoder.encodeRgb(rgb());
+  const jpegBaseline = encoder.encodeJpeg(jpeg, {compressBoxes:false});
+  for (const compressBoxes of [true, false]) {
+    const tagged = encoder.encodeRgb(rgb(), {exif,xmp,compressBoxes});
+    assert.notDeepEqual([...tagged], [...pixelBaseline]);
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+    assert.deepEqual([...encoder.encodeRgb(rgb())], [...pixelBaseline]);
+    assert.throws(() => encoder.encodeRgb(rgb(), {compressBoxes:1} as never), /compressBoxes must be boolean/);
+    assert.deepEqual(encoder.stats, {});
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+  }
+});
+
 test('JPEG rejects corrupt input and recovers for the next call', async () => {
   const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
   for (const bytes of [new Uint8Array([1,2,3]), jpeg.subarray(0, 32), new Uint8Array([255,216,255,217])]) {
@@ -225,7 +242,7 @@ test('JPEG rejects corrupt input and recovers for the next call', async () => {
 
 test('JPEG rejects misleading pixel/lossy and metadata removal options', () => {
   const jpeg = new Uint8Array([255,216]);
-  for (const option of ['distance','effort','xyb','uses_original_profile','keepExif','keepXmp','bitDepth','icc']) {
+  for (const option of ['distance','effort','xyb','uses_original_profile','keepExif','keepXmp','bitDepth','icc','exif','xmp']) {
     assert.throws(() => encoder.encodeJpeg(jpeg, {[option]:false} as never), /unsupported JPEG option/);
   }
   for (const input of [null, [], new ArrayBuffer(3), new Uint8Array()]) {
@@ -350,7 +367,7 @@ async function instrumented(overrides: (exports: WebAssembly.Exports) => Record<
     return {};
   }});
 }
-for (const name of ['w_options','w_init','malloc','w_rgb','w_free']) {
+for (const name of ['w_options','w_init','w_metadata','malloc','w_rgb','w_free']) {
   test(`escaping ${name} exception poisons instance and prevents further cleanup/fallback`, async () => {
     const original = new WebAssembly.RuntimeError('ICC: injected fatal trap');
     let cleanup = 0, calls = 0;

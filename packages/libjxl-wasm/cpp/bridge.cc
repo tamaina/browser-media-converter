@@ -47,6 +47,19 @@ extern "C" void bridge_icc_header_mode(int mode) {header_mode=mode;}
 extern "C" void bridge_icc(const uint8_t* p,size_t n) {source_profile=p;source_profile_size=n;source_profile_path=0;}
 extern "C" int bridge_icc_path() {return source_profile_path;}
 extern "C" int bridge_icc_header() {return source_profile_header;}
+// Borrowed through the synchronous encode, just like the source ICC.
+static thread_local const uint8_t* source_exif=nullptr;
+static thread_local size_t source_exif_size=0;
+static thread_local const uint8_t* source_xmp=nullptr;
+static thread_local size_t source_xmp_size=0;
+static thread_local int source_orientation=1;
+static thread_local bool compress_boxes=true;
+extern "C" void bridge_metadata(const uint8_t* exif,size_t exif_size,
+    const uint8_t* xmp,size_t xmp_size,int orientation,int compress) {
+  source_exif=exif;source_exif_size=exif_size;
+  source_xmp=xmp;source_xmp_size=xmp_size;
+  source_orientation=orientation;compress_boxes=compress!=0;
+}
 struct Config { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; };
 struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
@@ -137,6 +150,10 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
       throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
+    if(source_exif_size>65536 || source_xmp_size>4*1024*1024 ||
+       (source_exif_size && !source_exif) || (source_xmp_size && !source_xmp) ||
+       source_orientation<1 || source_orientation>8)
+      throw std::runtime_error("metadata size/pointer/orientation limit");
     Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
@@ -154,9 +171,21 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     source.capture_width=c->width;source.capture_height=c->height;
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
+    if(source_exif_size || source_xmp_size) {
+      check(JxlEncoderUseBoxes(enc.get()));
+      if(source_exif_size) {
+        // Exif box starts with a big-endian TIFF offset; TIFF follows immediately.
+        std::vector<uint8_t> exif(4+source_exif_size,0);
+        std::copy_n(source_exif,source_exif_size,exif.data()+4);
+        check(JxlEncoderAddBox(enc.get(),"Exif",exif.data(),exif.size(),compress_boxes));
+      }
+      if(source_xmp_size)
+        check(JxlEncoderAddBox(enc.get(),"xml ",source_xmp,source_xmp_size,compress_boxes));
+    }
     const JxlCmsInterface interface=planar_cms_interface(cms.get());
     JxlEncoderSetCms(enc.get(),interface);
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
+    info.orientation=static_cast<JxlOrientation>(source_orientation);
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
     info.uses_original_profile=JXL_FALSE; info.intensity_target=c->intensity;
