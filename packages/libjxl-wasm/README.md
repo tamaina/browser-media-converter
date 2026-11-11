@@ -240,8 +240,14 @@ Do not supply `data` with `provideRect`. Rectangles are at most 2048×2048,
 may repeat, and must be deterministic. The callback must finish synchronously;
 Promises and reentry into the same encoder are rejected. It may generate pixels
 row by row into the requested band, without retaining a full JS source image.
-Exceptions, wrong sample types and wrong lengths fail the encode; the callback
-function pointer and scratch allocation are released even after failure.
+Object methods and prototype methods are called with the original input as
+`this`, including during an ICC fallback retry. Gray ICC profiles require R=G=B;
+non-gray samples report `ICC: Gray profile requires R=G=B`, or replay the provider
+without ICC when `iccFallback: 'srgb'` is set. Provider exceptions never trigger
+that retry. Exceptions, wrong sample types and wrong lengths fail the encode;
+scratch and per-call callback references are released even after failure.
+One trampoline/table entry is registered lazily per encoder and reused for its
+lifetime, without retaining completed providers.
 
 Only one packed input scratch allocation is retained during the encode:
 `S = min(width,2048) * min(height,2048) * 3 * (depth/8)` bytes.
@@ -249,11 +255,19 @@ There is no separate full-source allocation in WASM. The bridge also holds float
 buffers for libjxl's outstanding rectangle requests, plus ICC and encoder state;
 this is input streaming, not constant-memory encoding or streamed output.
 The preflight reservation for this path is
-`32 MiB + ceil(1.5 * (S + 4*iccBytes + width*height*(72 + (observe ? 25 : 0))))`.
+`32 MiB + ceil(1.5 * (S + 4*iccBytes + width*height*72))`.
 The 72 B/pixel encoder allowance includes float conversion staging, XYB and
 working/output storage. This is conservative accounting, not an allocator cap;
-`maxMemoryBytes` also checks retained WASM heap size. The full-buffer estimate
-continues to charge `2*inputBytes` instead of `S`.
+admission compares the estimate alone with `maxMemoryBytes`. Retained heap is
+reusable and does not count against admission. `stats.heapAfter` includes growth
+slack and retained memory, rather than peak live allocations; the post-call
+`memoryBudgetExceeded` / `memoryEstimateExceeded` flags report heap overruns.
+Observation adds no reservation under the current accounting. The full-buffer estimate
+continues to charge `2*inputBytes` instead of `S` (a conservative allowance,
+not two actual packed copies for the borrowed integer path). When both dimensions
+are at most 2048, packed scratch is the full input size: this path saves no WASM
+input storage compared with borrowed packed input. A dimension must exceed 2048
+for that saving; full-frame float staging and XYB storage remain.
 
 The existing 4 MP/dimension limits still apply. Streaming RGBA is unsupported;
 `encodeRgb({data})` still accepts RGBA. Planar YUV (including HDR via planar)
@@ -274,6 +288,23 @@ exports `_w_rgb_chunked` and needs `-sALLOW_TABLE_GROWTH=1` with
 Libjxl may request a larger internal rectangle because streaming patches add
 border pixels. The bridge splits it into provider requests no larger than
 2048×2048; the float conversion buffer still covers the internal rectangle.
+
+### Heap reservation check (2026-11-11)
+
+`test:api` measures fresh encoders at 2049×2047 with deterministic textured
+pixels, distance 1, effort 3 and observation enabled. Both cases grow the heap
+and match full-buffer output bytes. The bridge's 2048 split is tested; request
+counts do not establish libjxl's own tiling strategy.
+
+| Source depth | heapBefore (bytes) | heapAfter (bytes) | estimatedMemoryBytes |
+| --- | ---: | ---: | ---: |
+| U8 | 33,554,432 | 298,385,408 | 505,404,308 |
+| Float32 | 33,554,432 | 326,959,104 | 561,999,764 |
+
+Both post-call overrun flags are false under the default 768 MiB budget.
+These are retained heap measurements, not peak live allocation instrumentation
+or a guarantee for every image. Scratch is smaller than full input at this size;
+both dimensions exceeding 2048 would exceed the existing 4 MP cap.
 
 ### Measurement (2026-11-10)
 

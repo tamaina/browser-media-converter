@@ -56,17 +56,22 @@ export interface PlanarInput extends Dimensions {
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
 export type RgbPixels = RgbInput['data'];
-/** Synchronous deterministic source; no full source allocation in WASM.
+type ChunkedRgbBase = Omit<RgbInput, 'data' | 'format' | 'depth' | 'bitDepth' | 'storage' | 'alphaMode'> & {
+  data?: never;
+  alphaMode?: never;
+  format: 'RGB';
+};
+/** Synchronous deterministic source; no separate full source allocation in WASM.
  * Exact tightly packed RGB rectangle, at most 2048x2048; requests may repeat.
+ * Methods receive the original input as `this`, including ICC fallback retries.
+ * Depth selects the provider array type; omitted depth means 8.
  * Do not reenter the same encoder. No promises or RGBA/HDR streaming.
  */
-export interface ChunkedRgbInput extends Omit<RgbInput, 'data' | 'format'> {
-  data?: never;
-  format: 'RGB';
-  /** Defaults to 8. Must match the returned typed array. */
-  depth?: 8 | 16 | 32;
-  provideRect(x: number, y: number, width: number, height: number): RgbPixels;
-}
+export type ChunkedRgbInput = ChunkedRgbBase & (
+  {depth?: 8; bitDepth?: 8; storage?: 'u8'; provideRect(x: number, y: number, width: number, height: number): Uint8Array | Uint8ClampedArray} |
+  {depth: 16; bitDepth?: 16; storage?: 'u16le-lsb'; provideRect(x: number, y: number, width: number, height: number): Uint16Array} |
+  {depth: 32; bitDepth?: 32; storage?: 'float32'; provideRect(x: number, y: number, width: number, height: number): Float32Array}
+);
 export interface Encoder {
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
@@ -121,7 +126,7 @@ type RuntimeInput = ColorOptions & {
   width: number; height: number; format?: string; alphaMode?: string;
   depth?: number; bitDepth?: number; storage?: string;
   data?: PixelData; planes?: Plane[]; linearization?: string;
-  provideRect?: ChunkedRgbInput['provideRect'] | null;
+  provideRect?: ((x: number, y: number, width: number, height: number) => RgbPixels) | null;
 };
 type SourceFailure = {failed?: boolean};
 type ColorState = {
@@ -137,6 +142,10 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
   const m = await createModule(options);
   let stats: EncoderStats = {};
   let active = false;
+  // One table entry per module, lazily registered for the first admitted chunked call.
+  // Its dispatcher never retains a completed call's source or scratch allocation.
+  let provideCallback: ((x: number, y: number, w: number, h: number) => number) | undefined;
+  let callback = 0;
   const fail = (message: string): never => { throw new TypeError(message); };
   const integer = (v: number, min: number, max: number) => Number.isSafeInteger(v) && v >= min && v <= max;
   const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12','bt470bg'];
@@ -320,7 +329,6 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     stats={estimatedMemoryBytes,maxMemoryBytes,retainedHeapBytes:before,heapBefore:before};
     if (estimatedMemoryBytes>maxMemoryBytes) throw new MemoryBudgetError(estimatedMemoryBytes,before,maxMemoryBytes);
     const pointers: number[]=[];
-    let callback=0;
     // Boxed so a thrown null/undefined is still distinguishable from "no error".
     const callbackState: {thrown?: {error: unknown}} = {};
     const alloc = (bytes: ArrayBufferView) => {
@@ -339,7 +347,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
           const scratch=m._malloc(scratchBytes);
           if (!scratch) throw Error('WASM allocation failed');
           pointers.push(scratch);
-          callback=m.addFunction((x: number,y: number,w: number,h: number)=>{
+          provideCallback=(x: number,y: number,w: number,h: number)=>{
             if(callbackState.thrown)return 1;
             try {
               if(w>2048 || h>2048 || w*h*3*(sourceDepth/8)>scratchBytes) throw new RangeError('provideRect request exceeds scratch');
@@ -350,7 +358,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
               m.HEAPU8.set(new Uint8Array(view.buffer,view.byteOffset,view.byteLength),scratch);
               return 0;
             } catch(error) {sourceFailure.failed=true;callbackState.thrown={error};return 1;}
-          },'iiiii');
+          };
+          if (!callback) callback=m.addFunction((x: number,y: number,w: number,h: number)=>provideCallback?.(x,y,w,h) ?? 1,'iiiii');
           status=m._w_rgb_chunked(callback,scratch,scratchBytes,sourceDepth);
           if(callbackState.thrown)throw callbackState.thrown.error;
         } else {
@@ -373,7 +382,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       stats={...stats,memoryBudgetExceeded:m.HEAPU8.buffer.byteLength>maxMemoryBytes,memoryEstimateExceeded:m.HEAPU8.buffer.byteLength>estimatedMemoryBytes,colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;
-    } finally {if(callback)m.removeFunction(callback);m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
+    } finally {provideCallback=undefined;m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
   }
   const guarded=(i: RuntimeInput,o: EncodeOptions,rgb: boolean,sourceFailure: SourceFailure={}): Encoded=>{
     if(active)throw Error('Encoder is already encoding; provideRect must not reenter this instance');
@@ -381,11 +390,16 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     try{return run(i,o,rgb,sourceFailure);}finally{active=false;}
   };
   return {encodePlanarYuv:(i,o={})=>guarded(i,o,false),encodeRgb:(i,o={})=>{
+    // Preserve prototype methods and the original receiver through normalization
+    // and the ICC retry (whose clean() helper copies only own properties).
+    const original=i;
+    const provider: RuntimeInput['provideRect']=('provideRect' in i)?i.provideRect:undefined;
+    const input: RuntimeInput=typeof provider !== 'function' ? i : {...i,provideRect:(x,y,w,h)=>provider.call(original,x,y,w,h)};
     const sourceFailure: SourceFailure={};
-    try{return guarded(i,o,true,sourceFailure);}catch(error){
+    try{return guarded(input,o,true,sourceFailure);}catch(error){
       if(sourceFailure.failed || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
       const clean=<T extends ColorOptions>(object: T)=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
-      const bytes=guarded(clean(i),clean(o),true);
+      const bytes=guarded(clean(input),clean(o),true);
       bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
       return bytes;
     }

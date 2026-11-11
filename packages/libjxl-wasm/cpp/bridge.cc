@@ -60,6 +60,7 @@ struct Source {
   void* opaque; Fill fill; Encoded& result;
   bool failed=false; size_t live=0;
   bool gray=false;
+  const char* error=nullptr;
   Alpha alpha;
   std::vector<float> captured;
   size_t capture_width=0,capture_height=0;
@@ -77,7 +78,7 @@ static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* 
     std::vector<float> pixels(w*h*3);
     if (s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size())) { s.failed=true; return nullptr; }
     if(s.gray) {for(size_t i=0;i<w*h;i++) {
-      if(pixels[i*3]!=pixels[i*3+1] || pixels[i*3]!=pixels[i*3+2])throw std::runtime_error("ICC: Gray profile requires R=G=B");
+      if(pixels[i*3]!=pixels[i*3+1] || pixels[i*3]!=pixels[i*3+2]){s.error="ICC: Gray profile requires R=G=B";s.failed=true;return nullptr;}
       pixels[i]=pixels[i*3];
     }pixels.resize(w*h);}
     s.live+=pixels.size()*sizeof(float);
@@ -137,7 +138,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
       throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
-    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
+    Source source{opaque,fill,*result,false,0,false,nullptr,alpha,{},0,0,{}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
@@ -262,13 +263,17 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
       if(input.experimental_yuv && (c->transfer==13 || c->transfer==1 || c->transfer==1001 || c->transfer==8))
         input.experimental_fill_row=nullptr;
-      check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
+      const auto status=JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input);
+      if(source.error) throw std::runtime_error(source.error);
+      check(status);
       if(source.failed) throw std::runtime_error("planar region conversion failed");
     }
     std::vector<uint8_t> out(4096); size_t used=0;
     for(;;) {
       auto* next=out.data()+used; size_t available=out.size()-used;
       auto status=JxlEncoderProcessOutput(enc.get(),&next,&available); used=out.size()-available;
+      if(source.error) throw std::runtime_error(source.error);
+      if(source.failed) throw std::runtime_error("planar region conversion failed");
       if(status==JXL_ENC_SUCCESS) break;
       if(status!=JXL_ENC_NEED_MORE_OUTPUT) throw std::runtime_error("libjxl output failed");
       out.resize(out.size()*2);
@@ -365,6 +370,11 @@ static int chunked_rgb_fill(void* opaque,size_t x,size_t y,size_t w,size_t h,flo
 
 extern "C" int bridge_rgb_chunked(const Config* c,ProvideRect provide,void* scratch,size_t capacity,
     int depth,Encoded* result,char* error,size_t error_size) {
+  auto bad=[&](const char* text){if(error && error_size)std::snprintf(error,error_size,"%s",text);return 1;};
+  if(!c || !provide || !scratch || !result || (depth!=8 && depth!=16 && depth!=32) ||
+     !c->width || !c->height || c->width>8192 || c->height>8192 || size_t(c->width)*c->height>4194304 ||
+     capacity<std::min(size_t(c->width),size_t(2048))*std::min(size_t(c->height),size_t(2048))*3*size_t(depth/8))
+    return bad("RGB chunked layout/dimension limit");
   ChunkedRgb in{provide,scratch,capacity,depth};
   return encode(c,&in,chunked_rgb_fill,nullptr,nullptr,result,error,error_size,{});
 }

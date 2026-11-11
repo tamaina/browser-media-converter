@@ -2,7 +2,18 @@
 # Build the Rust session/CMS, patched libjxl, and the C ABI ESM module.
 # --relink-only reuses build/wasm-codec (libjxl) and only rebuilds Rust + relinks the module.
 set -euo pipefail
+relink_only=false
+for arg in "$@"; do
+  case "$arg" in
+    --relink-only) relink_only=true ;;
+    *) echo "Unknown argument: $arg (expected --relink-only or no arguments)" >&2; exit 2 ;;
+  esac
+done
 source "$(dirname "$0")/common.sh"
+if "$relink_only" && [[ ! -d build/wasm-codec ]]; then
+  echo "--relink-only requires build/wasm-codec; run a full build first" >&2
+  exit 2
+fi
 source "${EMSDK_ENV:-$HOME/emsdk/emsdk_env.sh}"
 export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 export EM_CACHE="${EM_CACHE:-$PWD/build/em-cache}"
@@ -12,7 +23,7 @@ export CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_RUSTFLAGS="-C panic=abort"
 cargo rustc --lib --release --locked --jobs 1 \
   --target wasm32-unknown-emscripten --crate-type staticlib
 PLANAR_SESSION_LIB="$CARGO_TARGET_DIR/wasm32-unknown-emscripten/release/libjxl_planar_session.a"
-if [[ "${1:-}" != --relink-only ]]; then
+if ! "$relink_only"; then
   fetch_libjxl
   cmake="${CMAKE:-$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake}"
   emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
@@ -28,6 +39,10 @@ if [[ "${1:-}" != --relink-only ]]; then
 fi
 # jxl_cms is the tiny rejecting stub, with no skcms/LCMS2 sources.
 mapfile -t libs < <(find build/wasm-codec -name '*.a' | sort)
+if (( ${#libs[@]} == 0 )); then
+  echo "No libjxl archives in build/wasm-codec; run a full build first" >&2
+  exit 2
+fi
 em++ -std=c++17 -O2 -msimd128 -DHWY_COMPILE_ONLY_STATIC -fexceptions \
   -Ibuild/libjxl/lib/include -Ibuild/wasm-codec/lib/include -Ibuild/libjxl/third_party/highway \
   cpp/wasm_entry.cc cpp/bridge.cc "$PLANAR_SESSION_LIB" -Wl,--start-group "${libs[@]}" -Wl,--end-group \
