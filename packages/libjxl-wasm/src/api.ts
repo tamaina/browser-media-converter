@@ -31,10 +31,14 @@ export interface EncodeOptions extends ColorOptions {
   xmp?: Uint8Array;
   /** Brotli-compress metadata boxes (default true). */
   compressBoxes?: boolean;
+  /** Butteraugli distance [0,25], default 1. Zero implies lossless; positive values clamp to >=0.01. */
   distance?: number;
-  effort?: 1 | 2 | 3;
-  /** RGB preserve: U8 -> 8, Float32/U16 -> float32 (16-bit header unsupported). */
-  bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12;
+  /** Original-profile modular coding; conflicts with positive distance. */
+  lossless?: boolean;
+  /** libjxl v0.11.1 effort, default 3. Effort 9/10: <=1,048,576 pixels; synchronous and potentially slow. */
+  effort?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+  /** Planar defaults to preserve; lossless integer RGB preserves 8/16 bits; other RGB defaults to float32. */
+  bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12 | 16;
   validation?: 'clip' | 'strict';
   observe?: boolean;
   rgbViaPlanar?: boolean;
@@ -89,6 +93,11 @@ export type ModuleOptions = Parameters<typeof createModule>[0] & {
   [key: string]: unknown;
 };
 export interface EncoderStats {
+  lossless?: boolean;
+  distance?: number;
+  effort?: EncodeOptions['effort'];
+  /** Standard callbacks are selected for lossless or effort >=8. */
+  inputPath?: 'standard-rgb' | 'xyb';
   colorResolved?: ColorResolved;
   /** JPEG coefficient recompression does not resolve pixel colour fields. */
   jpegColorResolved?: JpegEncoded['colorResolved'];
@@ -199,9 +208,16 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       if ((i.depth !== undefined && i.depth !== depth) || (i.bitDepth !== undefined && i.bitDepth !== depth) ||
           (i.storage !== undefined && i.storage !== storage)) fail(`RGB depth/storage mismatch: expected depth ${depth}, storage ${storage}`);
     }
-    const distance = o.distance ?? 1, effort = o.effort ?? 3;
-    if (!Number.isFinite(distance) || distance <= 0 || distance > 25 || !integer(effort,1,3)) fail('distance must be (0,25], effort must be 1..3');
-    return {distance,effort};
+    if (o.lossless !== undefined && typeof o.lossless !== 'boolean') fail('lossless must be boolean');
+    if (o.distance !== undefined && (!Number.isFinite(o.distance) || o.distance < 0 || o.distance > 25)) fail('distance must be in [0,25]');
+    if (o.lossless === false && o.distance === 0) fail('lossless: false conflicts with zero distance');
+    if (o.lossless === true && o.distance !== undefined && o.distance > 0) fail('lossless: true conflicts with positive distance');
+    const lossless = o.lossless === true || o.distance === 0;
+    const distance = lossless ? 0 : Math.max(0.01, o.distance ?? 1), effort = o.effort === undefined ? 3 : o.effort;
+    if (!integer(effort,1,10)) fail('effort must be an integer in 1..10');
+    if (effort >= 9 && i.width*i.height > 1048576) fail('effort 9/10 dimension limit: 1 megapixel (synchronous encoder)');
+    if (lossless && ['bt2020','p3'].includes(o.iccHeader ?? '')) fail('lossless requires the original profile; iccHeader override is unsupported');
+    return {distance,effort,lossless};
   }
   function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean): Encoded {
     if (!module) throw Error(`Encoder is ${state}`);
@@ -223,7 +239,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       icc=profile instanceof ArrayBuffer?new Uint8Array(profile):profile;
       if(icc.length<132 || icc.length>4*1024*1024) fail('ICC: size must be 132 bytes..4 MiB');
     }
-    const {distance,effort}=config(i,o,rgb);
+    const {distance,effort,lossless}=config(i,o,rgb);
     const {colorResolved,warnings}=resolveColor(icc?{}:i,icc?{intensityTargetNits:o.intensityTargetNits ?? i.intensityTargetNits}:o,rgb);
     if(rgb) {
       Object.assign(colorResolved,{profile:icc?'icc':metadata?.type==='cicp'?'cicp':'none',path:'builtin',header:icc?'icc':'enum'});
@@ -256,6 +272,9 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     }
     for (const key of ['masteringDisplay','contentLightLevel'] as const) if (o[key] !== undefined || i[key] !== undefined) warnings.push(`${key} is not stored (MDCV/CLLI unsupported)`);
     if (!rgb && o.validation !== 'strict') warnings.push('Reconstructed RGB outside [0,1] is clipped (validation: clip)');
+    if (!rgb && (lossless || effort >= 8)) warnings.push('Standard RGB callbacks bypass fused SIMD; scalar reconstruction may allocate whole-frame float RGB and block the calling thread');
+    if (!rgb && lossless) warnings.push('Planar lossless preserves reconstructed RGB, not the source YUV planes');
+    if (effort >= 9) warnings.push('Effort 9/10 can take a long time on this synchronous, single-threaded encoder; use a Worker');
     i={...i,...(icc?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)} as RuntimeInput;
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     m._w_options(+(o.observe??false),+(o.validation==="strict"));
@@ -264,9 +283,12 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization ?? '') && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
-    const bitDepth=o.bitDepth===undefined?(rgb?'float32':'preserve'):o.bitDepth;
-    if(!['preserve','float32',8,10,12].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/float32');
-    const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb && sourceDepth!==8?0:sourceDepth):bitDepth;
+    // Lossless integer RGB retains its native precision.
+    const defaultDepth=rgb?(lossless && sourceDepth!==32?sourceDepth:'float32'):'preserve';
+    const bitDepth=o.bitDepth===undefined?defaultDepth:o.bitDepth;
+    if(!['preserve','float32',8,10,12,16].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/16/float32');
+    if (!rgb && bitDepth === 16) fail('16-bit output is supported only for RGB input');
+    const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb && (sourceDepth===32 || (!lossless && sourceDepth!==8))?0:sourceDepth):bitDepth;
     if (['pq','hlg'].includes(i.linearization ?? '') && outputDepth === 8) fail('HDR output must be 10/12-bit or float32; 8-bit HDR is unsupported');
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format ?? '');
     const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6,'bt2020-ncl':9} as Record<string, number>)[i.matrix!];
@@ -324,7 +346,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()) || 'Wasm encode failed (no error detail)');
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
-      stats={colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
+      stats={colorResolved,warnings,lossless,distance,effort,inputPath:lossless || effort>=8?'standard-rgb':'xyb',sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+m._w_time(6),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;
     } finally {if (module) {m._w_free();for(const p of pointers)m._free(p);}}

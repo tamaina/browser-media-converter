@@ -56,7 +56,7 @@ int main(int argc,char** argv) {
         const bool enum_data=JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_DATA,&pixels)==JXL_DEC_SUCCESS;
         if(!enum_data && argc==4 && !source_icc)throw std::runtime_error("requested enum data profile unavailable");
         if(!enum_header)std::fprintf(stderr,"Original header: ICC\n");
-        std::printf("{\"width\":%u,\"height\":%u,\"bits\":%u,\"exponent\":%u,\"primaries\":%d,\"transfer\":%d,\"dataPrimaries\":%d,\"dataTransfer\":%d,\"intensity\":%.9g}\n",info.xsize,info.ysize,info.bits_per_sample,info.exponent_bits_per_sample,int(original.primaries),int(original.transfer_function),int(pixels.primaries),int(pixels.transfer_function),info.intensity_target);
+        std::printf("{\"width\":%u,\"height\":%u,\"usesOriginalProfile\":%d,\"bits\":%u,\"exponent\":%u,\"primaries\":%d,\"transfer\":%d,\"dataPrimaries\":%d,\"dataTransfer\":%d,\"intensity\":%.9g}\n",info.xsize,info.ysize,int(info.uses_original_profile),info.bits_per_sample,info.exponent_bits_per_sample,int(original.primaries),int(original.transfer_function),int(pixels.primaries),int(pixels.transfer_function),info.intensity_target);
       } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
         size_t size;check(JxlDecoderImageOutBufferSize(dec.get(),&fmt,&size));rgb.resize(size/sizeof(float));
         check(JxlDecoderSetImageOutBuffer(dec.get(),&fmt,rgb.data(),size));

@@ -19,7 +19,7 @@ tools/                     native decoder, metadata inspector, guard-page tool
 test/api.test.ts           API tests against the real Wasm codec
 test/metadata.test.ts      EXIF/XMP box and Orientation tests (needs native build)
 build/                     ignored libjxl checkout, caches, compiled artifacts
-target/                    ignored Cargo outputs
+build/target/              ignored Cargo outputs
 ```
 
 `patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
@@ -124,6 +124,77 @@ const bytes = encoder.encodeRgb({width: 1, height: 1, data: new Uint8Array([64, 
 encoder.dispose();
 ```
 
+## Encoding options
+
+Shared by `encodeRgb(input, options)` and `encodePlanarYuv(input, options)`:
+
+| Option | Values | Default |
+| --- | --- | --- |
+| `distance` | finite number [0,25], Butteraugli distance; 0 means lossless | 1 |
+| `lossless` | boolean; true conflicts with positive distance | false |
+| `effort` | integer 1..10 (libjxl v0.11.1 non-expert range) | 3 |
+| `bitDepth` | `'preserve'`, `'float32'`, 8, 10, 12, 16 (16: RGB only) | planar: preserve; RGB: float32 (lossless U8/U16: 8/16) |
+
+```js
+encoder.encodeRgb({width, height, data}, {lossless: true, effort: 10});
+encoder.encodePlanarYuv(input, {distance: 0, bitDepth: 'float32'});
+```
+
+Lossless uses original-profile modular coding (`JxlEncoderSetFrameLossless`),
+bypassing the lossy XYB conversion. `lossless: true` and `distance: 0` select the
+same mode. `lossless: false` conflicts with zero distance; a positive explicit
+distance conflicts with `lossless: true`. Explicit null `distance`, `lossless`,
+or `effort` is rejected.
+Positive distances below 0.01 are clamped to 0.01 before passing to Wasm.
+Without either selector the default stays
+lossy XYB, distance 1, effort 3. Effort accepts integers 1..10, verified in
+v0.11.1 `lib/jxl/encode.cc`; expert-only effort 11 is not exposed.
+Effort 8..10 uses standard RGB callbacks because the fused/row XYB input
+paths cannot supply the linear RGB image required by those effort tiers.
+Lossless uses these standard callbacks too. For planar input this bypasses
+fused SIMD, reconstructs RGB with scalar callbacks, and may allocate whole-frame
+float RGB buffers. These paths emit warnings. Effort 9/10 is limited to 1,048,576
+pixels and emits a warning: encoding can block the calling thread for a long time,
+especially with lossless. Use a Worker for interactive applications. Other modes
+retain the 4,194,304-pixel limit; this is not a memory or latency guarantee.
+`stats.inputPath` names the callback path (`standard-rgb` or `xyb`);
+`stats.lossless`, `distance`, and `effort` report resolved options. Standard
+callbacks report scalar `simdLanes: 1` and measured reconstruction time when
+`observe: true`; they do not measure internal libjxl SIMD work.
+
+U8/U8Clamped RGB defaults to 8-bit output in lossless mode and round-trips
+bit-exactly. U16 RGB defaults to 16-bit integer output in lossless mode and
+recovers every integer code exactly. `bitDepth: 'preserve'` uses the same 8/16-bit
+source depth for lossless integer RGB. Float32 RGB keeps float32 output and
+round-trips bit-exactly. Integer input is normalized to float32 before encoding.
+Explicit integer output `bitDepth` quantizes reconstructed RGB
+at that depth; it cannot preserve arbitrary float samples. Planar lossless
+preserves reconstructed RGB at the selected output depth, **not the source
+YUV planes** (also reported in a runtime warning): chroma interpolation, range conversion, clipping (or strict
+validation), and optional `rgbViaPlanar` rounding happen before coding.
+Planar defaults to its source integer depth; use `bitDepth: 'float32'` to
+retain the reconstructed floats. Invisible RGB is retained in lossless mode.
+`iccHeader: 'bt2020' | 'p3'` is rejected with lossless because the original
+profile must describe the stored samples. `auto`/`exact` remain available and
+both embed the source ICC in lossless mode. `colorResolved.path`/`iccModel`
+describe the parsed CMS capabilities; lossless bypasses pixel color conversion.
+
+The shared native/Wasm C ABI `bridge_encode_options(distance, effort)` selects
+these options (distance zero means lossless). Native callers that do not invoke
+it retain `JXL_EXPERIMENT_DISTANCE` and the default effort 3;
+`JXL_EXPERIMENT_EFFORT` is also supported. Explicit ABI options take
+precedence until `bridge_encode_options_reset()`
+restores environment-controlled defaults. Invalid native distances/efforts fail
+with a specific validation error rather than silently selecting lossless.
+
+API tests run sequentially with `npm run test:api`. Wasm encoding and validation
+assertions always run. Independent decoder assertions skip with a reason when
+`build/decode-float` or its system libraries are absent (built by
+`scripts/build-native.sh`);
+`JXL_DECODE_FLOAT` overrides its path. Temporary files use `TMPDIR`, falling back
+to package-local `build/tmp`; the harness creates the parent directory. No new
+dependencies are needed.
+
 The synchronous codec supports browser windows and Web Workers (`web,worker`);
 use a Worker for large images. Each encoder owns one Wasm instance. `dispose()`
 is idempotent, releases live output/profile references and drops the instance;
@@ -143,9 +214,10 @@ does not change them. Resolved RGB reports `matrix: 'rgb'`, `fullRange: true`,
 and no chroma siting. CICP 5 / `gamma28` / `bt470bg` transfer is rejected because
 gamma 2.8 is unsupported. `bt470bg` primaries and YUV matrix remain supported.
 
-RGB output defaults to float32. Explicit `bitDepth: 'preserve'` selects an 8-bit
-header for U8/U8Clamped input and float32 for Float32 input. U16 input also uses
-a float32 header: a 16-bit output header is not currently supported. Input U16
+Lossy RGB output defaults to float32; lossless integer RGB defaults to its
+source depth (8/16). Explicit `bitDepth: 'preserve'` selects an 8-bit
+header for U8/U8Clamped input and float32 for Float32 input. Lossy U16 input
+uses a float32 header; lossless U16 uses a 16-bit integer header. Input U16
 samples retain their full normalization precision. These depth settings select
 decoder output defaults; XYB colour encoding is lossy according to `distance`.
 
@@ -240,7 +312,8 @@ Alpha is separate from colour, never passed through ICC/CMS, and retains the
 source type's 8/16/32-bit depth (Float32: 8 exponent bits). Colour `bitDepth`
 does not change alpha depth. libjxl's default extra-channel distance is zero,
 so alpha is lossless even with colour distance 1. Fully transparent colour
-may be simplified by the default libjxl `KEEP_INVISIBLE` policy. The fused
+may be simplified in lossy mode by the default libjxl `KEEP_INVISIBLE` policy;
+lossless mode retains invisible colour. The fused
 colour and row paths remain available with a separate alpha extra channel.
 
 Planar alpha uses `format: 'I420A' | 'I422A' | 'I444A'` and AP10/AP12 variants,
