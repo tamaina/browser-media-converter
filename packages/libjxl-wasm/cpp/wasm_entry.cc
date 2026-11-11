@@ -9,18 +9,28 @@ static PlanarInput input{};
 static PlanarPlane alpha{};
 static PlanarEncoded output{};
 static char error[512]{};
-float wasm_distance=1;
-int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" void bridge_animation_begin(uint32_t);
+extern "C" void bridge_animation_frame(uint32_t,int);
+extern "C" void bridge_animation_end();
+extern "C" int bridge_jpeg(const uint8_t*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" void bridge_diagnostics(int);
+extern "C" void bridge_metadata(const uint8_t*,size_t,const uint8_t*,size_t,int,int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
 extern "C" int bridge_icc_path();
 extern "C" int bridge_icc_header();
 extern "C" void bridge_icc_header_mode(int);
 extern "C" int bridge_rgb_integer(const PlanarRgbConfig*,const void*,size_t,int,int,PlanarEncoded*,char*,size_t);
+extern "C" int bridge_rgb_chunked(const PlanarRgbConfig*,int (*)(size_t,size_t,size_t,size_t),void*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" {
+void w_animation_begin(uint32_t loops) {bridge_animation_begin(loops);}
+void w_animation_frame(uint32_t duration,int last) {bridge_animation_frame(duration,last);}
+void w_animation_end() {bridge_animation_end();}
+void w_metadata(const uint8_t* exif,size_t en,const uint8_t* xmp,size_t xn,int orientation,int compress) {
+  bridge_metadata(exif,en,xmp,xn,orientation,compress);
+}
 void w_icc_header_mode(int mode) {bridge_icc_header_mode(mode);}
 void w_icc(const uint8_t* p,size_t n) {bridge_icc(p,n);}
 int w_icc_path() {return bridge_icc_path();}
@@ -32,10 +42,11 @@ void w_options(int observe,int option) {planar_instrumentation(observe);validati
 double w_time(int i){return i==6?output.conversion_ms:times[i];}
 void w_init(int w,int h,int format,int matrix,int full,float distance,int effort,int depth,int out_depth,int transfer,int siting,int primaries,float intensity) {
   planar_free(&output); input={}; alpha={}; error[0]=0;
+  bridge_metadata(nullptr,0,nullptr,0,1,1);
   bridge_icc(nullptr,0);bridge_icc_header_mode(0);
   input.width=w;input.height=h;input.format=format;input.matrix=matrix;
   input.depth=depth;input.storage=depth==8?0:1;output_depth=out_depth;input.primaries=primaries;input.transfer=transfer;input.intensity=intensity;
-  input.full_range=full;input.siting=siting;wasm_distance=distance;wasm_effort=effort;
+  input.full_range=full;input.siting=siting;bridge_encode_options(distance,effort);
 }
 void w_plane(int c,const uint8_t* p,size_t size,size_t offset,size_t stride) {
   if(c==3){alpha={p,size,offset,stride,input.width,input.height};return;}
@@ -91,10 +102,24 @@ int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
   const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
+int w_rgb_chunked(int (*provide)(size_t,size_t,size_t,size_t),void* scratch,size_t capacity,int depth) {
+  PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,input.intensity,uint32_t(output_depth)};
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_rgb_chunked(&c,provide,scratch,capacity,depth,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
+int w_jpeg(const uint8_t* p,size_t size,int compress_boxes) {
+  planar_free(&output);error[0]=0;
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_jpeg(p,size,compress_boxes,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
 const char* w_error(){return error;}
 const uint8_t* w_data(){return output.data;}
 size_t w_size(){return output.size;}
 size_t w_lanes(){return output.simd_lanes;}
 const char* w_target(){return hwy::TargetName(HWY_STATIC_TARGET);}
-void w_free(){planar_free(&output);alpha={};bridge_icc(nullptr,0);}
+void w_free(){bridge_animation_end();input={};bridge_icc_header_mode(0);planar_free(&output);alpha={};bridge_icc(nullptr,0);bridge_metadata(nullptr,0,nullptr,0,1,1);}
 }

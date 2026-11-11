@@ -1,16 +1,109 @@
-import {test} from 'node:test';
+import {test, after, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, writeFile, mkdtemp, rm, mkdir, access} from 'node:fs/promises';
+import {openSync, closeSync, writeFileSync, readFileSync, mkdtempSync, rmSync, mkdirSync, existsSync, accessSync, statSync, constants} from 'node:fs';
+import {execFile, execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
+import {dirname, join, delimiter, isAbsolute} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {matrixProfile, grayProfile, lutProfile} from './icc.ts';
 import {iccFixture} from './icc-fixture.ts';
-import {createEncoder} from '@browser-mc/libjxl-wasm';
-import type {ColorOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
+const exec = promisify(execFile);
+import {createEncoder, MemoryBudgetError} from '@browser-mc/libjxl-wasm';
+import type {AnimationEncodeOptions, AnimationInput, ColorOptions, EncodeOptions, Encoded, PlanarInput, RgbInput, ChunkedRgbInput} from '@browser-mc/libjxl-wasm';
+
+const runFile = promisify(execFile);
+
+// Decoded animation summary printed by tools/inspect_animation.cc.
+interface Inspected {
+  haveAnimation: boolean; tpsNumerator: number; tpsDenominator: number; loops: number;
+  frames: {duration: number; last: boolean; pixels: number[]}[];
+}
+// Optional native dependency: only decode tests request a compiler/stock libjxl.
+const inspectorDirectories: string[] = [];
+after(() => { for (const dir of inspectorDirectories) rmSync(dir, {recursive:true, force:true}); });
+let inspector: string | undefined;
+let inspectorUnavailable: string | undefined;
+function requireInspector(t: TestContext): boolean {
+  if (inspector) return true;
+  if (!inspectorUnavailable) {
+    const root = fileURLToPath(new URL('../build/', import.meta.url));
+    const dir = mkdtempSync(join(process.env.TMPDIR!, 'animation-inspector-'));
+    try {
+      // File-backed output avoids pipe restrictions in sandboxed Node runners.
+      const commandOutput = (command: string, args: string[]): string => {
+        const log = join(dir, 'tool.log');
+        const fd = openSync(log, 'w');
+        try { execFileSync(command, args, {stdio:['ignore', fd, fd]}); }
+        catch (error) {
+          throw new Error(`${error instanceof Error ? error.message : error}\n${readFileSync(log, 'utf8')}`);
+        } finally { closeSync(fd); }
+        return readFileSync(log, 'utf8');
+      };
+      const localLibrary = join(root, 'native/lib/libjxl.so');
+      const library = process.env.JXL_LIBRARY || (existsSync(localLibrary) ? localLibrary : undefined);
+      const flags = library ? [
+        '-I', process.env.JXL_INCLUDE || join(root, 'libjxl/lib/include'),
+        '-I', join(root, 'native/lib/include'), library,
+        `-Wl,-rpath,${dirname(library)}`
+      ] : commandOutput('pkg-config', ['--cflags', '--libs', 'libjxl']).trim().split(/\s+/);
+      const output = join(dir, 'inspect-animation');
+      commandOutput(process.env.CXX || 'c++', [
+        '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
+        fileURLToPath(new URL('../tools/inspect_animation.cc', import.meta.url)),
+        ...flags, '-o', output
+      ]);
+      inspector = output;
+      inspectorDirectories.push(dir);
+    } catch (error) {
+      rmSync(dir, {recursive:true, force:true});
+      inspectorUnavailable = `Native animation inspection unavailable (set CXX, JXL_LIBRARY and JXL_INCLUDE): ${error instanceof Error ? error.message : error}`;
+    }
+  }
+  if (inspectorUnavailable) { t.skip(inspectorUnavailable); return false; }
+  return true;
+}
+const inspect = (bytes: Uint8Array): Inspected => {
+  // File-backed subprocess I/O also works in sandboxes that disallow pipes.
+  const root = process.env.TMPDIR!;
+  mkdirSync(root, {recursive:true});
+  const dir = mkdtempSync(join(root, 'animation-api-'));
+  const descriptors: number[] = [];
+  try {
+    writeFileSync(join(dir, 'input.jxl'), bytes);
+    const input = openSync(join(dir, 'input.jxl'), 'r'); descriptors.push(input);
+    const output = openSync(join(dir, 'decoded.json'), 'w'); descriptors.push(output);
+    execFileSync(inspector!, {stdio:[input, output, 'inherit']});
+    return JSON.parse(readFileSync(join(dir, 'decoded.json'), 'utf8'));
+  } finally {
+    for (const fd of descriptors) closeSync(fd);
+    rmSync(dir, {recursive:true, force:true});
+  }
+};
+import createModule from '../build/wasm/codec.mjs';
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
-const encoder = await createEncoder({instantiateWasm(imports, receive) {
-  WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));
+// Count every function export so preflight tests can prove nothing reached WASM.
+let wasmCalls = 0;
+const tables: WebAssembly.Table[] = [];
+const createTestEncoder = (growPages = 0) => createEncoder({instantiateWasm(imports, receive) {
+  WebAssembly.instantiate(wasm, imports).then(({instance, module}) => {
+    if (growPages) (instance.exports.memory as WebAssembly.Memory).grow(growPages);
+    const table=Object.values(instance.exports).find(value=>value instanceof WebAssembly.Table);
+    if (table instanceof WebAssembly.Table) tables.push(table);
+    const exports: WebAssembly.Exports = {...instance.exports};
+    for (const [key, value] of Object.entries(instance.exports)) {
+      if (typeof value !== 'function') continue;
+      const original = value;
+      exports[key] = (...args: number[]) => { wasmCalls++; return original(...args); };
+    }
+    receive({exports} as WebAssembly.Instance, module);
+  });
   return {};
 }});
+const encoder = await createTestEncoder();
+const newEncoder = createTestEncoder;
 // Extra fields deliberately allow malformed inputs to exercise runtime validation.
 const rgb = (extra: Record<string, unknown> = {}): RgbInput => ({width:1, height:1, data:new Float32Array([0.2, 0.5, 0.7]), ...extra});
 const cicp = (transfer: number | string = 8): Extract<NonNullable<ColorOptions['colorMetadata']>, {type: 'cicp'}> => ({type:'cicp', cicp:{primaries:12, transfer, matrix:0, fullRange:false}});
@@ -156,6 +249,1008 @@ test('full-range U8/U16 RGB matches Float32 normalization; output bitDepth stays
   assert.ok(encoder.encodeRgb(rgb({depth:32, bitDepth:32, storage:'float32'})).length > 0);
 });
 
+
+for (const [name, Type, max] of [
+  ['U8', Uint8Array, 255], ['U8Clamped', Uint8ClampedArray, 255],
+  ['U16', Uint16Array, 65535], ['Float32', Float32Array, 1]
+] as const) {
+  test(`animation ${name}: independent decode preserves frames, timing, loops and straight alpha`, (t) => {
+  if (!requireInspector(t)) return;
+    const colors = [[1,0,0,1], [0,1,0,0.5], [0,0,1,0]];
+    const pack = (values: number[]): RgbInput['data'] =>
+      (Type as {from(values: number[]): RgbInput['data']}).from(values.map(x => Type === Float32Array ? x : Math.round(x*max)));
+    const bytes = encoder.encodeAnimation({width:2, height:2, format:'RGBA', loops:3,
+      frames:colors.map((c, n) => ({data:pack(Array<number[]>(4).fill(c).flat()), durationMs:[12.4, 27.6, 0.1][n]}))
+    }, {bitDepth:8});
+    const decoded = inspect(bytes);
+    assert.equal(decoded.haveAnimation, true);
+    assert.equal(decoded.tpsNumerator, 1000);
+    assert.equal(decoded.tpsDenominator, 1);
+    assert.equal(decoded.loops, 3);
+    assert.deepEqual(decoded.frames.map(f => f.duration), [12,28,1]);
+    assert.deepEqual(decoded.frames.map(f => f.last), [false,false,true]);
+    for (const [n, frame] of decoded.frames.entries()) {
+      for (let pixel=0; pixel<4; pixel++) {
+        assert.ok(Math.abs(frame.pixels[pixel*4+3] - colors[n][3]) <= (Type === Float32Array ? 1e-6 : 1/max + 1e-6));
+        if (n < 2) for (let channel=0; channel<3; channel++) {
+          assert.ok(Math.abs(frame.pixels[pixel*4+channel] - colors[n][channel]) < 0.08);
+        }
+      }
+    }
+    assert.equal(encoder.stats.frameCount, 3);
+    assert.deepEqual(encoder.stats.durationsMs, [12,28,1]);
+  });
+}
+
+test('animation supports default infinite loops, RGB and a single displayed frame', (t) => {
+  if (!requireInspector(t)) return;
+  for (const count of [1,2]) {
+    const decoded = inspect(encoder.encodeAnimation({width:1, height:1,
+      frames:Array.from({length:count}, () => ({data:rgb().data, durationMs:33}))}));
+    assert.equal(decoded.haveAnimation, true);
+    assert.equal(decoded.loops, 0);
+    assert.deepEqual(decoded.frames.map(f => f.duration), Array(count).fill(33));
+    assert.equal(decoded.frames.at(-1)?.last, true);
+    for (const frame of decoded.frames) {
+      for (let c = 0; c < 3; c++) assert.ok(Math.abs(frame.pixels[c] - rgb().data[c]) < 0.08);
+      assert.equal(frame.pixels[3], 1);
+    }
+  }
+  const still = inspect(encoder.encodeRgb(rgb()));
+  assert.equal(still.haveAnimation, false);
+  assert.equal(still.frames.length, 1);
+});
+
+test('animation rejects invalid sequences and releases state after a failed frame', () => {
+  const frame = {data:rgb().data, durationMs:20};
+  const input: AnimationInput = {width:1, height:1, frames:[frame]};
+  // Malformed sequences deliberately bypass the static frame type to exercise runtime validation.
+  for (const frames of [[], new Array(1), Array(257).fill(frame), [null],
+    [frame, {...frame, data:new Uint8Array(3)}], [frame, {...frame, data:new Float32Array(4)}],
+    [{...frame, disposal:1}], [{...frame, data:new Float32Array(2)}]] as unknown as AnimationInput['frames'][]) {
+    assert.throws(() => encoder.encodeAnimation({...input, frames}), TypeError);
+  }
+  for (const durationMs of [0,-1,NaN,Infinity,2**32]) {
+    assert.throws(() => encoder.encodeAnimation({...input, frames:[{...frame, durationMs}]}), /durationMs/);
+  }
+  for (const loops of [-1,1.5,2**32]) assert.throws(() => encoder.encodeAnimation({...input, loops}), /loops/);
+  // @ts-expect-error Observation is unsupported for animation.
+  assert.throws(() => encoder.encodeAnimation(input, {observe:true}), /observation/);
+  // @ts-expect-error Planar reference mode is unsupported for animation.
+  assert.throws(() => encoder.encodeAnimation(input, {rgbViaPlanar:true}), /rgbViaPlanar/);
+  assert.throws(() => encoder.encodeAnimation({...input, frames:[frame, {...frame, data:new Float32Array([NaN,0,0])}]}));
+  assert.ok(encoder.encodeAnimation(input).length > 0);
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
+});
+
+test('animation ICC fallback restarts the complete sequence', (t) => {
+  if (!requireInspector(t)) return;
+  const bytes = encoder.encodeAnimation({width:1, height:1, icc:new Uint8Array(132), loops:2,
+    frames:[{data:rgb().data, durationMs:10}, {data:rgb().data, durationMs:20}]
+  }, {iccFallback:'srgb'});
+  assert.ok(bytes.warnings.some(w => w.startsWith('ICC fallback')));
+  const decoded = inspect(bytes);
+  assert.equal(decoded.loops, 2);
+  assert.deepEqual(decoded.frames.map(f => f.duration), [10,20]);
+});
+
+
+test('animation accepts uint32 timing/loop boundaries', (t) => {
+  if (!requireInspector(t)) return;
+  const decoded = inspect(encoder.encodeAnimation({width:1, height:1, loops:0xffffffff,
+    frames:[{data:rgb().data, durationMs:0xffffffff}]}));
+  assert.equal(decoded.loops, 0xffffffff);
+  assert.equal(decoded.frames[0].duration, 0xffffffff);
+});
+
+test('animation accepts more than 64 MiB of source while submitting one frame at a time', () => {
+  const data = new Float32Array(256*256*3);
+  const bytes = encoder.encodeAnimation({width:256, height:256,
+    frames:Array(86).fill({data, durationMs:1})}, {effort:1, bitDepth:8});
+  assert.ok(bytes.length > 0);
+  assert.equal(encoder.stats.frameCount, 86);
+});
+
+test('animation restores prior stats after a later frame fails', () => {
+  const good = {data:rgb().data, durationMs:20};
+  encoder.encodeAnimation({width:1, height:1, frames:[good, good]});
+  const previous = encoder.stats;
+  assert.throws(() => encoder.encodeAnimation({width:1, height:1,
+    frames:[good, {data:new Float32Array([NaN,0,0]), durationMs:20}]}));
+  assert.deepEqual(encoder.stats, previous);
+});
+
+test('WASM-only animation reports sequence heap and typed timing stats', async () => {
+  const fresh = await newEncoder();
+  // A fresh instance starts at the configured 32 MiB, before any frame allocation.
+  // A large first frame must grow the heap; heapBefore must still describe the sequence start.
+  const data = new Uint8Array(1024*1024*3);
+  const bytes = fresh.encodeAnimation({width:1024, height:1024,
+    frames:[{data, durationMs:11}, {data, durationMs:22}]} as const, {effort:1, bitDepth:8});
+  assert.ok(bytes.length > 0);
+  const stats = fresh.stats;
+  const durations: number[] | undefined = stats.durationsMs;
+  assert.deepEqual(durations, [11,22]);
+  assert.equal(stats.frameCount, 2);
+  assert.equal(stats.loops, 0);
+  assert.equal(stats.heapBefore, 33554432);
+  assert.ok((stats.heapAfter as number) > (stats.heapBefore as number));
+});
+
+// Minimal ICC v2 matrix/TRC profiles, synthesized here so coverage needs no host fixtures.
+// RGB uses the published D50-adapted sRGB matrix; Gray uses neutral D50 PCS.
+function animationProfile(gray: boolean): Uint8Array {
+  const signature = (s: string) => Array.from(s, c => c.charCodeAt(0));
+  const fixed = (n: number) => {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setInt32(0, Math.round(n*65536));
+    return [...b];
+  };
+  const xyz = (values: number[]) => [...signature('XYZ '), 0,0,0,0, ...values.flatMap(fixed)];
+  const curve = [...signature('curv'), 0,0,0,0, 0,0,0,1, 2,51, 0,0]; // gamma 2.19921875
+  const tags: [string, number[]][] = [['wtpt', xyz([0.9642,1,0.8249])]];
+  if (gray) tags.push(['kTRC', curve]);
+  else tags.push(
+    ['rXYZ', xyz([0.4360747,0.2225045,0.0139322])],
+    ['gXYZ', xyz([0.3850649,0.7168786,0.0971045])],
+    ['bXYZ', xyz([0.1430804,0.0606169,0.7141733])],
+    ['rTRC', curve], ['gTRC', curve], ['bTRC', curve]);
+  const start = 132+tags.length*12;
+  const bytes = new Uint8Array(start+tags.reduce((n, [,body]) => n+body.length, 0));
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, bytes.length);
+  bytes.set([2,0x10,0,0], 8);
+  bytes.set(signature(`mntr${gray ? 'GRAY' : 'RGB '}XYZ `), 12);
+  bytes.set(signature('acsp'), 36);
+  bytes.set(xyz([0.9642,1,0.8249]).slice(8), 68);
+  view.setUint32(128, tags.length);
+  let offset = start;
+  tags.forEach(([name, body], n) => {
+    const entry = 132+n*12;
+    bytes.set(signature(name), entry);
+    view.setUint32(entry+4, offset);
+    view.setUint32(entry+8, body.length);
+    bytes.set(body, offset); offset += body.length;
+  });
+  return bytes;
+}
+
+for (const gray of [false, true]) for (const alpha of [false, true]) {
+  test(`animation valid ${gray ? 'Gray' : 'RGB'} ICC continues across frames, alpha=${alpha}`, async (t) => {
+    const values = [0.25, 0.7];
+    const frames = values.map((v, n) => ({
+      data:new Float32Array(alpha ? [v,v,v,0.5] : [v,v,v]), durationMs:10+n*10
+    }));
+    const bytes = encoder.encodeAnimation({width:1, height:1, icc:animationProfile(gray), frames}, {bitDepth:8, iccHeader:'exact'});
+    assert.ok(bytes.length > 0);
+    assert.equal(bytes.colorResolved.iccModel, gray ? 'gray' : 'matrix-trc');
+    assert.ok(!bytes.warnings.some(w => w.startsWith('ICC fallback')));
+    assert.equal(encoder.stats.frameCount, 2);
+    await t.test('independent native pixel and timing checks', (native) => {
+      if (!requireInspector(native)) return;
+      const decoded = inspect(bytes);
+      assert.deepEqual(decoded.frames.map(f => f.duration), [10,20]);
+      assert.deepEqual(decoded.frames.map(f => f.last), [false,true]);
+      for (const [n, frame] of decoded.frames.entries()) {
+        // Stock libjxl exposes these non-sRGB gamma profiles in linear light.
+        const linear = values[n] ** (563/256);
+        const still = inspect(encoder.encodeRgb({width:1, height:1, data:frames[n].data, icc:animationProfile(gray)}, {bitDepth:8, iccHeader:'exact'}));
+        for (let c=0;c<3;c++) {
+          assert.ok(Math.abs(frame.pixels[c]-linear) < 0.03, `${frame.pixels}`);
+          assert.ok(Math.abs(frame.pixels[c]-still.frames[0].pixels[c]) < 0.02);
+        }
+        assert.ok(Math.abs(frame.pixels[3]-(alpha ? 0.5 : 1)) < 1e-6);
+      }
+    });
+  });
+}
+
+const MIB = 1024 * 1024;
+const ceiling = 1984 * MIB;
+function rejectsBeforeWasm(call: () => unknown, expected: RegExp | {name?: string; message?: string | RegExp}) {
+  const before = wasmCalls;
+  assert.throws(call, expected);
+  assert.equal(wasmCalls, before, 'preflight must precede WASM calls and input copies');
+}
+
+test('RGB and planar budgets accept the boundary and reject one byte below it', () => {
+  const cases: ((options?: EncodeOptions) => Encoded)[] = [
+    options => encoder.encodeRgb(rgb(), options),
+    options => encoder.encodeRgb(rgb({data:new Uint16Array([100, 200, 300, 65535])}), options),
+    options => encoder.encodePlanarYuv(planar('I444A'), options),
+    options => encoder.encodePlanarYuv(planar('I420AP10', 10, 'pq'), options)
+  ];
+  for (const encode of cases) {
+    assert.ok(encode().length > 0);
+    const {estimatedMemoryBytes, maxMemoryBytes} = encoder.stats;
+    assert.equal(maxMemoryBytes, 768 * MIB);
+    const budget = estimatedMemoryBytes!;
+    rejectsBeforeWasm(() => encode({maxMemoryBytes:budget - 1}), {
+      name:'MemoryBudgetError', message:new RegExp(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap \\d+ bytes, budget ${budget - 1} bytes`)
+    });
+    assert.ok(encode({maxMemoryBytes:budget}).length > 0);
+    assert.equal(encoder.stats.maxMemoryBytes, budget);
+  }
+});
+
+test('budget validation rejects unsafe values and accepts the wasm32 ceiling', () => {
+  const encoders: ((input: RgbInput, options?: EncodeOptions) => Encoded)[] = [
+    encoder.encodeRgb,
+    (_input, options) => encoder.encodePlanarYuv(planar('I444A'), options)
+  ];
+  for (const encode of encoders) {
+    for (const maxMemoryBytes of [0, -1, 1.5, NaN, Infinity, -Infinity, '536870912', ceiling + 1, 2**32, Number.MAX_SAFE_INTEGER]) {
+      // Non-number values deliberately exercise runtime validation.
+      rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes} as EncodeOptions), /maxMemoryBytes must be a safe integer/);
+    }
+    rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes:1}), /WASM memory budget exceeded/);
+    assert.ok(encode(rgb(), {maxMemoryBytes:ceiling}).length > 0);
+  }
+});
+
+test('estimate accounts for input, alpha, padding, ICC and RGB staging; observe only hashes', () => {
+  encoder.encodeRgb(rgb({data:new Uint8Array(3)}));
+  const baseline = encoder.stats.estimatedMemoryBytes!;
+  for (const data of [new Uint8Array(3), new Uint8ClampedArray(4), new Uint16Array(3), new Uint16Array(4), new Float32Array(3), new Float32Array(4)]) {
+    for (const observe of [false, true]) {
+      encoder.encodeRgb(rgb({data}), {observe});
+      const extra = 2 * (data.byteLength - 3) + (data.length === 4 ? 16 : 0);
+      assert.equal(encoder.stats.estimatedMemoryBytes, baseline + extra * 3 / 2);
+    }
+  }
+  const input: PlanarInput = {width:2, height:3, format:'I444A', planes:Array.from({length:4}, () => ({data:new Uint8Array(32), offset:3, stride:7}))};
+  encoder.encodePlanarYuv(input);
+  const padded = encoder.stats.estimatedMemoryBytes!;
+  encoder.encodePlanarYuv(input, {rgbViaPlanar:true});
+  assert.equal(encoder.stats.estimatedMemoryBytes, padded + 6 * 12 * 3 / 2);
+  encoder.encodePlanarYuv({...input,planes:input.planes.map(() => ({data:new Uint8Array(6),stride:2}))});
+  assert.equal(padded - encoder.stats.estimatedMemoryBytes!, (64 - 24) * 2 * 3 / 2);
+  const icc = new Uint8Array(132);
+  encoder.encodeRgb(rgb());
+  const estimate = encoder.stats.estimatedMemoryBytes! + 4 * icc.length * 3 / 2;
+  rejectsBeforeWasm(() => encoder.encodeRgb(rgb({icc}), {maxMemoryBytes:estimate - 1, iccFallback:'srgb'}), new RegExp(`estimated ${estimate} bytes`));
+});
+
+test('standard RGB and 16-bit output reservations combine with metadata before WASM', () => {
+  // A minimal valid little-endian TIFF with no IFD0, and opaque XMP.
+  const exif = new Uint8Array([0x49,0x49,42,0,0,0,0,0]);
+  const xmp = new Uint8Array(1024);
+  const prefixedExif = new Uint8Array([69,120,105,102,0,0,...exif]);
+  for (const input of [rgb(), rgb({data:new Uint16Array([1,2,3,65535])})]) {
+    encoder.encodeRgb(input);
+    const baseline = encoder.stats.estimatedMemoryBytes!;
+    for (const options of [{lossless:true}, {distance:0}, {effort:8}, {effort:9}, {effort:10}, {bitDepth:16}, {lossless:true,bitDepth:16}] satisfies EncodeOptions[]) {
+      const standard = options.lossless || options.distance===0 || (options.effort ?? 3)>=8;
+      const integer16 = options.bitDepth===16 || (standard && (options.lossless || options.distance===0) && input.data instanceof Uint16Array);
+      const extra = (standard?12:0) + (integer16?2*(input.data.length===4?4:3):0);
+      const estimate = baseline + extra*3/2;
+      rejectsBeforeWasm(() => encoder.encodeRgb(input, {...options,maxMemoryBytes:estimate-1}), new RegExp(`estimated ${estimate} bytes`));
+      assert.ok(encoder.encodeRgb(input, {...options,maxMemoryBytes:estimate}).length > 0);
+      assert.equal(encoder.stats.inputPath,standard?'standard-rgb':'xyb');
+      assert.equal(encoder.stats.memoryBudgetExceeded,encoder.stats.heapAfter!>estimate);
+    }
+  }
+  for (const rgbViaPlanar of [false,true]) {
+    encoder.encodePlanarYuv(planar('I444A'),{rgbViaPlanar});
+    const estimate = encoder.stats.estimatedMemoryBytes! + 12*3/2;
+    for (const options of [{lossless:true}, {distance:0}, {effort:8}] satisfies EncodeOptions[]) {
+      rejectsBeforeWasm(() => encoder.encodePlanarYuv(planar('I444A'),{...options,rgbViaPlanar,maxMemoryBytes:estimate-1}), new RegExp(`estimated ${estimate} bytes`));
+      assert.ok(encoder.encodePlanarYuv(planar('I444A'),{...options,rgbViaPlanar,maxMemoryBytes:estimate}).length > 0);
+    }
+  }
+  for (const encode of [
+    (options: EncodeOptions) => encoder.encodeRgb(rgb(),options),
+    (options: EncodeOptions) => encoder.encodePlanarYuv(planar('I444A'),options)
+  ]) {
+    for (const rgbViaPlanar of [false,true]) {
+      const options: EncodeOptions = {lossless:true,rgbViaPlanar};
+      encode(options);
+      const baseline = encoder.stats.estimatedMemoryBytes!;
+      for (const compressBoxes of [false,true]) {
+        for (const metadata of [{exif},{xmp},{exif:prefixedExif,xmp}]) {
+          const metadataBytes = (metadata.exif ? exif.length+4 : 0) + (metadata.xmp?.length ?? 0);
+          const estimate = baseline + metadataBytes*4*3/2;
+          const combined = {...options,...metadata,compressBoxes};
+          rejectsBeforeWasm(() => encode({...combined,maxMemoryBytes:estimate-1}), new RegExp(`estimated ${estimate} bytes`));
+          assert.ok(encode({...combined,maxMemoryBytes:estimate}).length > 0);
+          assert.equal(encoder.stats.estimatedMemoryBytes,estimate);
+          assert.equal(encoder.stats.lossless,true);
+        }
+      }
+    }
+  }
+});
+
+test('existing dimension and source-span limits remain independent of the budget', () => {
+  for (const dimensions of [{width:2049, height:2048}, {width:8193, height:1}, {width:Number.MAX_SAFE_INTEGER, height:2}]) {
+    rejectsBeforeWasm(() => encoder.encodeRgb(rgb(dimensions), {maxMemoryBytes:ceiling}), /dimension limit: 4 megapixels/);
+    rejectsBeforeWasm(() => encoder.encodePlanarYuv({...planar('I444A'), ...dimensions}, {maxMemoryBytes:ceiling}), /dimension limit: 4 megapixels/);
+  }
+  // 4 MP passes dimensions; shared JS storage needs only 4 MiB. No WASM copy.
+  const plane = {data:new Uint8Array(2048 * 2048), stride:2048};
+  rejectsBeforeWasm(() => encoder.encodePlanarYuv({width:2048, height:2048, format:'I444A', planes:[plane, plane, plane, plane]}, {maxMemoryBytes:64 * MIB}), /WASM memory budget exceeded/);
+  const wide = {data:new Uint8Array(67108865), stride:67108864};
+  rejectsBeforeWasm(() => encoder.encodePlanarYuv({width:1, height:2, format:'I444', planes:[wide, wide, wide]}, {maxMemoryBytes:ceiling}), /plane span cap: 64 MiB/);
+  assert.ok(encoder.encodeRgb(rgb()).length > 0, 'encoder remains usable after rejected calls');
+});
+
+
+test('odd NV12 uses the interleaved chroma span in its reservation', () => {
+  const input: PlanarInput = {width:3, height:3, format:'NV12', planes:[
+    {data:new Uint8Array(9).fill(128), stride:3},
+    {data:new Uint8Array(8).fill(128), stride:4}
+  ]};
+  encoder.encodePlanarYuv(input);
+  const estimate = encoder.stats.estimatedMemoryBytes!;
+  const packed: PlanarInput = {width:3,height:3,format:'I444',planes:Array.from({length:3},()=>({data:new Uint8Array(9).fill(128),stride:3}))};
+  encoder.encodePlanarYuv(packed);
+  assert.equal(encoder.stats.estimatedMemoryBytes! - estimate, (27 - 17) * 2 * 3 / 2);
+  rejectsBeforeWasm(() => encoder.encodePlanarYuv(input, {maxMemoryBytes:estimate - 1}), /WASM memory budget exceeded/);
+});
+
+
+test('retained heap above a frame budget is reusable and overruns are reported', async () => {
+  encoder.encodeRgb(rgb());
+  const estimate = encoder.stats.estimatedMemoryBytes!;
+  const pages = Math.ceil(estimate / 65536);
+  const retained = await createTestEncoder(pages);
+  retained.encodeRgb(rgb(), {maxMemoryBytes:estimate});
+  assert.ok(retained.stats.heapBefore! > estimate);
+  assert.equal(retained.stats.memoryBudgetExceeded, true);
+  assert.equal(retained.stats.memoryEstimateExceeded, true);
+});
+
+test('rejected frame exposes current stats and structured budget fields', () => {
+  encoder.encodeRgb(rgb());
+  const old = encoder.stats.estimatedMemoryBytes!;
+  const input = rgb({width:2, data:new Uint8Array(6)});
+  const calls = wasmCalls;
+  assert.throws(() => encoder.encodeRgb(input, {maxMemoryBytes:old}), error => {
+    assert.ok(error instanceof MemoryBudgetError);
+    assert.ok(error instanceof RangeError);
+    assert.ok(error.estimatedMemoryBytes > old);
+    assert.equal(error.maxMemoryBytes, old);
+    assert.equal(error.estimatedMemoryBytes, encoder.stats.estimatedMemoryBytes);
+    assert.equal(error.retainedHeapBytes, encoder.stats.retainedHeapBytes);
+    return true;
+  });
+  assert.equal(wasmCalls,calls);
+  assert.equal(encoder.stats.colorResolved, undefined);
+  encoder.encodeRgb(rgb(), {maxMemoryBytes:null});
+  assert.equal(encoder.stats.maxMemoryBytes,768*MIB);
+});
+
+test('integer RGB channel validation keeps the specific error', () => {
+  rejectsBeforeWasm(() => encoder.encodeRgb(rgb({data:new Uint8Array(2)})), /RGB integer input requires packed RGB or RGBA/);
+});
+
+// Deterministic textured input exercises codec work/output, rather than only flat frames.
+function pixels(length: number) {
+  let seed=42;
+  return Uint8Array.from({length}, () => {seed=(Math.imul(seed,1664525)+1013904223)|0;return seed>>>24;});
+}
+for (const path of ['RGB','RGBA','planar','alpha','rgbViaPlanar'] as const) {
+  test(`measured heap stays inside estimate: ${path}`, async t => {
+    const e = await createTestEncoder();
+    const size=1024, data=pixels(size*size*4);
+    if (path==='RGB' || path==='RGBA') e.encodeRgb({width:size,height:size,data:data.subarray(0,size*size*(path==='RGB'?3:4))}, {observe:true});
+    else e.encodePlanarYuv({width:size,height:size,format:path==='alpha'?'I444A':'I444',planes:Array.from({length:path==='alpha'?4:3},(_,c)=>({data:data.subarray(c*size*size,(c+1)*size*size),stride:size}))}, {rgbViaPlanar:path==='rgbViaPlanar',observe:true});
+    assert.ok(e.stats.heapAfter! > e.stats.heapBefore!, 'fixture must grow the heap');
+    assert.ok(e.stats.heapAfter! <= e.stats.estimatedMemoryBytes!);
+    assert.equal(e.stats.memoryBudgetExceeded,false);
+    assert.equal(e.stats.memoryEstimateExceeded,false);
+    t.diagnostic(JSON.stringify({path,heapBefore:e.stats.heapBefore,heapAfter:e.stats.heapAfter,estimatedMemoryBytes:e.stats.estimatedMemoryBytes}));
+  });
+}
+
+test('2048² RGBA fits defaults and a following 1x1 succeeds on the same heap', async t => {
+  const e=await createTestEncoder();
+  assert.ok(e.encodeRgb({width:2048,height:2048,data:pixels(2048*2048*4)}).length > 0);
+  const large={...e.stats};
+  assert.ok(large.heapAfter! > large.heapBefore!);
+  assert.ok(large.heapAfter! <= large.estimatedMemoryBytes!);
+  assert.ok(e.encodeRgb(rgb()).length > 0);
+  assert.equal(e.stats.heapBefore,large.heapAfter);
+  assert.ok(e.stats.estimatedMemoryBytes! < e.stats.heapBefore!);
+  t.diagnostic(JSON.stringify({largeHeap:large.heapAfter,largeEstimate:large.estimatedMemoryBytes,smallHeap:e.stats.heapAfter,smallEstimate:e.stats.estimatedMemoryBytes}));
+});
+
+for (const [Type,depth] of [[Uint8Array,8],[Uint8ClampedArray,8],[Uint16Array,16],[Float32Array,32]] as const) {
+  test(`chunked RGB ${Type.name} matches full-buffer bytes across bridge split edges`, () => {
+    const width=2057,height=9,data=new Type(width*height*3);
+    for(let i=0;i<data.length;i++)data[i]=depth===32?(i%251)/250:depth===16?(i*257)%65536:i%256;
+    const expected=encoder.encodeRgb({width,height,data});
+    let calls=0;
+    const actual=encoder.encodeRgb({width,height,format:'RGB',depth,provideRect(x: number,y: number,w: number,h: number){
+      calls++;
+      assert.ok(w<=2048 && h<=2048 && x+w<=width && y+h<=height);
+      // Generate one row-band at a time, never a full-frame temporary.
+      const band=new Type(w*h*3);
+      for(let j=0;j<h;j++)band.set(data.subarray(((y+j)*width+x)*3,((y+j)*width+x+w)*3),j*w*3);
+      return band;
+    }} as ChunkedRgbInput);
+    assert.ok(calls>1, "bridge splitter bounds provider requests; this does not prove libjxl tiling");
+    assert.deepEqual([...actual],[...expected]);
+  });
+}
+
+test('chunked source errors release encoder state and preserve thrown values', () => {
+  const input={width:7,height:9,format:'RGB' as const};
+  const sentinel=new Error('source failed');
+  for(const provideRect of [()=>{throw sentinel;},()=>new Uint8Array(1),()=>new Float32Array(7*9*3),()=>Promise.resolve(new Uint8Array(189)),()=>encoder.encodeRgb(rgb())]) {
+    assert.throws(()=>encoder.encodeRgb({...input,provideRect} as unknown as ChunkedRgbInput));
+    assert.ok(encoder.encodeRgb(rgb()).length>0);
+  }
+  assert.throws(()=>encoder.encodeRgb({...input,provideRect(){throw sentinel;}}),error=>error===sentinel);
+  assert.throws(()=>encoder.encodeRgb({...input,provideRect(){throw null;}}),error=>error===null);
+  for(const extra of [{data:new Uint8Array(189)},{format:'RGBA'},{depth:12},{provideRect:null}]) {
+    assert.throws(()=>encoder.encodeRgb({...input,provideRect:()=>new Uint8Array(189),...extra} as unknown as ChunkedRgbInput),TypeError);
+  }
+});
+
+test('chunked memory estimate reserves scratch instead of two full input copies', async () => {
+  const e=await createTestEncoder();
+  const width=8,height=8,data=new Uint8Array(width*height*3);
+  e.encodeRgb({width,height,data});
+  const fullEstimate=e.stats.estimatedMemoryBytes!;
+  const scratch=data.byteLength;
+  const estimate=32*1024*1024+Math.ceil((scratch+width*height*72)*1.5);
+  const input: ChunkedRgbInput={width,height,format:'RGB',provideRect:()=>data};
+  assert.throws(()=>e.encodeRgb(input,{maxMemoryBytes:estimate-1}),RangeError);
+  e.encodeRgb(input,{maxMemoryBytes:estimate});
+  assert.equal(e.stats.estimatedMemoryBytes,estimate);
+  assert.equal(fullEstimate-estimate,scratch*1.5);
+});
+
+test('chunked RGB can generate vertical bands without retaining a JS source image', () => {
+  const width=9,height=2057;
+  const sample=(x: number,y: number,c: number)=>(x*17+y*11+c*67)&255;
+  const data=Uint8Array.from({length:width*height*3},(_,i)=>sample(Math.floor(i/3)%width,Math.floor(i/(width*3)),i%3));
+  const expected=encoder.encodeRgb({width,height,data});
+  let largest=0;
+  const actual=encoder.encodeRgb({width,height,format:'RGB',provideRect(x: number,y: number,w: number,h: number){
+    largest=Math.max(largest,w*h);
+    const band=new Uint8Array(w*h*3);
+    for(let row=0;row<h;row++)for(let col=0;col<w;col++)for(let c=0;c<3;c++)band[(row*w+col)*3+c]=sample(x+col,y+row,c);
+    return band;
+  }});
+  assert.ok(largest<width*height);
+  assert.deepEqual([...actual],[...expected]);
+});
+
+test('chunked RGB accepts subarray views with nonzero byte offsets', () => {
+  const width=23,height=17;
+  const storage=Uint8Array.from({length:width*height*3+33},(_,i)=>i%256);
+  const data=storage.subarray(33);
+  const expected=encoder.encodeRgb({width,height,data});
+  const actual=encoder.encodeRgb({width,height,format:'RGB',provideRect(x: number,y: number,w: number,h: number){
+    assert.equal(x,0);assert.equal(w,width);
+    return data.subarray(y*width*3,(y+h)*width*3);
+  }});
+  assert.deepEqual([...actual],[...expected]);
+});
+
+test('chunked RGB rejects HDR before calling the source', () => {
+  let calls=0;
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',transfer:'pq',provideRect(){calls++;return new Uint8Array(3);}}),/HDR/);
+  assert.equal(calls,0);
+});
+
+test('chunked RGB shares CICP colour and output-depth options', () => {
+  const width=17,height=13,data=Float32Array.from({length:width*height*3},(_,i)=>(i%97)/96);
+  const input={width,height,colorMetadata:cicp()};
+  const options: EncodeOptions={bitDepth:10,observe:true};
+  const full=encoder.encodeRgb({...input,data},options);
+  const chunked=encoder.encodeRgb({...input,format:'RGB',depth:32,provideRect:()=>data},options);
+  assert.deepEqual([...chunked],[...full]);
+  assert.deepEqual(chunked.colorResolved,full.colorResolved);
+});
+
+function testProfile(gray = false): Uint8Array {
+  // Minimal self-contained matrix/TRC RGB ICC; no external fixture required.
+  const fixed=(v: number)=>Math.round(v*65536);
+  const xyz=(values: number[])=>{const b=new Uint8Array(20),v=new DataView(b.buffer);b.set(new TextEncoder().encode('XYZ '));values.forEach((n,i)=>v.setInt32(8+i*4,fixed(n)));return b;};
+  const trc=new Uint8Array(14);trc.set(new TextEncoder().encode('curv'));new DataView(trc.buffer).setUint32(8,1);new DataView(trc.buffer).setUint16(12,Math.round(2.2*256));
+  const tags: [string, Uint8Array][]=[['wtpt',xyz([0.9642,1,0.8249])],['rXYZ',xyz([0.4361,0.2225,0.0139])],['gXYZ',xyz([0.3851,0.7169,0.0971])],['bXYZ',xyz([0.1431,0.0606,0.7142])],['rTRC',trc],['gTRC',trc],['bTRC',trc]];
+  if(gray) tags.splice(1,tags.length-1,['kTRC',trc]);
+  const base=132+12*tags.length;
+  const icc=new Uint8Array(base+tags.reduce((n,[,b])=>n+Math.ceil(b.length/4)*4,0)),v=new DataView(icc.buffer);
+  v.setUint32(0,icc.length);v.setUint32(8,0x04300000);
+  icc.set(new TextEncoder().encode(gray?'mntrGRAYXYZ ':'mntrRGB XYZ '),12);icc.set(new TextEncoder().encode('acsp'),36);
+  [0.9642,1,0.8249].forEach((n,i)=>v.setInt32(68+i*4,fixed(n)));
+  v.setUint32(128,tags.length);
+  let offset=base;
+  tags.forEach(([name,b],i)=>{const at=132+i*12;icc.set(new TextEncoder().encode(name),at);v.setUint32(at+4,offset);v.setUint32(at+8,b.length);icc.set(b,offset);offset+=Math.ceil(b.length/4)*4;});
+  return icc;
+}
+
+test('chunked RGB shares ICC interpretation and header policy', () => {
+  const icc=testProfile();
+  const width=17,height=13,data=Uint8Array.from({length:width*height*3},(_,i)=>i%256);
+  const full=encoder.encodeRgb({width,height,data,icc},{iccHeader:'exact'});
+  const chunked=encoder.encodeRgb({width,height,format:'RGB',provideRect:()=>data,icc},{iccHeader:'exact'});
+  assert.deepEqual([...chunked],[...full]);
+  assert.deepEqual(chunked.colorResolved,full.colorResolved);
+});
+
+
+test('ICC fallback never hides a provider exception', () => {
+  const error=new Error('ICC: provider failed');
+  let calls=0;
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',icc:testProfile(true),provideRect(){calls++;throw error;}},{iccFallback:'srgb'}),value=>value===error);
+  assert.equal(calls,1);
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',provideRect(){throw error;}},{iccFallback:'srgb'}),value=>value===error);
+  assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',provideRect(){throw null;}},{iccFallback:'srgb'}),value=>value===null);
+});
+
+
+for (const classSource of [false,true]) {
+  test(`chunked method receiver and ICC retry: ${classSource ? 'prototype' : 'object'}`, () => {
+    class Source {
+      width=1; height=1; format='RGB' as const; icc=testProfile(true);
+      pixels=new Uint8Array([31,97,211]); calls=0;
+      provideRect(_x: number,_y: number,w: number,h: number) {
+        this.calls++;
+        assert.equal(w*h,1);
+        return this.pixels;
+      }
+    }
+    const source=classSource ? new Source() : {...new Source(),provideRect:Source.prototype.provideRect};
+    assert.throws(()=>encoder.encodeRgb(source), /ICC: Gray profile requires R=G=B/);
+    const before=source.calls;
+    const actual=encoder.encodeRgb(source,{iccFallback:'srgb'});
+    assert.ok(source.calls>=before+2, 'provider replays on fallback');
+    assert.deepEqual([...actual],[...encoder.encodeRgb({width:1,height:1,data:source.pixels})]);
+    assert.ok(actual.warnings.some(w=>w.includes('ICC fallback')));
+    source.pixels.fill(97);
+    const gray=encoder.encodeRgb(source);
+    const full=encoder.encodeRgb({width:1,height:1,data:source.pixels,icc:source.icc});
+    assert.deepEqual([...gray],[...full]);
+  });
+}
+
+test('chunked float samples reject NaN, infinities and out-of-range values, then recover', () => {
+  for(const value of [NaN,Infinity,-Infinity,-0.01,1.01]) {
+    let calls=0;
+    assert.throws(()=>encoder.encodeRgb({width:1,height:1,format:'RGB',depth:32,provideRect(){
+      calls++;return new Float32Array([value,0,0]);
+    }},{iccFallback:'srgb'}), /conversion failed|libjxl|finite nominal-range/);
+    assert.equal(calls,1,'invalid samples do not trigger ICC retry');
+    assert.ok(encoder.encodeRgb(rgb()).length>0);
+  }
+});
+
+test('one callback table slot is reused across successes, failures and ICC retries', async () => {
+  const e=await createTestEncoder();
+  const table=tables.at(-1)!;
+  assert.ok(table instanceof WebAssembly.Table);
+  const source: ChunkedRgbInput={width:1,height:1,format:'RGB',provideRect:()=>new Uint8Array([0,0,0])};
+  e.encodeRgb(source);
+  const length=table.length;
+  const entries=Array.from({length},(_,i)=>table.get(i));
+  for(let n=0;n<12;n++) {
+    e.encodeRgb(source);
+    assert.throws(()=>e.encodeRgb({...source,provideRect(){throw new Error('source failed');}}), /source failed/);
+    e.encodeRgb({...source,icc:testProfile(true),provideRect:()=>new Uint8Array([1,2,3])},{iccFallback:'srgb'});
+    assert.equal(table.length,length);
+    assert.deepEqual(Array.from({length},(_,i)=>table.get(i)),entries);
+  }
+});
+
+test('dimensions exceeding 2048 in both axes are outside the 4 MP cap', () => {
+  rejectsBeforeWasm(()=>encoder.encodeRgb({width:2049,height:2049,format:'RGB',provideRect(){
+    assert.fail('dimension validation must precede provider calls');
+  }}), /dimension limit/);
+});
+
+for(const depth of [8,32] as const) {
+  test(`chunked measured heap and bridge split at 2049x2047, depth ${depth}`, async t => {
+    const e=await createTestEncoder();
+    const width=2049,height=2047;
+    const sample=(x: number,y: number,c: number)=>((Math.imul(x+1,73)^Math.imul(y+1,131)^(c*67))&255);
+    let calls=0;
+    const source={width,height,format:'RGB' as const,depth,provideRect(x: number,y: number,w: number,h: number) {
+      calls++;
+      assert.ok(w<=2048 && h<=2048 && x+w<=width && y+h<=height);
+      const data=depth===32?new Float32Array(w*h*3):new Uint8Array(w*h*3);
+      for(let j=0;j<h;j++)for(let i=0;i<w;i++)for(let c=0;c<3;c++)
+        data[(j*w+i)*3+c]=sample(x+i,y+j,c)/(depth===32?255:1);
+      return data;
+    }} as ChunkedRgbInput;
+    const chunked=e.encodeRgb(source,{observe:true});
+    const measured=e.stats;
+    assert.ok(calls>1, 'bridge splitting, independent of libjxl tiling');
+    assert.ok(measured.heapAfter!>measured.heapBefore!);
+    assert.ok(measured.heapAfter!<=measured.estimatedMemoryBytes!);
+    const scratch=2048*2047*3*(depth/8);
+    assert.equal(measured.estimatedMemoryBytes,32*MIB+Math.ceil((scratch+width*height*72)*1.5));
+    const data=depth===32?new Float32Array(width*height*3):new Uint8Array(width*height*3);
+    for(let y=0;y<height;y++)for(let x=0;x<width;x++)for(let c=0;c<3;c++)
+      data[(y*width+x)*3+c]=sample(x,y,c)/(depth===32?255:1);
+    assert.deepEqual(chunked.slice(),e.encodeRgb({width,height,data},{observe:true}).slice());
+    t.diagnostic(JSON.stringify({depth,width,height,...measured}));
+  });
+}
+
+
+test('direct chunked ABI rejects invalid layouts before invoking provider', async () => {
+  const m=await createModule({instantiateWasm(imports: WebAssembly.Imports,receive: (instance: WebAssembly.Instance,module: WebAssembly.Module)=>void) {
+    WebAssembly.instantiate(wasm,imports).then(({instance,module})=>receive(instance,module));
+    return {};
+  }});
+  let calls=0;
+  const callback=m.addFunction(()=>{calls++;return 0;},'iiiii');
+  const scratch=m._malloc(12);
+  try {
+    for(const [width,height,provide,buffer,capacity,depth] of [
+      [1,1,0,scratch,12,8], [1,1,callback,0,12,8],
+      ...[0,1,7,12,24,64].map(depth=>[1,1,callback,scratch,12,depth]),
+      [1,1,callback,scratch,2,8], [1,1,callback,scratch,5,16], [1,1,callback,scratch,11,32],
+      [0,1,callback,scratch,12,8], [1,0,callback,scratch,12,8],
+      [8193,1,callback,scratch,12,8], [1,8193,callback,scratch,12,8],
+      [2049,2049,callback,scratch,12,8]
+    ]) {
+      m._w_init(width,height,2,1,1,1,3,8,0,13,0,1,255);
+      assert.equal(m._w_rgb_chunked(provide,buffer,capacity,depth),1);
+      assert.match(m.UTF8ToString(m._w_error()),/RGB chunked layout\/dimension limit/);
+    }
+    assert.equal(calls,0);
+  } finally {
+    m.removeFunction(callback);m._free(scratch);m._w_free();
+  }
+});
+// Decoder assertions are optional; encoding/validation always runs on Wasm.
+const decoder = process.env.JXL_DECODE_FLOAT ?? fileURLToPath(new URL('../build/decode-float', import.meta.url));
+const nativeSkip = await access(decoder, constants.X_OK).then(async () => {
+  try { await exec(decoder, []); return false; }
+  catch (error) {
+    const e=error as Error & {code?: string | number; stderr?: string};
+    if (e.code==='ENOENT' || e.code==='EACCES' || /error while loading shared libraries/.test(e.stderr ?? ''))
+      return `native decoder or its system libraries unavailable: ${decoder}: ${e.message}`;
+    if (e.code===1 && /usage:/.test(e.stderr ?? '')) return false;
+    throw error;
+  }
+}, () => `native decoder unavailable: ${decoder}; build scripts/build-native.sh or set JXL_DECODE_FLOAT`);
+const tempRoot = process.env.TMPDIR ?? fileURLToPath(new URL('../build/tmp', import.meta.url));
+await mkdir(tempRoot, {recursive:true});
+async function withDecoded(bytes: Uint8Array, mode: string | undefined, check: (raw: Buffer, stdout: string) => void, root = tempRoot) {
+  await mkdir(root, {recursive:true});
+  const dir = await mkdtemp(join(root, 'lossless-'));
+  try {
+    const input = join(dir, 'input.jxl'), output = join(dir, 'output.f32');
+    await writeFile(input, bytes);
+    const {stdout} = await exec(decoder, [input, output, ...(mode ? [mode] : [])], {encoding:'utf8'});
+    check(await readFile(output), stdout);
+  } finally { await rm(dir, {recursive:true, force:true}); }
+}
+async function decode(t: TestContext, bytes: Uint8Array, check: (values: number[], info: Record<string, number>) => void, mode?: string) {
+  assert.ok(bytes.length > 0);
+  await t.test('independent native decode', {skip:nativeSkip}, async () => {
+    await withDecoded(bytes, mode, (raw, stdout) => {
+      const values = Array.from({length:raw.length / 4}, (_, i) => raw.readFloatLE(i * 4));
+      check(values, JSON.parse(stdout));
+    });
+  });
+}
+
+test('Gray ICC failure on frame two restores stats or restarts every frame in sRGB', () => {
+  const frames = [{data:new Uint8Array([64,64,64,128]), durationMs:10},
+    {data:new Uint8Array([255,0,0,255]), durationMs:20}];
+  const input = {width:1, height:1, frames, loops:3};
+  const expected = encoder.encodeAnimation(input, {bitDepth:8});
+  const previous = encoder.stats;
+  assert.throws(() => encoder.encodeAnimation({...input, icc:animationProfile(true)}), /ICC: Gray profile requires R=G=B/);
+  assert.deepEqual(encoder.stats, previous);
+  const fallback = encoder.encodeAnimation({...input, icc:animationProfile(true)}, {bitDepth:8, iccFallback:'srgb'});
+  assert.deepEqual([...fallback], [...expected]);
+  assert.ok(fallback.warnings.some(w => /ICC fallback.*Gray profile/.test(w)));
+  assert.equal(encoder.stats.frameCount, 2);
+  assert.deepEqual(encoder.stats.durationsMs, [10,20]);
+});
+for (const [name, encode] of [
+  ['RGB', options => encoder.encodeRgb(rgb(), options)],
+  ['planar', options => encoder.encodePlanarYuv(planar('I444A'), options)]
+] satisfies [string, (options: EncodeOptions) => Encoded][]) {
+  test(`${name} validates distance, lossless conflicts and effort`, () => {
+    for (const distance of [-1, 25.1, NaN, Infinity, '0', null])
+      assert.throws(() => encode({distance: distance as number}), /distance must be in \[0,25\]/);
+    for (const effort of [0, 11, 1.5, NaN, Infinity, '3', null])
+      assert.throws(() => encode({effort: effort as EncodeOptions['effort']}), /effort must be an integer in 1..10/);
+    assert.throws(() => encode({lossless:false, distance:0}), /conflicts/);
+    assert.throws(() => encode({lossless:true, distance:1}), /conflicts/);
+    for (const lossless of [1, null]) assert.throws(() => encode({lossless:lossless as unknown as boolean}), /lossless must be boolean/);
+    assert.throws(() => encode({lossless:true, iccHeader:'p3'}), /original profile/);
+    for (const effort of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const) {
+      for (const options of [{effort}, {effort, lossless:true}]) assert.ok(encode(options).length > 0, JSON.stringify(options));
+    }
+    assert.ok(encode({distance:25}).length > 0);
+  });
+}
+
+test('U8 RGB lossless is bit-exact, including zero distance alias and all byte values', async (t) => {
+  const data = Uint8Array.from({length:16 * 16 * 3}, (_, i) => (i * 73 + (i >> 8)) & 255);
+  for (const options of [{lossless:true}, {distance:0}, {lossless:true, distance:0}, {lossless:true, bitDepth:'preserve'}] satisfies EncodeOptions[]) {
+    await decode(t, encoder.encodeRgb({width:16, height:16, data}, options), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      assert.equal(info.bits, 8);
+      assert.deepEqual(values.map(v => Math.round(v * 255)), [...data]);
+    });
+  }
+  // A subsequent lossy call must reset the instance's lossless state.
+  await decode(t, encoder.encodeRgb(rgb()), (_, info) => assert.equal(info.usesOriginalProfile, 0));
+});
+
+test('Float32 RGB lossless preserves normalized samples', async (t) => {
+  const data = new Float32Array([0, 1, 0.5, 0.2, 0.7, 0.1234567, 1e-6, 0.9, 0.3]);
+  await decode(t, encoder.encodeRgb({width:3, height:1, data}, {lossless:true}), (values, info) => {
+    assert.equal(info.usesOriginalProfile, 1);
+    assert.deepEqual(new Uint32Array(Float32Array.from(values).buffer), new Uint32Array(data.buffer));
+  });
+});
+
+test('planar lossless preserves reconstructed RGB at float32 or output integer depth', async (t) => {
+  const y = new Uint8Array([16, 40, 100, 200, 235]);
+  const input: PlanarInput = {width:5, height:1, format:'I444', planes:[y, new Uint8Array(5).fill(128), new Uint8Array(5).fill(128)].map(data => ({data, stride:5}))};
+  for (const options of [{lossless:true}, {distance:0, bitDepth:'float32'}] satisfies EncodeOptions[]) {
+    await decode(t, encoder.encodePlanarYuv(input, options), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      values.forEach((v, i) => {
+        const source = Math.fround((y[Math.floor(i / 3)] - 16) / 219);
+        const expected = options.bitDepth === 'float32' ? source : Math.round(source * 255) / 255;
+        assert.ok(Math.abs(v - expected) <= 1e-7, `${i}: ${v} vs ${expected}`);
+      });
+    });
+  }
+});
+
+test('U16 RGB lossless preserves all integer codes in a 16-bit container', async (t) => {
+  const data = Uint16Array.from({length:256*256*3}, (_, i) => i & 65535);
+  for (const [samples, bitDepth] of [[data,undefined], [data,'preserve'], [data,16], [Float32Array.from(data,v=>v/65535),16]] as const) {
+    await decode(t, encoder.encodeRgb({width:256, height:256, data:samples}, {lossless:true, bitDepth}), (values, info) => {
+      assert.equal(info.bits, 16);
+      assert.equal(info.exponent, 0);
+      assert.deepEqual(values.map(v => Math.round(v * 65535)), [...data]);
+    });
+  }
+});
+
+test('lossless RGBA retains invisible colour and exact alpha', async (t) => {
+  const data = new Uint8Array([17, 128, 255, 0, 255, 3, 91, 128]);
+  await decode(t, encoder.encodeRgb({width:2, height:1, data}, {lossless:true}), values => {
+    assert.deepEqual(values.map(v => Math.round(v * 255)), [...data]);
+  }, '--rgba');
+});
+
+test('planar HDR lossless retains PQ/HLG original-profile signalling', async (t) => {
+  for (const transfer of ['pq', 'hlg'] as const) {
+    await decode(t, encoder.encodePlanarYuv(planar('I444AP10', 10, transfer), {lossless:true}), (values, info) => {
+      assert.equal(info.usesOriginalProfile, 1);
+      assert.equal(info.transfer, transfer === 'pq' ? 16 : 18);
+      const code = Math.round(((256 - 64) / 876) * 1023);
+      assert.deepEqual(values.map(v => Math.round(v * 1023)), [code, code, code]);
+    });
+  }
+});
+
+test('tiny positive distances stay lossy and resolved options are reported', async (t) => {
+  const bytes = encoder.encodeRgb(rgb(), {distance:1e-46});
+  assert.equal(encoder.stats.distance, 0.01);
+  assert.equal(encoder.stats.lossless, false);
+  assert.equal(encoder.stats.effort, 3);
+  await decode(t, bytes, (_, info) => assert.equal(info.usesOriginalProfile, 0));
+});
+
+test('standard planar path warns, reports scalar conversion and guards expensive sizes', () => {
+  for (const options of [{effort:8}, {lossless:true}] satisfies EncodeOptions[]) {
+    const bytes = encoder.encodePlanarYuv(planar('I444A'), {...options, observe:true});
+    assert.ok(bytes.warnings.some(w => /bypass fused SIMD/.test(w)));
+    assert.equal(encoder.stats.inputPath, 'standard-rgb');
+    assert.equal(encoder.stats.simdLanes, 1);
+    assert.ok(Number(encoder.stats.conversionMs) > 0);
+    if (options.lossless) assert.ok(bytes.warnings.some(w => /not the source YUV/.test(w)));
+  }
+  for (const effort of [9,10] as const) {
+    rejectsBeforeWasm(() => encoder.encodeRgb(rgb({width:1025,height:1024}), {effort,maxMemoryBytes:ceiling}), /effort 9\/10 dimension limit/);
+    rejectsBeforeWasm(() => encoder.encodePlanarYuv({...planar('I444'),width:1025,height:1024}, {effort,maxMemoryBytes:ceiling}), /effort 9\/10 dimension limit/);
+  }
+});
+
+// Odd sizes exercise interpolation, multi-row alpha, multiple groups and the
+// >2048-pixel streaming boundary without a multi-megapixel expensive encode.
+for (const [format, fullRange, chromaSiting, transfer] of [
+  ['I420A',true,'center','srgb'], ['I422A',false,'left','bt709'], ['I444A',true,'topleft','linear']
+] as const) {
+  test(`${format} effort tiers preserve colours across fused/standard callbacks`, async (t) => {
+    const width=2051, height=5, sx=format==='I444A'?1:2, sy=format==='I420A'?2:1;
+    const input: PlanarInput = {width,height,format,fullRange,transfer,chromaSiting,
+      planes:Array.from({length:4}, (_, c) => {
+        const w=c===1 || c===2?Math.ceil(width/sx):width, h=c===1 || c===2?Math.ceil(height/sy):height;
+        const data=Uint8Array.from({length:w*h}, (_, i) => c===0?100+Math.round(25*Math.sin(i%w/100)):c===1?120+Math.round(8*Math.sin(i%w/120)):c===2?136+Math.round(8*Math.cos(i%w/140)):i%256);
+        return {data,stride:w};
+      })};
+    let reference: number[] | undefined;
+    for (const effort of [4,5,6,7,8,9,10] as const) {
+      const bytes=encoder.encodePlanarYuv(input,{effort,distance:0.1,observe:true});
+      assert.equal(encoder.stats.inputPath,effort>=8?'standard-rgb':'xyb');
+      await decode(t, bytes, values => {
+        for (let i=0;i<width*height;i++) assert.equal(Math.round(values[i*4+3]*255),input.planes[3].data[i]);
+        if(effort===7)reference=values;
+        if(effort>=8 && reference) {
+          let max=0, square=0;
+          for(let i=0;i<values.length;i++)if(i%4!==3) {const d=Math.abs(values[i]-reference[i]);max=Math.max(max,d);square+=d*d;}
+          assert.ok(max<0.035, `effort ${effort}: max RGB delta ${max}`);
+          assert.ok(Math.sqrt(square/(width*height*3))<0.01);
+        }
+      }, '--rgba');
+    }
+  });
+}
+
+for (const [name,profile] of [['matrix',matrixProfile],['gray',grayProfile],['LUT',lutProfile]] as const) {
+  test(`lossless ${name} ICC reports and embeds the original profile`, async (t) => {
+    const icc=profile(), data=new Uint8Array([17,17,17,128,128,128,250,250,250]);
+    for(const metadata of [{icc},{colorMetadata:{type:'icc',profile:icc}}] satisfies ColorOptions[]) {
+      for(const iccHeader of ['auto','exact'] as const) {
+        const bytes=encoder.encodeRgb({width:3,height:1,data,...metadata},{lossless:true,iccHeader});
+        assert.ok(bytes.length>0);
+        assert.equal(bytes.colorResolved.header,'icc');
+        await t.test('embedded ICC bytes', {skip:nativeSkip}, async () => {
+          await withDecoded(bytes,'--icc', raw => assert.deepEqual(new Uint8Array(raw),icc));
+        });
+        // Original-profile lossless already decodes in source sample space.
+        // No CMS output transform (a forward-only LUT need not have an inverse).
+        await decode(t,bytes,values=>assert.deepEqual(values.map(v=>Math.round(v*255)),[...data]));
+      }
+    }
+  });
+}
+
+test('native harness creates missing temporary parent directories', async (t) => {
+  const bytes=encoder.encodeRgb(rgb(),{lossless:true});
+  assert.ok(bytes.length>0);
+  await t.test('new temp directory parent', {skip:nativeSkip}, async () => {
+    await mkdir(tempRoot,{recursive:true});
+    const top=await mkdtemp(join(tempRoot,'api-parent-'));
+    try {
+      const root=join(top,'missing','nested');
+      await assert.rejects(access(root));
+      await withDecoded(bytes,undefined,(_,stdout)=>assert.equal(JSON.parse(stdout).usesOriginalProfile,1),root);
+    } finally {await rm(top,{recursive:true,force:true});}
+  });
+});
+
+// Optional independent native verifiers. Keep WASM encoding coverage even in a
+// WASM-only checkout; DJXL/JPEG_INFO may point to executables or PATH commands.
+function nativeTool(override: string | undefined, fallback: string) {
+  const value = override ?? fileURLToPath(new URL(fallback, import.meta.url));
+  const candidates = isAbsolute(value) || value.includes('/') ? [value] : (process.env.PATH ?? '').split(delimiter).map(p => join(p, value));
+  return candidates.find(p => {try {accessSync(p, constants.X_OK); return statSync(p).isFile();} catch {return false;}});
+}
+const djxl = nativeTool(process.env.DJXL, '../build/native/tools/djxl');
+const jpegInfo = nativeTool(process.env.JPEG_INFO, '../build/jpeg-info');
+for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp', 'icc-srgb', 'icc-p3', 'large-444', 'restart-422-tail']) {
+  test(`JPEG ${fixture} encodes with either box compression setting`, async t => {
+    const jpeg = new Uint8Array(await readFile(new URL(`./fixtures/${fixture}.jpg`, import.meta.url)));
+    const directory = await mkdtemp(join(tempRoot, 'jpeg-roundtrip-'));
+    try {
+      for (const compressBoxes of [undefined, false, true]) {
+        const padded = new Uint8Array(jpeg.length + 11); padded.set(jpeg, 7);
+        const encoded = encoder.encodeJpeg(padded.subarray(7, 7 + jpeg.length), {compressBoxes});
+        assert.equal(encoded.colorResolved.policy, 'jpeg-lossless');
+        assert.deepEqual(encoded.warnings, []);
+        assert.equal(encoder.stats.colorResolved, undefined);
+        assert.deepEqual(encoder.stats.jpegColorResolved, encoded.colorResolved);
+        if (fixture === 'large-444') assert.ok(encoded.length > 4096, 'forces NEED_MORE_OUTPUT and buffer growth');
+        const input = join(directory, 'input.jxl'), output = join(directory, 'output.jpg');
+        await writeFile(input, encoded);
+        await t.test(`byte-exact reconstruction (compressBoxes=${compressBoxes})`, {
+          skip: djxl ? false : 'djxl absent; build native tools or set DJXL'
+        }, async () => {
+          await runFile(djxl!, [input, output]);
+          assert.deepEqual(new Uint8Array(await readFile(output)), jpeg);
+        });
+        await t.test(`independent header inspection (compressBoxes=${compressBoxes})`, {
+          skip: jpegInfo ? false : 'jpeg-info absent; build native tools or set JPEG_INFO'
+        }, async () => {
+          const {stdout} = await runFile(jpegInfo!, [input]);
+          const dimensions = fixture === 'large-444' ? '160 128' : fixture === 'restart-422-tail' ? '33 17' : '9 7';
+          assert.equal(stdout.trim(), `${dimensions} ${fixture === 'oriented' ? 6 : 1} 1`, 'original-profile, non-XYB header and EXIF orientation');
+        });
+        if (fixture === 'oriented' && compressBoxes === false) {
+          const marker = Buffer.from(encoded).indexOf('Exif');
+          assert.ok(marker > 0, 'Exif box retained');
+          const original = Buffer.from(jpeg).indexOf(Buffer.from('Exif\0\0'));
+          const length = new DataView(jpeg.buffer, jpeg.byteOffset).getUint16(original - 2) - 8;
+          assert.deepEqual(encoded.subarray(marker + 8, marker + 8 + length), jpeg.subarray(original + 6, original + 6 + length));
+        }
+      }
+      assert.ok(encoder.encodeRgb(rgb()).length > 0);
+    } finally {await rm(directory, {recursive:true, force:true});}
+  });
+}
+
+test('pixel metadata and JPEG reconstruction boxes remain independent across calls', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const xmp = new TextEncoder().encode('<xmp>pixel-only</xmp>');
+  const exif = new Uint8Array([73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
+  const pixelBaseline = encoder.encodeRgb(rgb());
+  const jpegBaseline = encoder.encodeJpeg(jpeg, {compressBoxes:false});
+  for (const compressBoxes of [true, false]) {
+    for (const options of [{}, {lossless:true}, {distance:0}, {distance:0.1,effort:8}] satisfies EncodeOptions[]) {
+      const tagged = encoder.encodeRgb(rgb(), {...options,exif,xmp,compressBoxes});
+      assert.notDeepEqual([...tagged], [...pixelBaseline]);
+      assert.equal(encoder.stats.lossless, options.distance === 0 || options.lossless === true);
+      assert.equal(encoder.stats.effort, options.effort ?? 3);
+      for (const rgbViaPlanar of [false,true]) {
+        assert.ok(encoder.encodePlanarYuv(planar('I444A'), {...options,exif,xmp,compressBoxes,rgbViaPlanar}).length > 0);
+      }
+      assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+    }
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+    assert.deepEqual([...encoder.encodeRgb(rgb())], [...pixelBaseline]);
+    assert.throws(() => encoder.encodeRgb(rgb(), {compressBoxes:1} as never), /compressBoxes must be boolean/);
+    assert.deepEqual(encoder.stats, {});
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+  }
+});
+
+test('JPEG rejects corrupt input and recovers for the next call', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  for (const bytes of [new Uint8Array([1,2,3]), jpeg.subarray(0, 32), new Uint8Array([255,216,255,217])]) {
+    assert.throws(() => encoder.encodeJpeg(bytes), /BAD_INPUT/);
+  }
+  assert.throws(() => encoder.encodeJpeg(jpeg.subarray(0, jpeg.length - 20)), /lossless JPEG recompression failed \(BAD_INPUT:/);
+  assert.ok(encoder.encodeJpeg(jpeg).length > 0);
+});
+
+test('JPEG rejects misleading pixel/lossy and metadata removal options', () => {
+  const jpeg = new Uint8Array([255,216]);
+  for (const option of ['distance','effort','lossless','xyb','uses_original_profile','keepExif','keepXmp','bitDepth','icc','exif','xmp','maxMemoryBytes']) {
+    assert.throws(() => encoder.encodeJpeg(jpeg, {[option]:false} as never), /unsupported JPEG option/);
+  }
+  for (const input of [null, [], new ArrayBuffer(3), new Uint8Array()]) {
+    assert.throws(() => encoder.encodeJpeg(input as never), /nonempty Uint8Array/);
+  }
+  for (const compressBoxes of [0, null, 'true']) {
+    assert.throws(() => encoder.encodeJpeg(jpeg, {compressBoxes} as never), /compressBoxes must be boolean/);
+  }
+  assert.throws(() => encoder.encodeJpeg(jpeg, null as never), /JPEG options must be an object/);
+});
+
+test('JPEG rejects oversized bytes and SOF dimensions before encoding', async () => {
+  assert.throws(() => encoder.encodeJpeg(new Uint8Array(64 * 1024 * 1024 + 1)), /size limit: 64 MiB/);
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const sof = jpeg.findIndex((v, i) => v === 0xff && jpeg[i + 1] === 0xc0);
+  assert.ok(sof > 0);
+  for (const [width, height] of [[8193, 1], [1, 8193], [2049, 2048], [65535, 65535]]) {
+    const input = jpeg.slice();
+    const view = new DataView(input.buffer);
+    view.setUint16(sof + 5, height); view.setUint16(sof + 7, width);
+    assert.throws(() => encoder.encodeJpeg(input), /JPEG dimension limit/);
+  }
+  const truncated = jpeg.slice(0, sof + 6);
+  assert.throws(() => encoder.encodeJpeg(truncated), /BAD_INPUT/);
+  assert.ok(encoder.encodeJpeg(jpeg).length > 0);
+});
+
+test('JPEG failures clear previous statistics and refresh totalMs', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  for (const invalid of [new Uint8Array(), jpeg.subarray(0, jpeg.length - 20)]) {
+    encoder.encodeJpeg(jpeg);
+    assert.ok(encoder.stats.jpegColorResolved);
+    assert.throws(() => encoder.encodeJpeg(invalid));
+    assert.equal(encoder.stats.jpegColorResolved, undefined);
+    assert.equal(encoder.stats.encodeMs, undefined);
+    assert.equal(typeof encoder.stats.totalMs, 'number');
+  }
+});
+
+test('CMYK JPEG reports an unsupported coefficient input and recovers', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/cmyk.jpg', import.meta.url)));
+  assert.throws(() => encoder.encodeJpeg(jpeg), /BAD_INPUT|NOT_SUPPORTED/);
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
+});
+
 test('ICC matrix/TRC encodes; HDR CICP overrides dummy TRCs with enum HDR', () => {
   assert.ok(encoder.encodeRgb(rgb({icc:iccFixture()})).length > 0);
   for (const transfer of [16,18] as const) {
@@ -172,6 +1267,12 @@ test('ICC matrix/TRC encodes; HDR CICP overrides dummy TRCs with enum HDR', () =
       assert.equal(bytes.colorResolved.chromaSiting,undefined);
       assert.equal(encoder.encodeRgb(input,{intensityTargetNits:300}).colorResolved.intensityTarget,300);
       assert.ok(encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])}).length > 0);
+      const lossless=encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])},{lossless:true});
+      assert.ok(lossless.length > 0);
+      assert.equal(lossless.colorResolved.header,'enum');
+      assert.equal(lossless.colorResolved.transfer,transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(encoder.stats.lossless,true);
+      assert.deepEqual([...lossless],[...encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])},{distance:0,bitDepth:16})]);
       assert.throws(() => encoder.encodeRgb({...input,data:new Uint8Array([100,120,140])}), /8-bit RGB source/);
       assert.throws(() => encoder.encodeRgb(input,{bitDepth:8}), /HDR output/);
       for (const iccHeader of ['exact','bt2020','p3'] as const)
@@ -259,7 +1360,7 @@ async function instrumented(overrides: (exports: WebAssembly.Exports) => Record<
     return {};
   }});
 }
-for (const name of ['w_options','w_init','malloc','w_rgb','w_free']) {
+for (const name of ['w_options','w_init','w_metadata','malloc','w_rgb','w_free']) {
   test(`escaping ${name} exception poisons instance and prevents further cleanup/fallback`, async () => {
     const original = new WebAssembly.RuntimeError('ICC: injected fatal trap');
     let cleanup = 0, calls = 0;
@@ -271,7 +1372,14 @@ for (const name of ['w_options','w_init','malloc','w_rgb','w_free']) {
     assert.equal(calls,1);
     assert.equal(cleanup,0);
     assert.deepEqual(instance.stats,{});
-    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(),{maxMemoryBytes:1}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb({width:1,height:1,format:'RGB',provideRect(){assert.fail('poisoned provider called');}}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is poisoned/);
+     assert.throws(() => instance.encodeAnimation(null as never), /Encoder is poisoned/);
+    assert.deepEqual(instance.stats,{});
     instance.dispose(); instance.dispose();
     assert.equal(calls,1); assert.equal(cleanup,0);
   });
@@ -285,7 +1393,13 @@ test('dispose releases live module output and permanently rejects encoding', asy
   assert.equal(cleanup,2); // successful encode cleanup, then dispose
   assert.deepEqual(instance.stats,{});
   assert.throws(() => instance.encodeRgb(rgb()), /Encoder is disposed/);
-  assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is disposed/);
+  assert.throws(() => instance.encodeRgb({width:1,height:1,format:'RGB',provideRect(){assert.fail('disposed provider called');}}), /Encoder is disposed/);
+  assert.throws(() => instance.encodePlanarYuv(planar('I444'),{maxMemoryBytes:1}), /Encoder is disposed/);
+  assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is disposed/);
+  assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is disposed/);
+  assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is disposed/);
+   assert.throws(() => instance.encodeAnimation(null as never), /Encoder is disposed/);
+  assert.deepEqual(instance.stats,{});
 });
 
 test('empty codec status messages get a non-empty fallback error', async () => {
@@ -295,4 +1409,195 @@ test('empty codec status messages get a non-empty fallback error', async () => {
     assert.deepEqual(instance.stats,{});
   }
   instance.dispose();
+});
+
+for (const name of ['malloc','w_jpeg','w_free','free']) {
+  test(`escaping JPEG ${name} exception preserves trap and poisons instance`, async () => {
+    const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+    const original = new WebAssembly.RuntimeError('injected JPEG fatal trap');
+    let calls = 0, cleanup = 0;
+    const instance = await instrumented(exports => ({
+      w_free:() => {cleanup++; (exports.w_free as () => void)();},
+      free:(pointer: number) => {cleanup++; (exports.free as (pointer: number) => void)(pointer);},
+      [name]:() => {calls++; throw original;}
+    }));
+    assert.throws(() => instance.encodeJpeg(jpeg), error => error === original);
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+    assert.throws(() => instance.encodeJpeg(jpeg), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(),{maxMemoryBytes:1}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb({width:1,height:1,format:'RGB',provideRect(){assert.fail('poisoned provider called');}}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is poisoned/);
+    instance.dispose(); instance.dispose();
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+  });
+}
+
+test('animation admits the whole sequence before entering Wasm', () => {
+  const frame = {data:new Uint8Array([10,20,30]), durationMs:10};
+  const input: AnimationInput = {width:1, height:1, frames:[frame]};
+  encoder.encodeAnimation(input);
+  const singleEstimate = encoder.stats.estimatedMemoryBytes!;
+  encoder.encodeAnimation({...input, frames:[frame,frame]});
+  const estimate = encoder.stats.estimatedMemoryBytes!;
+  assert.ok(estimate > singleEstimate);
+  rejectsBeforeWasm(() => encoder.encodeAnimation({...input, frames:[frame,frame]}, {maxMemoryBytes:estimate - 1}), {name:'MemoryBudgetError'});
+  assert.equal(encoder.stats.estimatedMemoryBytes, estimate);
+  assert.ok(encoder.encodeAnimation({...input, frames:[frame,frame]}, {maxMemoryBytes:estimate}).length > 0);
+  assert.equal(encoder.stats.maxMemoryBytes, estimate);
+  for (const maxMemoryBytes of [0, -1, 1.5, NaN, Infinity, ceiling + 1]) {
+    rejectsBeforeWasm(() => encoder.encodeAnimation(input, {maxMemoryBytes}), /maxMemoryBytes must be a safe integer/);
+  }
+  const large = new Uint8Array(1024*1025*3);
+  for (const effort of [9,10] as const) {
+    rejectsBeforeWasm(() => encoder.encodeAnimation({width:1024,height:1025,frames:[{data:large,durationMs:1}]}, {effort}), /effort 9\/10 dimension limit/);
+  }
+  for (const options of [{distance:-1}, {effort:11}, {lossless:true,distance:1}, {lossless:false,distance:0}]) {
+    rejectsBeforeWasm(() => encoder.encodeAnimation(input, options as AnimationEncodeOptions), /distance|effort|conflicts/);
+  }
+  for (const key of ['exif','xmp','compressBoxes']) {
+    rejectsBeforeWasm(() => encoder.encodeAnimation(input, {[key]:false} as never), /animation metadata option .* is unsupported/);
+  }
+});
+
+test('animation lossless integer depth and per-frame effort semantics', () => {
+  const frames = Array.from({length:2}, () => ({data:new Uint16Array([0,12345,65535]),durationMs:10}));
+  const input = {width:1,height:1,frames};
+  const lossless = encoder.encodeAnimation(input, {lossless:true});
+  assert.equal(encoder.stats.inputPath, 'standard-rgb');
+  assert.equal(encoder.stats.lossless, true);
+  assert.deepEqual([...lossless], [...encoder.encodeAnimation(input, {distance:0,bitDepth:16})]);
+  for (const effort of [9,10] as const) {
+    assert.ok(encoder.encodeAnimation(input, {effort}).length > 0);
+    assert.equal(encoder.stats.effort, effort);
+    assert.equal(encoder.stats.inputPath, 'standard-rgb');
+  }
+});
+
+test('animation HDR CICP uses enum HDR and disallows SDR fallback', () => {
+  for (const transfer of [16,18] as const) {
+    for (const data of [rgb().data, new Uint16Array([10000,20000,30000])]) {
+      const frames = [{data,durationMs:10}, {data,durationMs:20}];
+      const input = {width:1,height:1,frames,icc:iccFixture(transfer)};
+      const bytes = encoder.encodeAnimation(input);
+      assert.equal(bytes.colorResolved.transfer, transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.header, 'enum');
+      assert.equal(encoder.stats.frameCount, 2);
+      assert.throws(() => encoder.encodeAnimation(input, {iccFallback:'srgb'}), /HDR CICP/);
+      assert.throws(() => encoder.encodeAnimation({...input,frames:[{data:new Uint8Array(3),durationMs:10}]}), /8-bit RGB source/);
+    }
+  }
+});
+
+for (const name of ['w_animation_begin','w_animation_frame','w_animation_end','w_rgb','w_free']) {
+  test(`escaping animation ${name} trap preserves poison state`, async () => {
+    const original = new WebAssembly.RuntimeError('ICC: injected animation trap');
+    let calls = 0;
+    const instance = await instrumented(() => ({[name]:() => {calls++; throw original;}}));
+    const input = {width:1,height:1,frames:[{data:rgb().data,durationMs:10}]};
+    // End is also used to restart ICC fallback; an escaping end must stop it.
+    const actualInput = name === 'w_animation_end' ? {...input,icc:new Uint8Array(132)} : input;
+    assert.throws(() => instance.encodeAnimation(actualInput, {iccFallback:'srgb'}), error => error === original);
+    assert.equal(calls, 1);
+    assert.deepEqual(instance.stats, {});
+    assert.throws(() => instance.encodeAnimation(input), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is poisoned/);
+    instance.dispose();
+    assert.equal(calls, 1);
+  });
+}
+
+test('chunked RGB keeps lossless precision, standard RGB effort paths and metadata', () => {
+  const width=8,height=5;
+  const xmp=new TextEncoder().encode('<x:xmpmeta xmlns:x="adobe:ns:meta/"/>');
+  for(const [Type,depth] of [[Uint8Array,8],[Uint16Array,16],[Float32Array,32]] as const) {
+    const data=new Type(width*height*3);
+    for(let n=0;n<data.length;n++) data[n]=depth===32?(n%97)/96:depth===16?(n*997)%65536:n%256;
+    const input={width,height,format:'RGB' as const,depth,provideRect:()=>data} as ChunkedRgbInput;
+    for(const effort of [1,3,8,9,10] as const) for(const lossless of [false,true]) {
+      const options={effort,lossless,xmp,compressBoxes:false};
+      const full=encoder.encodeRgb({width,height,data},options);
+      const fullEstimate=encoder.stats.estimatedMemoryBytes!;
+      const chunked=encoder.encodeRgb(input,options);
+      assert.deepEqual(chunked.slice(),full.slice());
+      assert.equal(encoder.stats.inputPath,lossless || effort>=8?'standard-rgb':'xyb');
+      assert.equal(fullEstimate-encoder.stats.estimatedMemoryBytes!,data.byteLength*1.5);
+      const C=lossless || effort>=8?12:0, D=lossless && depth===16?6:0;
+      assert.equal(encoder.stats.estimatedMemoryBytes,32*MIB+Math.ceil(1.5*(data.byteLength+4*xmp.length+width*height*(72+C+D))));
+    }
+  }
+});
+
+test('chunked animation is rejected before Wasm or provider calls', () => {
+  const source={width:1,height:1,format:'RGB' as const,provideRect(){assert.fail('animation provider called');}};
+  rejectsBeforeWasm(()=>encoder.encodeAnimation({...source,frames:[{data:new Uint8Array(3),durationMs:1}]} as unknown as AnimationInput),/chunked animation frames are unsupported/);
+  rejectsBeforeWasm(()=>encoder.encodeAnimation({width:1,height:1,frames:[{...source,durationMs:1}]} as unknown as AnimationInput),/chunked animation frames are unsupported/);
+});
+
+test('all public methods reject reentry from a chunked provider without corrupting the encode', () => {
+  const bytes=encoder.encodeRgb({width:1,height:1,format:'RGB',provideRect(){
+    for(const call of [()=>encoder.encodeRgb(rgb()),()=>encoder.encodePlanarYuv(planar('I444')),
+      ()=>encoder.encodeAnimation(null as never),()=>encoder.encodeJpeg(new Uint8Array()),()=>encoder.dispose()])
+      assert.throws(call,/already encoding/);
+    return new Uint8Array([10,20,30]);
+  }});
+  assert.ok(bytes.length>0);
+  assert.ok(encoder.encodeRgb(rgb()).length>0);
+});
+
+test('chunked HDR CICP matches packed HDR and disallows SDR fallback', () => {
+  for (const transfer of [16,18] as const) {
+    for (const depth of [16,32] as const) {
+      let calls=0;
+      const data=depth===16?new Uint16Array([10000,20000,30000]):new Float32Array([0.1,0.2,0.3]);
+      const input={width:1,height:1,format:'RGB' as const,icc:iccFixture(transfer),
+        ...(depth===16?{depth,provideRect(){calls++;return data as Uint16Array;}}:
+          {depth,provideRect(){calls++;return data as Float32Array;}})};
+      const bytes=encoder.encodeRgb(input);
+      assert.ok(calls>0);
+      assert.deepEqual([...bytes],[...encoder.encodeRgb({width:1,height:1,data,icc:input.icc})]);
+      assert.equal(bytes.colorResolved.header,'enum');
+      assert.equal(bytes.colorResolved.transfer,transfer===16?'pq':'hlg');
+      calls=0;
+      assert.throws(()=>encoder.encodeRgb(input,{iccFallback:'srgb'}),/HDR CICP/);
+      assert.equal(calls,0);
+    }
+    let calls=0;
+    const input: ChunkedRgbInput={width:1,height:1,format:'RGB',icc:iccFixture(transfer),provideRect(){calls++;return new Uint8Array([10,20,30]);}};
+    assert.throws(()=>encoder.encodeRgb(input),/8-bit RGB source/);
+    assert.throws(()=>encoder.encodeRgb(input,{iccFallback:'srgb'}),/HDR CICP/);
+    assert.equal(calls,0);
+  }
+});
+
+test('escaping chunked Wasm trap poisons every entry point and skips cleanup', async () => {
+  const original=new WebAssembly.RuntimeError('ICC: injected chunked trap');
+  let cleanup=0;
+  const instance=await instrumented(()=>({w_rgb_chunked:()=>{throw original;},w_free:()=>{cleanup++;}}));
+  const input: ChunkedRgbInput={width:1,height:1,format:'RGB',provideRect(){assert.fail('trapped provider called');}};
+  assert.throws(()=>instance.encodeRgb(input,{iccFallback:'srgb'}),error=>error===original);
+  assert.equal(cleanup,0);
+  assert.deepEqual(instance.stats,{});
+  for(const call of [()=>instance.encodeRgb(input),()=>instance.encodeRgb(rgb()),()=>instance.encodePlanarYuv(planar('I444')),
+    ()=>instance.encodeAnimation(null as never),()=>instance.encodeJpeg(new Uint8Array())]) assert.throws(call,/Encoder is poisoned/);
+  instance.dispose();
+  assert.equal(cleanup,0);
+});
+
+test('dispose removes the reusable chunked callback table slot', async () => {
+  const e=await createTestEncoder();
+  const table=tables.at(-1)!;
+  const before=Array.from({length:table.length},(_,n)=>table.get(n));
+  e.encodeRgb({width:1,height:1,format:'RGB',provideRect:()=>new Uint8Array(3)});
+  const slot=Array.from({length:table.length},(_,n)=>n).find(n=>table.get(n)!=null && table.get(n)!==before[n]);
+  assert.notEqual(slot,undefined);
+  e.dispose();
+  assert.equal(table.get(slot!),null);
 });
