@@ -1,6 +1,6 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
 // Colour: the Rust CMS (rust/cms.rs) is installed
-// through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
+// through JxlEncoderSetCms, including the patched JPEG ICC header path.
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>
 #include <algorithm>
@@ -22,6 +22,7 @@ extern "C" double planar_clock_ms() {
   return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 #endif
 }
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -47,6 +48,19 @@ extern "C" void bridge_icc_header_mode(int mode) {header_mode=mode;}
 extern "C" void bridge_icc(const uint8_t* p,size_t n) {source_profile=p;source_profile_size=n;source_profile_path=0;}
 extern "C" int bridge_icc_path() {return source_profile_path;}
 extern "C" int bridge_icc_header() {return source_profile_header;}
+// Borrowed through the synchronous encode, just like the source ICC.
+static thread_local const uint8_t* source_exif=nullptr;
+static thread_local size_t source_exif_size=0;
+static thread_local const uint8_t* source_xmp=nullptr;
+static thread_local size_t source_xmp_size=0;
+static thread_local int source_orientation=1;
+static thread_local bool compress_boxes=true;
+extern "C" void bridge_metadata(const uint8_t* exif,size_t exif_size,
+    const uint8_t* xmp,size_t xmp_size,int orientation,int compress) {
+  source_exif=exif;source_exif_size=exif_size;
+  source_xmp=xmp;source_xmp_size=xmp_size;
+  source_orientation=orientation;compress_boxes=compress!=0;
+}
 struct Config { uint32_t width,height,primaries,transfer; float intensity; uint32_t depth; };
 struct Encoded { uint8_t* data; size_t size,callbacks,peak_rgb_bytes; uint64_t xyb_hash; float* xyb_data; size_t xyb_count; double conversion_ms; size_t simd_lanes; };
 using Fill = int (*)(void*,size_t,size_t,size_t,size_t,float*,size_t);
@@ -65,36 +79,69 @@ struct Source {
   size_t capture_width=0,capture_height=0;
   std::vector<uint8_t> captured_pixels;
   std::map<const void*,std::vector<float>> buffers;
+  double fill_ms=0;
+  std::string failure;
 };
-#ifdef __EMSCRIPTEN__
-extern float wasm_distance;
-extern int wasm_effort;
-#endif
+// Shared synchronous ABI for Wasm and native proof callers. Native environment
+// overrides remain active until a caller explicitly supplies options, or resets them.
+static thread_local bool explicit_options=false;
+static thread_local float encode_distance=1;
+static thread_local int encode_effort=3;
+extern "C" void bridge_encode_options(float distance,int effort) {
+  explicit_options=true;encode_distance=distance;encode_effort=effort;
+}
+// Native harnesses can return to environment-controlled defaults explicitly.
+extern "C" void bridge_encode_options_reset() {
+  explicit_options=false;encode_distance=1;encode_effort=3;
+}
+static float frame_distance() {
+  const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_DISTANCE");
+  char* end=nullptr;
+  errno=0;
+  const double distance=value?std::strtod(value,&end):encode_distance;
+  if((value && (end==value || *end || errno==ERANGE)) || !std::isfinite(distance) || distance<0 || distance>25)
+    throw std::runtime_error("distance must be in [0,25] (JXL_EXPERIMENT_DISTANCE)");
+  return distance>0?static_cast<float>(std::max(0.01,distance)):0;
+}
+static int frame_effort() {
+  const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_EFFORT");
+  char* end=nullptr;
+  errno=0;
+  const long effort=value?std::strtol(value,&end,10):encode_effort;
+  if((value && (end==value || *end || errno==ERANGE)) || effort<1 || effort>10)
+    throw std::runtime_error("effort must be an integer in 1..10 (JXL_EXPERIMENT_EFFORT)");
+  return static_cast<int>(effort);
+}
 static void format(void* opaque,JxlPixelFormat* f) { *f={static_cast<Source*>(opaque)->gray?1u:3u,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0}; }
 static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* stride) noexcept {
   auto& s=*static_cast<Source*>(opaque);
   try {
     std::vector<float> pixels(w*h*3);
-    if (s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size())) { s.failed=true; return nullptr; }
+    const double start=instrumentation?planar_clock_ms():0;
+    const int status=s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size());
+    if(instrumentation)s.fill_ms+=planar_clock_ms()-start;
+    if (status) { s.failed=true; return nullptr; }
     if(s.gray) {for(size_t i=0;i<w*h;i++)pixels[i]=pixels[i*3];pixels.resize(w*h);}
     s.live+=pixels.size()*sizeof(float);
     ++s.result.callbacks;
     s.result.peak_rgb_bytes=std::max(s.result.peak_rgb_bytes,s.live);
     *stride=w*(s.gray?1:3)*sizeof(float); const void* p=pixels.data();
     s.buffers.emplace(p,std::move(pixels)); return p;
-  } catch (...) { s.failed=true; return nullptr; }
+  } catch (const std::exception& e) { s.failed=true; s.failure=e.what(); return nullptr; }
+  catch (...) { s.failed=true; s.failure="pixel callback failed"; return nullptr; }
 }
 static int row(void* opaque,size_t x,size_t y,size_t w,float* r,float* g,float* b) noexcept {
   auto& s=*static_cast<Source*>(opaque);
   try {
     std::vector<float> pixels(w*3);
-    if(s.fill(s.opaque,x,y,w,1,pixels.data(),pixels.size())) return 1;
+    if(s.fill(s.opaque,x,y,w,1,pixels.data(),pixels.size())) { s.failed=true; return 1; }
     ++s.result.callbacks;
     // Packed row plus encoder's three planar scratch rows, excluding padding.
     s.result.peak_rgb_bytes=std::max(s.result.peak_rgb_bytes,w*6*sizeof(float));
     for(size_t i=0;i<w;++i) { r[i]=pixels[3*i];g[i]=pixels[3*i+1];b[i]=pixels[3*i+2]; }
     return 0;
-  } catch(...) { return 1; }
+  } catch(const std::exception& e) { s.failed=true; s.failure=e.what(); return 1; }
+  catch(...) { s.failed=true; s.failure="row callback failed"; return 1; }
 }
 static void observe(void* opaque,size_t row_x,size_t row_y,size_t w,const float* x,const float* y,const float* b) {
   auto& source=*static_cast<Source*>(opaque);
@@ -134,7 +181,18 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
     if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
       throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
-    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
+    const float distance=frame_distance();
+    const bool lossless=distance==0;
+    const int effort=frame_effort();
+    // v0.11.1 effort >=8 (kKitten and slower) needs a linear RGB image;
+    // the experimental fused/row XYB paths cannot provide that image.
+    const bool standard_input=lossless || effort>=8;
+    if(lossless && header_mode>=2) throw std::runtime_error("lossless requires the original profile");
+    if(source_exif_size>65536 || source_xmp_size>4*1024*1024 ||
+       (source_exif_size && !source_exif) || (source_xmp_size && !source_xmp) ||
+       source_orientation<1 || source_orientation>8)
+      throw std::runtime_error("metadata size/pointer/orientation limit");
+    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {},0,{}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
@@ -151,12 +209,24 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     source.capture_width=c->width;source.capture_height=c->height;
     std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
     if(!enc) throw std::runtime_error("encoder allocation failed");
+    if(source_exif_size || source_xmp_size) {
+      check(JxlEncoderUseBoxes(enc.get()));
+      if(source_exif_size) {
+        // Exif box starts with a big-endian TIFF offset; TIFF follows immediately.
+        std::vector<uint8_t> exif(4+source_exif_size,0);
+        std::copy_n(source_exif,source_exif_size,exif.data()+4);
+        check(JxlEncoderAddBox(enc.get(),"Exif",exif.data(),exif.size(),compress_boxes));
+      }
+      if(source_xmp_size)
+        check(JxlEncoderAddBox(enc.get(),"xml ",source_xmp,source_xmp_size,compress_boxes));
+    }
     const JxlCmsInterface interface=planar_cms_interface(cms.get());
     JxlEncoderSetCms(enc.get(),interface);
     JxlBasicInfo info; JxlEncoderInitBasicInfo(&info);
+    info.orientation=static_cast<JxlOrientation>(source_orientation);
     info.xsize=c->width; info.ysize=c->height; info.bits_per_sample=c->depth ? c->depth : 32;
     info.exponent_bits_per_sample=c->depth ? 0 : 8; info.num_color_channels=source.gray?1:3;
-    info.uses_original_profile=JXL_FALSE; info.intensity_target=c->intensity;
+    info.uses_original_profile=lossless?JXL_TRUE:JXL_FALSE; info.intensity_target=c->intensity;
     if(alpha.data) {
       info.num_extra_channels=1;
       info.alpha_bits=alpha.depth;
@@ -195,17 +265,14 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       } else if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
         throw std::runtime_error("ICC: libjxl CMS rejected the profile");
       // Exact mode (1) always embeds; auto embeds unless the CMS described it.
-      source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
+      source_profile_header=header_mode>=2?0:(lossless || !planar_cms_enum_header(cms.get()));
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
-    if(!settings) throw std::runtime_error("frame settings allocation failed");
-    #ifdef __EMSCRIPTEN__
-    check(JxlEncoderSetFrameDistance(settings,wasm_distance));
-    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
-#else
-    check(JxlEncoderSetFrameDistance(settings,std::getenv("JXL_EXPERIMENT_DISTANCE")?std::strtof(std::getenv("JXL_EXPERIMENT_DISTANCE"),nullptr):1.0f));
-    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
-#endif
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
+    check(JxlEncoderSetFrameDistance(settings,distance));
+    check(JxlEncoderSetFrameLossless(settings,lossless?JXL_TRUE:JXL_FALSE));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,effort));
+    if(lossless) check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_KEEP_INVISIBLE,1));
     bool observed_reference=rgb && (alpha.data || source.gray || diagnostics || std::getenv("JXL_EXPERIMENT_OBSERVE_REFERENCE"));
     struct RGB { const float* p;size_t width; } reference{rgb,c->width};
     if(observed_reference) {
@@ -248,30 +315,33 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
             *stride=w*sizeof(float);const void* p=values.data();
             s.live+=values.size()*sizeof(float);
             s.buffers.emplace(p,std::move(values));return p;
-          }catch(...){s.failed=true;return nullptr;}
+          }catch(const std::exception& e){s.failed=true;s.failure=e.what();return nullptr;}
+          catch(...){s.failed=true;s.failure="alpha callback failed";return nullptr;}
         };
       }
       input.experimental_borrowed=true;
-      input.experimental_fill_row=(observed_reference || !yuv)?nullptr:row;
+      input.experimental_fill_row=(standard_input || observed_reference || !yuv)?nullptr:row;
       input.experimental_observe_xyb=instrumentation?observe:nullptr;
       input.experimental_conversion_ms=&result->conversion_ms;
       input.experimental_simd_lanes=&result->simd_lanes;
-      input.experimental_yuv=std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
+      input.experimental_yuv=standard_input || std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
       if(input.experimental_yuv && (c->transfer==13 || c->transfer==1 || c->transfer==1001 || c->transfer==8))
         input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
-      if(source.failed) throw std::runtime_error("planar region conversion failed");
+      if(source.failed) throw std::runtime_error(source.failure.empty()?"planar region conversion failed":source.failure);
     }
     std::vector<uint8_t> out(4096); size_t used=0;
     for(;;) {
       auto* next=out.data()+used; size_t available=out.size()-used;
       auto status=JxlEncoderProcessOutput(enc.get(),&next,&available); used=out.size()-available;
+      if(source.failed) throw std::runtime_error(source.failure.empty()?"planar region conversion failed":source.failure);
       if(status==JXL_ENC_SUCCESS) break;
       if(status!=JXL_ENC_NEED_MORE_OUTPUT) throw std::runtime_error("libjxl output failed");
       out.resize(out.size()*2);
     }
+    if(standard_input) {result->conversion_ms=source.fill_ms;result->simd_lanes=1;}
     result->data=static_cast<uint8_t*>(std::malloc(used));
-    if(!result->data) throw std::runtime_error("output allocation failed");
+    if(!result->data) throw std::runtime_error("OOM: output allocation failed");
     std::memcpy(result->data,out.data(),used); result->size=used;
     if(!source.captured.empty()) {
       if(std::find(source.captured_pixels.begin(),source.captured_pixels.end(),0)!=source.captured_pixels.end())
@@ -307,7 +377,7 @@ static int packed_fill(void* opaque,size_t x,size_t y,size_t w,size_t h,float* o
     const size_t at=((y+j)*in.width+x+i)*in.channels+k;
     if constexpr(depth==32) {
       const float v=static_cast<const float*>(in.p)[at];
-      if(!std::isfinite(v) || v<0 || v>1)return 1;
+      if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("RGB must be finite nominal-range");
       out[(j*w+i)*3+k]=v;
     } else {
       const unsigned v=depth==8?static_cast<const uint8_t*>(in.p)[at]:static_cast<const uint16_t*>(in.p)[at];
@@ -337,4 +407,64 @@ extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
   const Fill fill=depth==8?packed_fill<8>:depth==16?packed_fill<16>:packed_fill<32>;
   const Alpha alpha=channels==4?Alpha{static_cast<const uint8_t*>(data)+3*(depth/8),size_t(c->width)*4*(depth/8),size_t(4*(depth/8)),unsigned(depth)}:Alpha{};
   return encode(c,&in,fill,nullptr,nullptr,result,error,error_size,alpha);
+}
+
+// Lossless JPEG coefficients + reconstruction data. A fresh encoder lets
+// AddJPEGFrame infer uses_original_profile=true (XYB is forbidden by libjxl).
+extern "C" int bridge_jpeg(const uint8_t* jpeg,size_t size,int compress_boxes,
+    Encoded* result,char* error,size_t error_size) {
+  *result={};
+  try {
+    if(!jpeg || !size) throw std::runtime_error("JPEG input is empty");
+    // Keep the CMS alive until after the encoder is destroyed. JPEG coefficients
+    // are never transformed; this CMS only interprets the embedded ICC header.
+    std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
+        planar_cms_create(nullptr,0,0,error,error_size),planar_cms_destroy);
+    if(!cms) throw std::runtime_error("JPEG CMS allocation failed (OOM)");
+    std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
+    if(!enc) throw std::runtime_error("OOM: encoder allocation failed");
+    JxlEncoderSetCms(enc.get(),planar_cms_interface(cms.get()));
+    auto check=[&](JxlEncoderStatus status) {
+      if(status==JXL_ENC_SUCCESS) return;
+      const char* reason;
+      switch(JxlEncoderGetError(enc.get())) {
+        case JXL_ENC_ERR_BAD_INPUT: reason="BAD_INPUT: invalid JPEG or unsupported ICC profile"; break;
+        case JXL_ENC_ERR_JBRD: reason="JBRD: JPEG reconstruction data cannot be represented"; break;
+        case JXL_ENC_ERR_OOM: reason="OOM: encoder out of memory"; break;
+        case JXL_ENC_ERR_NOT_SUPPORTED: reason="NOT_SUPPORTED: JPEG feature is unsupported"; break;
+        case JXL_ENC_ERR_API_USAGE: reason="API_USAGE: invalid encoder configuration"; break;
+        default: reason="GENERIC: internal encoder failure"; break;
+      }
+      throw std::runtime_error(std::string("lossless JPEG recompression failed (")+reason+")");
+    };
+    check(JxlEncoderStoreJPEGMetadata(enc.get(),JXL_TRUE));
+    auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_COMPRESS_BOXES,compress_boxes));
+    // Also interprets EXIF orientation and adds the matching Exif box.
+    check(JxlEncoderAddJPEGFrame(settings,jpeg,size));
+    JxlEncoderCloseInput(enc.get());
+    std::vector<uint8_t> bytes(4096);
+    size_t used=0;
+    for(;;) {
+      auto* next=bytes.data()+used;
+      size_t available=bytes.size()-used;
+      auto status=JxlEncoderProcessOutput(enc.get(),&next,&available);
+      used=bytes.size()-available;
+      if(status==JXL_ENC_SUCCESS) break;
+      if(status!=JXL_ENC_NEED_MORE_OUTPUT) check(status);
+      bytes.resize(bytes.size()*2);
+    }
+    auto* data=static_cast<uint8_t*>(std::malloc(used));
+    if(!data) throw std::runtime_error("OOM: output allocation failed");
+    std::memcpy(data,bytes.data(),used);
+    result->data=data;result->size=used;
+    return 0;
+  } catch(const std::exception& e) {
+    if(error && error_size) std::snprintf(error,error_size,"%s",e.what());
+    return 1;
+  }
 }

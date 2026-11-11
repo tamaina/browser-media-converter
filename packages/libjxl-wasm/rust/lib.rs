@@ -156,7 +156,7 @@ fn need(ok: bool, message: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err(message.into()) }
 }
 fn check_config(c: &Config) -> Result<(), String> {
-    need(matches!(c.depth, 0 | 8 | 10 | 12), "output depth must be 0 (float32)/8/10/12")?;
+    need(matches!(c.depth, 0 | 8 | 10 | 12 | 16), "output depth must be 0 (float32)/8/10/12/16")?;
     need(
         c.width > 0
             && c.height > 0
@@ -419,6 +419,7 @@ fn report(result: Result<(), String>, error: *mut c_char, n: usize) -> i32 {
         0
     }
 }
+// Native unwind containment only. Wasm panic=abort is fatal to the module.
 fn guard(f: impl FnOnce() -> Result<(), String>, error: *mut c_char, n: usize) -> i32 {
     report(
         catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| Err("Rust boundary panic".into())),
@@ -714,3 +715,6 @@ pub unsafe extern "C" fn planar_encode(session: *mut Session,out: *mut Encoded,e
 pub unsafe extern "C" fn rgb_encode(config: *const Config,rgb: *const f32,count: usize,out: *mut Encoded,error: *mut c_char,n: usize) -> i32 {
     unsafe {rgb_encode_alpha(config,rgb,count,std::ptr::null(),0,out,error,n)}
 }
+
+#[cfg(test)]
+mod session_tests;
