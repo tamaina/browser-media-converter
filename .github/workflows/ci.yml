@@ -1,0 +1,54 @@
+name: CI
+
+# Pull-request build and test. npm staging stays in release.yml, which runs
+# only on push to main and does not cancel an in-progress release.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r --sort --workspace-concurrency=1 build:package
+
+      # Same Chromium install as Release, plus the Ubuntu libraries Playwright
+      # selects so headless Chrome can launch on a GitHub-hosted runner.
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Runs test:package in every workspace package that defines it, including
+      # private @browser-mc/binary and @browser-mc/libjxl-wasm (tsc only).
+      # Not run here: npm stage/publish; Electron smokes (test:electron,
+      # test:hls:electron, test:worker); libjxl Wasm/native rebuilds
+      # (test:api, build:wasm, build:native, cargo test).
+      - name: Test
+        run: pnpm -r --sort --if-present --workspace-concurrency=1 test:package

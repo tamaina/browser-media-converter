@@ -68,10 +68,17 @@ module with its generated declaration. Keep the codec runtime and generated decl
 `typecheck/codec.d.ts` supplies ABI declarations for artifact-free checking;
 keep its signatures aligned with Emscripten's generated declarations.
 `pnpm typecheck:package` checks `src/` without Emscripten, native libjxl or a
-Wasm binary. `test:package` runs that static check, so the main-push release
-workflow includes it. There is no PR test workflow. Real Wasm API tests remain
-local (`pnpm test:api`) and require a rebuilt codec; release CI does not build
-or execute that codec.
+Wasm binary. `test:package` runs that static check. Pull-request CI and the
+main-push release workflow both run it with the other workspace `test:package`
+scripts. Real Wasm API tests remain local (`pnpm test:api`) and require a
+rebuilt codec. Neither workflow builds or executes that codec: `build/` is
+gitignored, Rust and Emscripten are unpinned, and a full rebuild clones libjxl
+plus Highway and Brotli and compiles them single-threaded. `cargo test` in the
+snippet above also waits on the native build (`JXL_INCLUDE` / `JXL_LIBRARY`);
+`build-native.sh` then expects system Brotli, LCMS2, and Debian multiarch
+`libjxl.so.0.11`, which GitHub-hosted ubuntu-24.04 does not provide. The
+package `engines` field asks for Node 26 to strip types in `test:api`; CI
+stays on Node 22 with the rest of the workspace and only typechecks.
 
 For optional native tools, run `bash scripts/build-native.sh` (one job by
 default). This builds the patched encoder library, a separate reference decoder
