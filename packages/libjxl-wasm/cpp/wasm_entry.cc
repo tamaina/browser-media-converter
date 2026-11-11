@@ -12,6 +12,9 @@ static char error[512]{};
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" void bridge_animation_begin(uint32_t);
+extern "C" void bridge_animation_frame(uint32_t,int);
+extern "C" void bridge_animation_end();
 extern "C" int bridge_jpeg(const uint8_t*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_metadata(const uint8_t*,size_t,const uint8_t*,size_t,int,int);
@@ -21,6 +24,9 @@ extern "C" int bridge_icc_header();
 extern "C" void bridge_icc_header_mode(int);
 extern "C" int bridge_rgb_integer(const PlanarRgbConfig*,const void*,size_t,int,int,PlanarEncoded*,char*,size_t);
 extern "C" {
+void w_animation_begin(uint32_t loops) {bridge_animation_begin(loops);}
+void w_animation_frame(uint32_t duration,int last) {bridge_animation_frame(duration,last);}
+void w_animation_end() {bridge_animation_end();}
 void w_metadata(const uint8_t* exif,size_t en,const uint8_t* xmp,size_t xn,int orientation,int compress) {
   bridge_metadata(exif,en,xmp,xn,orientation,compress);
 }
@@ -107,5 +113,5 @@ const uint8_t* w_data(){return output.data;}
 size_t w_size(){return output.size;}
 size_t w_lanes(){return output.simd_lanes;}
 const char* w_target(){return hwy::TargetName(HWY_STATIC_TARGET);}
-void w_free(){planar_free(&output);alpha={};bridge_icc(nullptr,0);bridge_metadata(nullptr,0,nullptr,0,1,1);}
+void w_free(){bridge_animation_end();input={};bridge_icc_header_mode(0);planar_free(&output);alpha={};bridge_icc(nullptr,0);bridge_metadata(nullptr,0,nullptr,0,1,1);}
 }

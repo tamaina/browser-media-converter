@@ -424,10 +424,78 @@ VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
 
+
 EXIF is validated strictly before encoding. For camera metadata with invalid
 Orientation (including 0 or non-SHORT entries), sanitize first; for structurally
 truncated TIFF, omit EXIF and report a warning. See the
 [`EXIF sanitation guide`](../exif-transplant/README.md#sanitizing-exif-before-encoding).
+
+## JPEG XL animation (feature 5)
+
+`encodeAnimation` accepts already-decoded, composited full-canvas SDR RGB/RGBA
+frames. GIF/APNG decoding is out of scope; callers resolve disposal, blending,
+frame rectangles and source loop conventions before passing frames.
+
+```js
+const animation = encoder.encodeAnimation({
+  width, height, format: 'RGBA', loops: 0,
+  frames: [
+    {data: firstRgba, durationMs: 100},
+    {data: secondRgba, durationMs: 150},
+  ],
+}, {distance: 1, effort: 3, bitDepth: 8});
+```
+
+All frames share dimensions, channel count, source depth and colour settings.
+U8/U8Clamped, full-range U16 and Float32 inputs follow `encodeRgb` semantics,
+including straight alpha and ICC fallback. Frames replace the entire canvas
+without inter-frame reuse; output may be much larger than the source GIF/APNG.
+`loops` is the JPEG XL loop count (0 = infinite, positive = total plays), not
+necessarily the loop field of a source GIF/APNG. Durations must be positive and
+finite; they round to milliseconds with a minimum of 1 and maximum of uint32.
+Distance [0,25], effort 1..10 and lossless follow `encodeRgb`, including
+16-bit lossless integer RGB and the standard RGB path for lossless/effort >=8.
+The effort 9/10 limit is **1,048,576 pixels per frame**, rather than total
+sequence pixels: the encoder processes frames synchronously one at a time.
+Limits: 1–256 frames, 4 megapixels per frame. Source frames are copied into WASM
+one at a time; encoded output chunks accumulate until the file is assembled.
+`maxMemoryBytes` applies before beginning the sequence: the estimate reserves
+peak per-frame staging/workspace, ICC copies, twice the total input bytes and
+32 bytes per pixel across all frames for retained codec state and output copies,
+with 50% variable headroom and 32 MiB runtime overhead. Reusing a source array
+does not reduce this reservation. This is conservative admission, not a hard
+allocator or JS/device memory limit. Sequence stats expose this total estimate,
+budget and heap exceedance flags; rejected admission keeps the estimate.
+`exif`, `xmp` and `compressBoxes` are unsupported for animations and explicitly
+rejected before entering Wasm; still-image metadata and JPEG preservation remain
+available through their respective APIs.
+Planar/HDR animation, animation XYB observation (`observe`) and `rgbViaPlanar`
+are unsupported. The latter two options are rejected. `AnimationFrame` and
+`AnimationEncodeOptions` are exported; `frames` accepts readonly arrays.
+
+The bridge creates one encoder and CMS per sequence. `JxlBasicInfo.have_animation`
+is true, ticks per second are `1000/1`, and `num_loops` is `loops`. Each
+`JxlFrameHeader.duration` is the rounded `durationMs`. Only the final frame calls
+`JxlEncoderCloseFrames` / `JxlEncoderCloseInput`; the owned output chunks are
+concatenated into one JPEG XL file (bare codestream or container). Failure releases
+encoder/CMS state, and ICC fallback restarts the whole sequence with a common sRGB header.
+`encoder.stats` adds `frameCount`, `loops` and `durationsMs`; `encodeMs` and
+`totalMs` cover the sequence, and `heapBefore` is sampled before the sequence
+begins. Recoverable codec failures restore the previous stats; escaping Wasm exceptions
+clear stats, poison the instance and skip further cleanup/fallback. All encode
+methods, including animation, reject calls after poisoning or `dispose()`. Other detailed counters
+describe the final frame.
+
+Run `pnpm test:api` here after building WASM. Still-image and WASM-only animation
+checks need no native toolchain. Independent decode checks lazily compile
+`tools/inspect_animation.cc` with `CXX` (default `c++`). They use the local
+`build/native/lib/libjxl.so` if present, otherwise `pkg-config --cflags --libs libjxl`.
+Set `JXL_LIBRARY` to a libjxl library file and `JXL_INCLUDE` to its header directory
+to override local discovery. Missing compiler, headers or library cause only the
+native decode checks to skip with a diagnostic. The decoder checks frame counts,
+timing, loop metadata, RGB/RGBA pixels and valid RGB/Gray ICC sequences.
+Playback in browser image renderers is not covered by this Node decoder test.
+
 
 ## Lossless JPEG recompression
 

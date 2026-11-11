@@ -67,6 +67,21 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export interface AnimationFrame {
+  data: RgbInput['data'];
+  /** Positive finite; rounded to ms, minimum 1 ms, maximum uint32. */
+  durationMs: number;
+}
+/** Animation rejects metadata boxes, XYB observation and the planar RGB reference path.
+ * Effort 9/10 is limited to 1 MP per frame; memory admission covers the sequence. */
+export type AnimationEncodeOptions = Omit<EncodeOptions, 'observe' | 'rgbViaPlanar' | 'exif' | 'xmp' | 'compressBoxes'> & {observe?: never; rgbViaPlanar?: never; exif?: never; xmp?: never; compressBoxes?: never};
+/** Already-decoded, composited full-canvas frames; shared colour settings. */
+export interface AnimationInput extends Omit<RgbInput, 'data'> {
+  /** Total plays; 0 (default) means infinite. */
+  loops?: number;
+  /** 1..256 frames, at most 4 megapixels each. Same source depth and channel count. */
+  frames: readonly AnimationFrame[];
+}
 export interface JpegEncodeOptions {
   /** Compress metadata boxes with Brotli (default true). EXIF/XMP are always kept. */
   compressBoxes?: boolean;
@@ -76,6 +91,8 @@ export type JpegEncoded = Uint8Array & {
   warnings: string[];
 };
 export interface Encoder {
+  /** Packed SDR RGB(A) animation. No GIF/APNG decoding, disposal or blending. */
+  encodeAnimation(input: AnimationInput, options?: AnimationEncodeOptions): Encoded;
   /** Bit-exact JPEG recompression, effort 3. EXIF/XMP kept. Max 64 MiB, 4 MP, 8192 per axis. */
   encodeJpeg(jpegBytes: Uint8Array, options?: JpegEncodeOptions): JpegEncoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
@@ -114,6 +131,9 @@ export class MemoryBudgetError extends RangeError {
   }
 }
 export interface EncoderStats {
+  frameCount?: number;
+  loops?: number;
+  durationsMs?: number[];
   /** True when the retained heap after success exceeds the admission budget/estimate.
    * Includes growth slack and memory retained from earlier calls, not live allocations. */
   memoryBudgetExceeded?: boolean;
@@ -249,7 +269,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (lossless && ['bt2020','p3'].includes(o.iccHeader ?? '')) fail('lossless requires the original profile; iccHeader override is unsupported');
     return {distance,effort,lossless};
   }
-  function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean): Encoded {
+  function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean, animationFrame = false): Encoded {
     if (!module) throw Error(`Encoder is ${state}`);
     stats = {};
     const start=performance.now();
@@ -405,7 +425,92 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       // Reported codec failures retain main's empty stats; admission failures
       // above keep their structured estimate without entering Wasm.
       stats={};throw error;
-    } finally {if (module) {m._w_free();for(const p of pointers)m._free(p);}}
+    } finally {if (module) {if (!animationFrame) m._w_free();for(const p of pointers)m._free(p);}}
+  }
+  // Thin ingestion boundary for already-decoded, composited GIF/APNG frames.
+  function encodeAnimation(input: AnimationInput, o: EncodeOptions = {}): Encoded {
+    if (!module) throw Error(`Encoder is ${state}`);
+    for (const key of ['exif','xmp','compressBoxes'] as const) {
+      if (o[key] !== undefined) fail(`animation metadata option ${key} is unsupported`);
+    }
+    if (!input || typeof input !== 'object') fail('animation input must be an object');
+    const {frames, loops = 0, ...common} = input;
+    if (!Array.isArray(frames) || !integer(frames.length, 1, 256)) fail('animation requires 1..256 frames');
+    if (!integer(loops, 0, 0xffffffff)) fail('loops must be a uint32 (0 means infinite)');
+    let sourceDepth: number | undefined, channels: number | undefined;
+    let totalInputBytes = 0, peakInputBytes = 0;
+    const durations: number[] = [];
+    for (let n = 0; n < frames.length; n++) {
+      const frame = frames[n];
+      if (!frame || typeof frame !== 'object') fail(`frame ${n} must be an object`);
+      if (Object.keys(frame).some(key => !['data','durationMs'].includes(key))) fail('frames accept only data/durationMs; supply composited full-canvas frames');
+      const {data, durationMs} = frame;
+      if (!(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array || data instanceof Float32Array)) fail('animation requires packed RGB/RGBA typed arrays');
+      config({...common, data}, o, true);
+      const count = data.length / (common.width * common.height);
+      const depth = data instanceof Float32Array ? 32 : data instanceof Uint16Array ? 16 : 8;
+      if (![3,4].includes(count)) fail('animation requires packed RGB or RGBA');
+      if (common.format != null && common.format !== (count === 4 ? 'RGBA' : 'RGB')) fail('RGB format/channel mismatch');
+      if (n && (depth !== sourceDepth || count !== channels)) fail('animation frames must share source depth and channel count');
+      sourceDepth = depth; channels = count;
+      totalInputBytes += data.byteLength; peakInputBytes = Math.max(peakInputBytes, data.byteLength);
+      if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0 || Math.round(durationMs) > 0xffffffff) fail('durationMs must be positive finite and round to uint32 milliseconds');
+      durations.push(Math.max(1, Math.round(durationMs)));
+    }
+    if (o.observe) fail('animation XYB observation is unsupported');
+    if (o.rgbViaPlanar !== undefined) fail('animation rgbViaPlanar is unsupported');
+    const maxMemoryBytes = o.maxMemoryBytes ?? DEFAULT_MEMORY_BYTES;
+    if (!integer(maxMemoryBytes, 1, MAX_MEMORY_BYTES)) fail(`maxMemoryBytes must be a safe integer in 1..${MAX_MEMORY_BYTES} (1984 MiB)`);
+    const metadata = o.colorMetadata ?? common.colorMetadata;
+    const profile = o.icc ?? common.icc ?? (metadata?.type === 'icc' ? metadata.profile : undefined);
+    const profileBytes = profile instanceof ArrayBuffer || profile instanceof Uint8Array ? profile.byteLength : 0;
+    // Peak frame staging/workspace plus sequence retention and output copies.
+    // Reserve 32 B/px across ALL frames, even when source arrays are shared.
+    // This includes libjxl's retained sequence and JS chunks/final concatenation.
+    const pixels = common.width * common.height;
+    const variableBytes = 2 * peakInputBytes + 4 * profileBytes + pixels *
+      (72 + (channels === 4 ? 16 : 0) + ((o.lossless || o.distance === 0 || (o.effort ?? 3) >= 8) ? 12 : 0) +
+       (sourceDepth === 16 || o.bitDepth === 16 ? 2 * channels! : 0)) +
+      2 * totalInputBytes + 32 * pixels * frames.length;
+    const estimatedMemoryBytes = 32 * MIB + Math.ceil(variableBytes * 3 / 2);
+    const retainedHeapBytes = m.HEAPU8.buffer.byteLength;
+    if (estimatedMemoryBytes > maxMemoryBytes) {
+      stats = {estimatedMemoryBytes, maxMemoryBytes, retainedHeapBytes, heapBefore:retainedHeapBytes};
+      throw new MemoryBudgetError(estimatedMemoryBytes, retainedHeapBytes, maxMemoryBytes);
+    }
+    // run() replaces stats per frame. Keep an owned snapshot for recoverable failures.
+    const previousStats = {...stats};
+    const heapBefore = m.HEAPU8.buffer.byteLength;
+    const start = performance.now();
+    const chunks: Encoded[] = [];
+    let size = 0, encodeMs = 0, resultStats: EncoderStats | undefined;
+    try {
+      m._w_animation_begin(loops);
+      for (let n = 0; n < frames.length; n++) {
+        m._w_animation_frame(durations[n], +(n === frames.length - 1));
+        const chunk = run({...common, data:frames[n].data}, o, true, true);
+        chunks.push(chunk); size += chunk.length; encodeMs += stats.encodeMs as number;
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      resultStats = {...stats, estimatedMemoryBytes, maxMemoryBytes, memoryBudgetExceeded:m.HEAPU8.buffer.byteLength > maxMemoryBytes, memoryEstimateExceeded:m.HEAPU8.buffer.byteLength > estimatedMemoryBytes, heapBefore, encodeMs, totalMs:performance.now()-start, frameCount:frames.length, loops, durationsMs:durations};
+      // Every frame shares one colour header, so the last frame's resolution applies to all.
+      const last = chunks[chunks.length - 1];
+      return Object.assign(bytes, {colorResolved:last.colorResolved, warnings:last.warnings});
+    } catch (error) {
+      // A fallback must restart the whole sequence with one common colour header.
+      if (!module || o.iccFallback !== 'srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:')) throw error;
+      m._w_animation_end();
+      const clean = <T extends ColorOptions>(object: T) => {const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object; return rest;};
+      const bytes = encodeAnimation({...clean(common), frames, loops}, {...clean(o), iccFallback:'error'});
+      bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
+      resultStats = {...stats, heapBefore, totalMs:performance.now()-start};
+      return bytes;
+    } finally {
+      if (module) m._w_free();
+      if (module) stats = resultStats ?? previousStats;
+    }
   }
   function encodeJpeg(jpeg: Uint8Array, options: JpegEncodeOptions = {}): JpegEncoded {
     if (!module) throw Error(`Encoder is ${state}`);
@@ -462,7 +567,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     }
   }
 
-  return {encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+  return {encodeAnimation,encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
     try{return run(i,o,true);}catch(error){
       if(!module || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
       const clean=<T extends ColorOptions>(object: T)=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
