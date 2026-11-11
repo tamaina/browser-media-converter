@@ -24,9 +24,9 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
-  /** Preflight WASM budget: default 512 MiB; safe integer 1..2080374784 (1984 MiB).
+  /** Preflight WASM budget: default 768 MiB (null also uses the default); safe integer 1..2080374784 (1984 MiB).
    * Conservative estimate, not an allocator limit or device-memory guarantee. */
-  maxMemoryBytes?: number;
+  maxMemoryBytes?: number | null;
   distance?: number;
   effort?: 1 | 2 | 3;
   bitDepth?: 'preserve' | 'float32' | 8 | 10 | 12;
@@ -78,7 +78,7 @@ export interface Encoder {
 import createModule from '../build/wasm/codec.mjs';
 
 const MIB = 1024 * 1024;
-const DEFAULT_MEMORY_BYTES = 512 * MIB;
+const DEFAULT_MEMORY_BYTES = 768 * MIB;
 // Leave address space for the stack, allocator and Emscripten growth below 2 GiB.
 const MAX_MEMORY_BYTES = 2048 * MIB - 64 * MIB;
 
@@ -87,7 +87,27 @@ export type ModuleOptions = Parameters<typeof createModule>[0] & {
   instantiateWasm?: (imports: WebAssembly.Imports, receive: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => WebAssembly.Exports;
   [key: string]: unknown;
 };
+/** Admission failure; fields describe the rejected call, without parsing its message. */
+export class MemoryBudgetError extends RangeError {
+  readonly estimatedMemoryBytes: number;
+  readonly retainedHeapBytes: number;
+  readonly maxMemoryBytes: number;
+  constructor(estimatedMemoryBytes: number, retainedHeapBytes: number, maxMemoryBytes: number) {
+    super(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap ${retainedHeapBytes} bytes, budget ${maxMemoryBytes} bytes; reduce dimensions or raise maxMemoryBytes (maximum ${MAX_MEMORY_BYTES})`);
+    this.name = 'MemoryBudgetError';
+    this.estimatedMemoryBytes = estimatedMemoryBytes;
+    this.retainedHeapBytes = retainedHeapBytes;
+    this.maxMemoryBytes = maxMemoryBytes;
+  }
+}
 export interface EncoderStats {
+  /** True when the retained heap after success exceeds the admission budget/estimate.
+   * Includes growth slack and memory retained from earlier calls, not live allocations. */
+  memoryBudgetExceeded?: boolean;
+  memoryEstimateExceeded?: boolean;
+  retainedHeapBytes?: number;
+  heapBefore?: number;
+  heapAfter?: number;
   estimatedMemoryBytes?: number;
   maxMemoryBytes?: number;
   colorResolved?: ColorResolved;
@@ -193,6 +213,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     return {distance,effort};
   }
   function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean, sourceFailure: SourceFailure): Encoded {
+    stats={};
     const start=performance.now();
     const chunked=rgb && i.provideRect !== undefined;
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader ?? ''))fail('iccHeader must be auto/exact/bt2020/p3');
@@ -252,7 +273,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format ?? '');
     const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6,'bt2020-ncl':9} as Record<string, number>)[i.matrix!];
     if (format<0 || !matrix || (!rgb && typeof i.fullRange !== 'boolean')) fail('explicit supported format required');
-    const maxMemoryBytes=o.maxMemoryBytes === undefined ? DEFAULT_MEMORY_BYTES : o.maxMemoryBytes;
+    const maxMemoryBytes=o.maxMemoryBytes ?? DEFAULT_MEMORY_BYTES;
     if (!integer(maxMemoryBytes,1,MAX_MEMORY_BYTES)) fail(`maxMemoryBytes must be a safe integer in 1..${MAX_MEMORY_BYTES} (1984 MiB)`);
     let inputBytes=0, hasAlpha=false;
     const layouts: {p: Plane; span: number}[]=[];
@@ -261,7 +282,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       if (i.format !== 'RGB') fail("provideRect requires format: 'RGB' (RGBA streaming unsupported)");
     } else if (rgb) {
       const data=i.data!;
-      if (!(data instanceof Float32Array || data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) || ![3,4].includes(data.length/(i.width*i.height))) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+      if (!(data instanceof Float32Array || data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array)) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+      if (![3,4].includes(data.length/(i.width*i.height))) fail(data instanceof Float32Array ? 'RGB requires packed Float32Array RGB or RGBA' : 'RGB integer input requires packed RGB or RGBA');
       const channels=data.length/(i.width*i.height);
       if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
       inputBytes=data.byteLength;
@@ -284,17 +306,19 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       }
       hasAlpha=layouts.length===4;
     }
-    // Conservative reservation, not a measured libjxl peak: two input copies
-    // for full-buffer input, or one reusable packed scratch for provideRect,
-    // XYB (12 B/px), RGB staging (12), working/output allowance (48), extras.
+    // Conservative reservation checked on representative growing heaps (README):
+    // two input copies for full-buffer input, or one reusable packed scratch for
+    // provideRect, XYB (12 B/px), RGB staging (12), working/output allowance (48), extras.
     // 50% variable headroom plus 32 MiB for runtime/stack/allocator/row padding.
     // Sizes are bounded above, so all arithmetic stays within safe integers.
     const scratchBytes=chunked?Math.min(i.width,2048)*Math.min(i.height,2048)*3*(sourceDepth/8):0;
-    const variableBytes=(chunked?scratchBytes:2*inputBytes) + 4*(icc?.byteLength??0) + i.width*i.height*(72 + (hasAlpha?16:0) + (o.observe?25:0) + (!rgb && o.rgbViaPlanar?12:0));
+    const variableBytes=(chunked?scratchBytes:2*inputBytes) + 4*(icc?.byteLength??0) + i.width*i.height*(72 + (hasAlpha?16:0) + (!rgb && o.rgbViaPlanar?12:0));
     const estimatedMemoryBytes=32*MIB + Math.ceil(variableBytes*3/2);
     const before=m.HEAPU8.buffer.byteLength;
-    const requiredMemoryBytes=Math.max(estimatedMemoryBytes,before);
-    if (requiredMemoryBytes>maxMemoryBytes) throw new RangeError(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap ${before} bytes, budget ${maxMemoryBytes} bytes; reduce dimensions or raise maxMemoryBytes (maximum ${MAX_MEMORY_BYTES})`);
+    // Freed allocations reuse the retained heap. Its high-water size is not this
+    // frame's requirement, and must never lock out subsequent smaller frames.
+    stats={estimatedMemoryBytes,maxMemoryBytes,retainedHeapBytes:before,heapBefore:before};
+    if (estimatedMemoryBytes>maxMemoryBytes) throw new MemoryBudgetError(estimatedMemoryBytes,before,maxMemoryBytes);
     const pointers: number[]=[];
     let callback=0;
     // Boxed so a thrown null/undefined is still distinguishable from "no error".
@@ -346,7 +370,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()));
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
-      stats={estimatedMemoryBytes,maxMemoryBytes,colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
+      stats={...stats,memoryBudgetExceeded:m.HEAPU8.buffer.byteLength>maxMemoryBytes,memoryEstimateExceeded:m.HEAPU8.buffer.byteLength>estimatedMemoryBytes,colorResolved,warnings,sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+(rgb?0:m._w_time(6)),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;
     } finally {if(callback)m.removeFunction(callback);m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}

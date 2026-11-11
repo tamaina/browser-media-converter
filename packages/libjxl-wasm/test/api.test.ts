@@ -1,19 +1,20 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {createEncoder} from '@browser-mc/libjxl-wasm';
+import {createEncoder, MemoryBudgetError} from '@browser-mc/libjxl-wasm';
 import type {ColorOptions, EncodeOptions, Encoded, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
-// Count copy/encode exports so preflight tests can prove nothing reached WASM.
+// Count every function export so preflight tests can prove nothing reached WASM.
 let wasmCalls = 0;
 const createTestEncoder = (growPages = 0) => createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => {
     if (growPages) (instance.exports.memory as WebAssembly.Memory).grow(growPages);
     const exports: WebAssembly.Exports = {...instance.exports};
-    for (const key of ['malloc', 'w_options', 'w_init', 'w_plane', 'w_rgb', 'w_rgb_integer', 'w_encode']) {
-      const original = instance.exports[key] as (...args: number[]) => number;
+    for (const [key, value] of Object.entries(instance.exports)) {
+      if (typeof value !== 'function') continue;
+      const original = value;
       exports[key] = (...args: number[]) => { wasmCalls++; return original(...args); };
     }
     receive({exports} as WebAssembly.Instance, module);
@@ -184,11 +185,11 @@ test('RGB and planar budgets accept the boundary and reject one byte below it', 
   ];
   for (const encode of cases) {
     assert.ok(encode().length > 0);
-    const {estimatedMemoryBytes, heapAfter, maxMemoryBytes} = encoder.stats;
-    assert.equal(maxMemoryBytes, 512 * MIB);
-    const budget = Math.max(estimatedMemoryBytes!, heapAfter as number);
+    const {estimatedMemoryBytes, maxMemoryBytes} = encoder.stats;
+    assert.equal(maxMemoryBytes, 768 * MIB);
+    const budget = estimatedMemoryBytes!;
     rejectsBeforeWasm(() => encode({maxMemoryBytes:budget - 1}), {
-      name:'RangeError', message:new RegExp(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap \\d+ bytes, budget ${budget - 1} bytes`)
+      name:'MemoryBudgetError', message:new RegExp(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap \\d+ bytes, budget ${budget - 1} bytes`)
     });
     assert.ok(encode({maxMemoryBytes:budget}).length > 0);
     assert.equal(encoder.stats.maxMemoryBytes, budget);
@@ -201,7 +202,7 @@ test('budget validation rejects unsafe values and accepts the wasm32 ceiling', (
     (_input, options) => encoder.encodePlanarYuv(planar('I444A'), options)
   ];
   for (const encode of encoders) {
-    for (const maxMemoryBytes of [0, -1, 1.5, NaN, Infinity, -Infinity, '536870912', null, ceiling + 1, 2**32, Number.MAX_SAFE_INTEGER]) {
+    for (const maxMemoryBytes of [0, -1, 1.5, NaN, Infinity, -Infinity, '536870912', ceiling + 1, 2**32, Number.MAX_SAFE_INTEGER]) {
       // Non-number values deliberately exercise runtime validation.
       rejectsBeforeWasm(() => encode(rgb(), {maxMemoryBytes} as EncodeOptions), /maxMemoryBytes must be a safe integer/);
     }
@@ -210,22 +211,26 @@ test('budget validation rejects unsafe values and accepts the wasm32 ceiling', (
   }
 });
 
-test('estimate includes typed input, alpha, observation and RGB staging extras', () => {
+test('estimate accounts for input, alpha, padding, ICC and RGB staging; observe only hashes', () => {
+  encoder.encodeRgb(rgb({data:new Uint8Array(3)}));
+  const baseline = encoder.stats.estimatedMemoryBytes!;
   for (const data of [new Uint8Array(3), new Uint8ClampedArray(4), new Uint16Array(3), new Uint16Array(4), new Float32Array(3), new Float32Array(4)]) {
     for (const observe of [false, true]) {
       encoder.encodeRgb(rgb({data}), {observe});
-      const variable = 2 * data.byteLength + 72 + (data.length === 4 ? 16 : 0) + (observe ? 25 : 0);
-      assert.equal(encoder.stats.estimatedMemoryBytes, 32 * MIB + Math.ceil(variable * 3 / 2));
+      const extra = 2 * (data.byteLength - 3) + (data.length === 4 ? 16 : 0);
+      assert.equal(encoder.stats.estimatedMemoryBytes, baseline + extra * 3 / 2);
     }
   }
   const input: PlanarInput = {width:2, height:3, format:'I444A', planes:Array.from({length:4}, () => ({data:new Uint8Array(32), offset:3, stride:7}))};
-  // Each copied span is (3 - 1) * 7 + 2 = 16, excluding the prefix/tail.
-  for (const rgbViaPlanar of [false, true]) {
-    encoder.encodePlanarYuv(input, {rgbViaPlanar});
-    assert.equal(encoder.stats.estimatedMemoryBytes, 32 * MIB + (2 * 64 + 6 * (72 + 16 + (rgbViaPlanar ? 12 : 0))) * 3 / 2);
-  }
+  encoder.encodePlanarYuv(input);
+  const padded = encoder.stats.estimatedMemoryBytes!;
+  encoder.encodePlanarYuv(input, {rgbViaPlanar:true});
+  assert.equal(encoder.stats.estimatedMemoryBytes, padded + 6 * 12 * 3 / 2);
+  encoder.encodePlanarYuv({...input,planes:input.planes.map(() => ({data:new Uint8Array(6),stride:2}))});
+  assert.equal(padded - encoder.stats.estimatedMemoryBytes!, (64 - 24) * 2 * 3 / 2);
   const icc = new Uint8Array(132);
-  const estimate = 32 * MIB + (2 * 12 + 4 * icc.length + 72) * 3 / 2;
+  encoder.encodeRgb(rgb());
+  const estimate = encoder.stats.estimatedMemoryBytes! + 4 * icc.length * 3 / 2;
   rejectsBeforeWasm(() => encoder.encodeRgb(rgb({icc}), {maxMemoryBytes:estimate - 1, iccFallback:'srgb'}), new RegExp(`estimated ${estimate} bytes`));
 });
 
@@ -237,7 +242,6 @@ test('existing dimension and source-span limits remain independent of the budget
   // 4 MP passes dimensions; shared JS storage needs only 4 MiB. No WASM copy.
   const plane = {data:new Uint8Array(2048 * 2048), stride:2048};
   rejectsBeforeWasm(() => encoder.encodePlanarYuv({width:2048, height:2048, format:'I444A', planes:[plane, plane, plane, plane]}, {maxMemoryBytes:64 * MIB}), /WASM memory budget exceeded/);
-  rejectsBeforeWasm(() => encoder.encodePlanarYuv({width:2048, height:2048, format:'I444A', planes:[plane, plane, plane, plane]}), /WASM memory budget exceeded: estimated 637534208 bytes/);
   const wide = {data:new Uint8Array(67108865), stride:67108864};
   rejectsBeforeWasm(() => encoder.encodePlanarYuv({width:1, height:2, format:'I444', planes:[wide, wide, wide]}, {maxMemoryBytes:ceiling}), /plane span cap: 64 MiB/);
   assert.ok(encoder.encodeRgb(rgb()).length > 0, 'encoder remains usable after rejected calls');
@@ -250,20 +254,78 @@ test('odd NV12 uses the interleaved chroma span in its reservation', () => {
     {data:new Uint8Array(8).fill(128), stride:4}
   ]};
   encoder.encodePlanarYuv(input);
-  const estimate = 32 * MIB + (2 * 17 + 9 * 72) * 3 / 2;
-  assert.equal(encoder.stats.estimatedMemoryBytes, estimate);
+  const estimate = encoder.stats.estimatedMemoryBytes!;
+  const packed: PlanarInput = {width:3,height:3,format:'I444',planes:Array.from({length:3},()=>({data:new Uint8Array(9).fill(128),stride:3}))};
+  encoder.encodePlanarYuv(packed);
+  assert.equal(encoder.stats.estimatedMemoryBytes! - estimate, (27 - 17) * 2 * 3 / 2);
   rejectsBeforeWasm(() => encoder.encodePlanarYuv(input, {maxMemoryBytes:estimate - 1}), /WASM memory budget exceeded/);
 });
 
 
-test('retained WASM heap must fit even when the frame estimate is smaller', async () => {
-  // Simulate a heap high-water mark before Emscripten initializes its views.
-  const retained = await createTestEncoder(1);
-  const estimate = 32 * MIB + (2 * 12 + 72) * 3 / 2;
-  rejectsBeforeWasm(() => retained.encodeRgb(rgb(), {maxMemoryBytes:estimate}), {
-    name:'RangeError', message:/retained heap 33619968 bytes/
+test('retained heap above a frame budget is reusable and overruns are reported', async () => {
+  encoder.encodeRgb(rgb());
+  const estimate = encoder.stats.estimatedMemoryBytes!;
+  const pages = Math.ceil(estimate / 65536);
+  const retained = await createTestEncoder(pages);
+  retained.encodeRgb(rgb(), {maxMemoryBytes:estimate});
+  assert.ok(retained.stats.heapBefore! > estimate);
+  assert.equal(retained.stats.memoryBudgetExceeded, true);
+  assert.equal(retained.stats.memoryEstimateExceeded, true);
+});
+
+test('rejected frame exposes current stats and structured budget fields', () => {
+  encoder.encodeRgb(rgb());
+  const old = encoder.stats.estimatedMemoryBytes!;
+  const input = rgb({width:2, data:new Uint8Array(6)});
+  const calls = wasmCalls;
+  assert.throws(() => encoder.encodeRgb(input, {maxMemoryBytes:old}), error => {
+    assert.ok(error instanceof MemoryBudgetError);
+    assert.ok(error instanceof RangeError);
+    assert.ok(error.estimatedMemoryBytes > old);
+    assert.equal(error.maxMemoryBytes, old);
+    assert.equal(error.estimatedMemoryBytes, encoder.stats.estimatedMemoryBytes);
+    assert.equal(error.retainedHeapBytes, encoder.stats.retainedHeapBytes);
+    return true;
   });
-  assert.ok(retained.encodeRgb(rgb(), {maxMemoryBytes:32 * MIB + 65536}).length > 0);
+  assert.equal(wasmCalls,calls);
+  assert.equal(encoder.stats.colorResolved, undefined);
+  encoder.encodeRgb(rgb(), {maxMemoryBytes:null});
+  assert.equal(encoder.stats.maxMemoryBytes,768*MIB);
+});
+
+test('integer RGB channel validation keeps the specific error', () => {
+  rejectsBeforeWasm(() => encoder.encodeRgb(rgb({data:new Uint8Array(2)})), /RGB integer input requires packed RGB or RGBA/);
+});
+
+// Deterministic textured input exercises codec work/output, rather than only flat frames.
+function pixels(length: number) {
+  let seed=42;
+  return Uint8Array.from({length}, () => {seed=(Math.imul(seed,1664525)+1013904223)|0;return seed>>>24;});
+}
+for (const path of ['RGB','RGBA','planar','alpha','rgbViaPlanar'] as const) {
+  test(`measured heap stays inside estimate: ${path}`, async t => {
+    const e = await createTestEncoder();
+    const size=1024, data=pixels(size*size*4);
+    if (path==='RGB' || path==='RGBA') e.encodeRgb({width:size,height:size,data:data.subarray(0,size*size*(path==='RGB'?3:4))}, {observe:true});
+    else e.encodePlanarYuv({width:size,height:size,format:path==='alpha'?'I444A':'I444',planes:Array.from({length:path==='alpha'?4:3},(_,c)=>({data:data.subarray(c*size*size,(c+1)*size*size),stride:size}))}, {rgbViaPlanar:path==='rgbViaPlanar',observe:true});
+    assert.ok(e.stats.heapAfter! > e.stats.heapBefore!, 'fixture must grow the heap');
+    assert.ok(e.stats.heapAfter! <= e.stats.estimatedMemoryBytes!);
+    assert.equal(e.stats.memoryBudgetExceeded,false);
+    assert.equal(e.stats.memoryEstimateExceeded,false);
+    t.diagnostic(JSON.stringify({path,heapBefore:e.stats.heapBefore,heapAfter:e.stats.heapAfter,estimatedMemoryBytes:e.stats.estimatedMemoryBytes}));
+  });
+}
+
+test('2048² RGBA fits defaults and a following 1x1 succeeds on the same heap', async t => {
+  const e=await createTestEncoder();
+  assert.ok(e.encodeRgb({width:2048,height:2048,data:pixels(2048*2048*4)}).length > 0);
+  const large={...e.stats};
+  assert.ok(large.heapAfter! > large.heapBefore!);
+  assert.ok(large.heapAfter! <= large.estimatedMemoryBytes!);
+  assert.ok(e.encodeRgb(rgb()).length > 0);
+  assert.equal(e.stats.heapBefore,large.heapAfter);
+  assert.ok(e.stats.estimatedMemoryBytes! < e.stats.heapBefore!);
+  t.diagnostic(JSON.stringify({largeHeap:large.heapAfter,largeEstimate:large.estimatedMemoryBytes,smallHeap:e.stats.heapAfter,smallEstimate:e.stats.estimatedMemoryBytes}));
 });
 
 for (const [Type,depth] of [[Uint8Array,8],[Uint8ClampedArray,8],[Uint16Array,16],[Float32Array,32]]) {
