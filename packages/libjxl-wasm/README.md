@@ -208,16 +208,21 @@ can still fail allocation. The guard uses only dimensions, types and layouts,
 with no extra pixel scan. It lives in the TypeScript API; direct native/WASM
 ABI users must manage their own budget. No WASM relink is needed for it.
 
+The formula above is the full-buffer (`data` / `planes`) estimate and is
+unchanged. `encodeRgb({provideRect})` (see [Streaming RGB input](#streaming-rgb-input))
+replaces `2*S` with one reusable packed scratch
+`S = min(width,2048)*min(height,2048)*3*(depth/8)`, giving
+`32 MiB + ceil(1.5 * (S + 4*I + 4*M + P*(72 + C + D)))`.
+RGB only, so `A = R = 0`; `M`, `C`, `D` retain the definitions above. This
+path removes the full-source WASM copy but not full-frame ownership: the
+encoder still owns full-frame XYB and working buffers, and output is returned
+whole. Bounding peak memory further requires a larger libjxl/session redesign.
+
 `encodeJpeg` retains its separate 64 MiB input, 4 MP and 8192 px/axis limits
 and accepts only `compressBoxes`. It recompresses JPEG coefficients without the
 pixel reconstruction/staging used by this estimate, so `maxMemoryBytes` and the
 pixel memory-budget stats do not apply to it. Its limits are admission caps,
 not a heap guarantee.
-
-No chunked/streaming API is added: the internal chunked callbacks still feed
-an encoder that owns full-frame XYB and working buffers. Slicing the input
-alone would not bound peak memory; changing that ownership requires a larger
-libjxl/session redesign.
 
 ## Encoding options
 
@@ -423,6 +428,139 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+## Streaming RGB input
+
+`encodeRgb` also accepts a synchronous rectangle source (SDR RGB only):
+
+```js
+const bytes = encoder.encodeRgb({
+  width, height, format: 'RGB', depth: 8, // 8 default; also 16 or 32
+  provideRect(x, y, w, h) {
+    // Return exactly w*h*3 tightly packed samples, row-major RGB.
+    // A full-width band can be a zero-copy view of an existing JS image:
+    if (x === 0 && w === width)
+      return pixels.subarray(y * width * 3, (y + h) * width * 3);
+    const band = new Uint8Array(w * h * 3);
+    for (let row = 0; row < h; ++row)
+      band.set(pixels.subarray(((y + row) * width + x) * 3,
+                              ((y + row) * width + x + w) * 3), row * w * 3);
+    return band;
+  },
+}, {distance: 1, effort: 3});
+```
+
+The input type is `ChunkedRgbInput` (`encodeRgb(input: RgbInput | ChunkedRgbInput)`
+in `src/api.ts`); `data` is typed `never` there and `format` must be `'RGB'`.
+Use `Uint8Array`/`Uint8ClampedArray` for depth 8, `Uint16Array` for full-range
+16-bit samples, or `Float32Array` for nominal [0,1] samples at depth 32.
+Colour/ICC options and output options are shared with `encodeRgb({data})`.
+Do not supply `data` with `provideRect`. Rectangles are at most 2048×2048,
+may repeat, and must be deterministic. The callback must finish synchronously;
+Promises and reentry into the same encoder are rejected. It may generate pixels
+row by row into the requested band, without retaining a full JS source image.
+Object methods and prototype methods are called with the original input as
+`this`, including during an ICC fallback retry. Gray ICC profiles require R=G=B;
+non-gray samples report `ICC: Gray profile requires R=G=B`, or replay the provider
+without ICC when `iccFallback: 'srgb'` is set. Provider exceptions never trigger
+that retry. Exceptions, wrong sample types and wrong lengths fail the encode;
+scratch and per-call callback references are released even after failure.
+One trampoline/table entry is registered lazily per encoder and reused for its
+lifetime, without retaining completed providers; `dispose()` removes it.
+All encode methods reject disposed/poisoned instances and callback reentry.
+Disposal during a provider callback is also rejected.
+
+Only one packed input scratch allocation is retained during the encode:
+`S = min(width,2048) * min(height,2048) * 3 * (depth/8)` bytes.
+There is no separate full-source allocation in WASM. The bridge also holds float
+buffers for libjxl's outstanding rectangle requests, plus ICC and encoder state;
+this is input streaming, not constant-memory encoding or streamed output.
+The preflight reservation for this path is
+`32 MiB + ceil(1.5 * (S + 4*iccBytes + 4*M + width*height*(72 + C + D)))`.
+`M` reserves metadata bytes (EXIF plus its 4-byte offset and XMP); `C` is 12
+B/pixel for lossless or effort >=8, and `D` is 6 B/pixel for 16-bit output.
+The 72 B/pixel encoder allowance includes float conversion staging, XYB and
+working/output storage. This is conservative accounting, not an allocator cap;
+admission compares the estimate alone with `maxMemoryBytes`. Retained heap is
+reusable and does not count against admission. `stats.heapAfter` includes growth
+slack and retained memory, rather than peak live allocations; the post-call
+`memoryBudgetExceeded` / `memoryEstimateExceeded` flags report heap overruns.
+Observation adds no reservation under the current accounting. The full-buffer estimate
+continues to charge `2*inputBytes` instead of `S` (a conservative allowance,
+not two actual packed copies for the borrowed integer path). When both dimensions
+are at most 2048, packed scratch is the full input size: this path saves no WASM
+input storage compared with borrowed packed input. A dimension must exceed 2048
+for that saving; full-frame float staging and XYB storage remain.
+
+The existing 4 MP/dimension limits still apply. Streaming RGBA is unsupported;
+`encodeRgb({data})` still accepts RGBA. Planar YUV (including HDR via planar)
+still owns full source planes in Rust. Animation and JPEG recompression are
+not streamed by this API and remain full-frame paths. `encodeAnimation` explicitly
+rejects `provideRect` on the input or any frame; supply packed frame `data`. Output is returned whole.
+This requires this repository's **patched chunked ABI**, particularly
+`experimental_borrowed`; it cannot link against unpatched upstream libjxl.
+Existing packed-buffer calls keep their encoding path and output bytes.
+
+For an incremental WASM link with existing libjxl archives, run
+`bash scripts/build-wasm.sh --relink-only` from this package. It still rebuilds
+the Rust staticlib (cargo, `CARGO_TARGET_DIR`) and relinks `codec.mjs`/`codec.wasm`
+plus the `codec.d.ts`/`codec.d.mts` typings, but skips libjxl
+fetch/configure/build; a complete first build with JPEG transcoding and metadata
+boxes enabled is still required. `LINK_ONLY=1` is an equivalent build option. The link
+exports `_w_rgb_chunked` and needs `-sALLOW_TABLE_GROWTH=1` with
+`addFunction`/`removeFunction` for the provider callback.
+
+Libjxl may request a larger internal rectangle because streaming patches add
+border pixels. The bridge splits it into provider requests no larger than
+2048×2048; the float conversion buffer still covers the internal rectangle.
+
+### Heap reservation check (2026-11-11)
+
+These measurements precede the main merge and have not been rerun on the combined codec.
+
+`test:api` measures fresh encoders at 2049×2047 with deterministic textured
+pixels, distance 1, effort 3 and observation enabled. Both cases grow the heap
+and match full-buffer output bytes. The bridge's 2048 split is tested; request
+counts do not establish libjxl's own tiling strategy.
+
+| Source depth | heapBefore (bytes) | heapAfter (bytes) | estimatedMemoryBytes |
+| --- | ---: | ---: | ---: |
+| U8 | 33,554,432 | 298,385,408 | 505,404,308 |
+| Float32 | 33,554,432 | 326,959,104 | 561,999,764 |
+
+Both post-call overrun flags are false under the default 768 MiB budget.
+These are retained heap measurements, not peak live allocation instrumentation
+or a guarantee for every image. Scratch is smaller than full input at this size;
+both dimensions exceeding 2048 would exceed the existing 4 MP cap.
+
+### Measurement (2026-11-10)
+
+Node v26.12.1, Linux x86_64, SIMD WASM; one warm-up then five synchronous
+end-to-end calls per path, medians below. Pixel pattern is generated before
+measurement; the chunked provider reads subarray views of that same JS buffer.
+Distance 1, effort 3, no observation. Reproduce with
+`node scripts/bench-rgb.mjs` (or `--full-only` for a pre-change codec).
+
+| Size | Channels | dtype | Source | ICC | Before full | After full | After chunked |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: |
+| 2048×2048 | RGB (3) | U8 | synthetic | none (sRGB defaults) | 430.42 ms | 443.43 ms | 440.63 ms |
+
+Full-buffer median changed +3.02%; chunked is +2.37% against the old full-buffer
+median and -0.63% against the new full-buffer path. Ranges overlap (before
+423.67–443.65 ms; after full 422.82–458.86 ms; chunked 423.84–476.90 ms), so this
+run does not establish a change beyond noise. Both post-change outputs and the
+saved pre-change output are byte-identical. Reservations are 500 MiB full vs
+482 MiB chunked. At this size a maximum rectangle covers the entire image.
+The rebuilt WASM is 2,525,847 bytes vs the starting artifact's 2,540,680 bytes
+(-14,833 bytes, -0.58%); this comparison includes relinking the Rust staticlib.
+
+A second run using the final benchmark script measured full-buffer 470.96 ms
+(range 442.01–505.68) and chunked 440.40 ms (425.76–442.67): +9.42% and +2.32%
+against the pre-change median, respectively; chunked was 6.49% faster than full
+in that run. The full-buffer timing varies substantially between runs, so these
+measurements do not isolate a systematic hot-path regression or speedup. The
+benchmark uses a 1 GiB preflight budget. Real-image and browser timing were not
+measured.
 
 
 EXIF is validated strictly before encoding. For camera metadata with invalid

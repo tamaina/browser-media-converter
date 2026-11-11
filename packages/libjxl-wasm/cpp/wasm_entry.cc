@@ -23,6 +23,7 @@ extern "C" int bridge_icc_path();
 extern "C" int bridge_icc_header();
 extern "C" void bridge_icc_header_mode(int);
 extern "C" int bridge_rgb_integer(const PlanarRgbConfig*,const void*,size_t,int,int,PlanarEncoded*,char*,size_t);
+extern "C" int bridge_rgb_chunked(const PlanarRgbConfig*,int (*)(size_t,size_t,size_t,size_t),void*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" {
 void w_animation_begin(uint32_t loops) {bridge_animation_begin(loops);}
 void w_animation_frame(uint32_t duration,int last) {bridge_animation_frame(duration,last);}
@@ -99,6 +100,13 @@ int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
   for(auto& t:times)t=0;
   const double start=planar_clock_ms();
   const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
+int w_rgb_chunked(int (*provide)(size_t,size_t,size_t,size_t),void* scratch,size_t capacity,int depth) {
+  PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,input.intensity,uint32_t(output_depth)};
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_rgb_chunked(&c,provide,scratch,capacity,depth,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
 int w_jpeg(const uint8_t* p,size_t size,int compress_boxes) {

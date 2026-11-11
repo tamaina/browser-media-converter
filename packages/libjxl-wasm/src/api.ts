@@ -67,7 +67,26 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export type RgbPixels = RgbInput['data'];
+type ChunkedRgbBase = Omit<RgbInput, 'data' | 'format' | 'depth' | 'bitDepth' | 'storage' | 'alphaMode'> & {
+  data?: never;
+  alphaMode?: never;
+  format: 'RGB';
+};
+/** Synchronous deterministic source; no separate full source allocation in WASM.
+ * Exact tightly packed RGB rectangle, at most 2048x2048; requests may repeat.
+ * Methods receive the original input as `this`, including ICC fallback retries.
+ * Depth selects the provider array type; omitted depth means 8.
+ * Do not reenter the same encoder. No promises or RGBA/HDR streaming.
+ */
+export type ChunkedRgbInput = ChunkedRgbBase & (
+  {depth?: 8; bitDepth?: 8; storage?: 'u8'; provideRect(x: number, y: number, width: number, height: number): Uint8Array | Uint8ClampedArray} |
+  {depth: 16; bitDepth?: 16; storage?: 'u16le-lsb'; provideRect(x: number, y: number, width: number, height: number): Uint16Array} |
+  {depth: 32; bitDepth?: 32; storage?: 'float32'; provideRect(x: number, y: number, width: number, height: number): Float32Array}
+);
 export interface AnimationFrame {
+  /** Chunked animation frames are unsupported. */
+  provideRect?: never;
   data: RgbInput['data'];
   /** Positive finite; rounded to ms, minimum 1 ms, maximum uint32. */
   durationMs: number;
@@ -77,6 +96,7 @@ export interface AnimationFrame {
 export type AnimationEncodeOptions = Omit<EncodeOptions, 'observe' | 'rgbViaPlanar' | 'exif' | 'xmp' | 'compressBoxes'> & {observe?: never; rgbViaPlanar?: never; exif?: never; xmp?: never; compressBoxes?: never};
 /** Already-decoded, composited full-canvas frames; shared colour settings. */
 export interface AnimationInput extends Omit<RgbInput, 'data'> {
+  provideRect?: never;
   /** Total plays; 0 (default) means infinite. */
   loops?: number;
   /** 1..256 frames, at most 4 megapixels each. Same source depth and channel count. */
@@ -98,7 +118,7 @@ export interface Encoder {
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
-  encodeRgb(input: RgbInput, options?: EncodeOptions): Encoded;
+  encodeRgb(input: RgbInput | ChunkedRgbInput, options?: EncodeOptions): Encoded;
   /** Release this instance. Wasm memory cannot shrink; it is reclaimed by GC. */
   dispose(): void;
   readonly stats: EncoderStats;
@@ -161,7 +181,9 @@ type RuntimeInput = ColorOptions & {
   width: number; height: number; format?: string; alphaMode?: string;
   depth?: number; bitDepth?: number; storage?: string;
   data?: PixelData; planes?: Plane[]; linearization?: string;
+  provideRect?: ((x: number, y: number, width: number, height: number) => RgbPixels) | null;
 };
+type SourceFailure = {failed?: boolean};
 type ColorState = {
   source: Record<string, string>;
   matrix: string; primaries: string; transfer: string;
@@ -174,6 +196,11 @@ type ColorState = {
 export async function createEncoder(options: ModuleOptions = {}): Promise<Encoder> {
   let module: Awaited<ReturnType<typeof createModule>> | undefined = await createModule(options);
   let stats: EncoderStats = {};
+  let active = false;
+  // One table entry per module, lazily registered for the first admitted chunked call.
+  // Its dispatcher never retains a completed call's source or scratch allocation.
+  let provideCallback: ((x: number, y: number, w: number, h: number) => number) | undefined;
+  let callback = 0;
   let state = 'active';
   // Rust uses panic=abort in Wasm. Any exception escaping a module call is
   // fatal: never call back into that instance, even for cleanup or ICC fallback.
@@ -253,7 +280,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (i.alphaMode !== undefined && i.alphaMode !== 'straight') fail("alphaMode must be 'straight' (premultiplied alpha is unsupported)");
     if (rgb) {
       // Integer RGB is full-range U8/U16, never low-bit-depth codes in U16.
-      const depth = i.data instanceof Uint16Array ? 16 : i.data instanceof Float32Array ? 32 : 8;
+      const depth = i.provideRect !== undefined ? i.depth ?? 8 : i.data instanceof Uint16Array ? 16 : i.data instanceof Float32Array ? 32 : 8;
+      if (![8,16,32].includes(depth)) fail('RGB depth must be 8/16/32');
       const storage = depth === 32 ? 'float32' : depth === 16 ? 'u16le-lsb' : 'u8';
       if ((i.depth !== undefined && i.depth !== depth) || (i.bitDepth !== undefined && i.bitDepth !== depth) ||
           (i.storage !== undefined && i.storage !== storage)) fail(`RGB depth/storage mismatch: expected depth ${depth}, storage ${storage}`);
@@ -269,10 +297,11 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (lossless && ['bt2020','p3'].includes(o.iccHeader ?? '')) fail('lossless requires the original profile; iccHeader override is unsupported');
     return {distance,effort,lossless};
   }
-  function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean, animationFrame = false): Encoded {
+  function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean, animationFrame = false, sourceFailure: SourceFailure = {}): Encoded {
     if (!module) throw Error(`Encoder is ${state}`);
     stats = {};
     const start=performance.now();
+    const chunked=rgb && i.provideRect !== undefined;
     const boxes=metadataOptions(o);
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader ?? ''))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
@@ -329,7 +358,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
     const formats=['I420','I422','I444','NV12'];
     const match=/^(I420|I422|I444)(A)?(?:P(10|12))?$/.exec(i.format??'');
-    const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
+    const sourceDepth=rgb?(chunked?i.depth??8:i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
     if(!rgb && ((i.depth!==undefined && i.depth!==sourceDepth) || (i.bitDepth!==undefined && i.bitDepth!==sourceDepth) || (i.storage!==undefined && i.storage!==(sourceDepth===8?'u8':'u16le-lsb'))))fail('format/depth/storage mismatch');
     if (!rgb && ['pq','hlg'].includes(i.linearization ?? '') && sourceDepth === 8) fail('HDR requires 10/12-bit source planes');
     // Lossless integer RGB retains its native precision.
@@ -346,7 +375,10 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (!integer(maxMemoryBytes,1,MAX_MEMORY_BYTES)) fail(`maxMemoryBytes must be a safe integer in 1..${MAX_MEMORY_BYTES} (1984 MiB)`);
     let inputBytes=0, hasAlpha=false;
     const layouts: {p: Plane; span: number}[]=[];
-    if (rgb) {
+    if (chunked) {
+      if (typeof i.provideRect !== 'function' || i.data !== undefined) fail('provideRect must be a function and cannot be combined with data');
+      if (i.format !== 'RGB') fail("provideRect requires format: 'RGB' (RGBA streaming unsupported)");
+    } else if (rgb) {
       const data=i.data!;
       if (!(data instanceof Float32Array || data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array)) fail('RGB requires packed Float32Array or integer RGB/RGBA');
       if (![3,4].includes(data.length/(i.width*i.height))) fail(data instanceof Float32Array ? 'RGB requires packed Float32Array RGB or RGBA' : 'RGB integer input requires packed RGB or RGBA');
@@ -373,6 +405,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       hasAlpha=layouts.length===4;
     }
     // Conservative reservation checked on representative growing heaps (README):
+    // Chunked input replaces full source copies with one reusable packed scratch.
+    const scratchBytes=chunked?Math.min(i.width,2048)*Math.min(i.height,2048)*3*(sourceDepth/8):0;
     // XYB (12 B/px), RGB staging (12), working/output allowance (48), extras.
     // Standard callbacks can materialize another whole-frame float RGB buffer;
     // reserve additional integer coding/output space for 16-bit RGB headers.
@@ -382,7 +416,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const standardRgbBytes=lossless || effort>=8 ? 12 : 0;
     const integer16Bytes=outputDepth===16 ? 2*(hasAlpha?4:3) : 0;
     const metadataBytes=(boxes.exif ? boxes.exif.byteLength+4 : 0) + (boxes.xmp?.byteLength??0);
-    const variableBytes=2*inputBytes + 4*(icc?.byteLength??0) + 4*metadataBytes + i.width*i.height*(72 + (hasAlpha?16:0) + (!rgb && o.rgbViaPlanar?12:0) + standardRgbBytes + integer16Bytes);
+    const variableBytes=(chunked?scratchBytes:2*inputBytes) + 4*(icc?.byteLength??0) + 4*metadataBytes + i.width*i.height*(72 + (hasAlpha?16:0) + (!rgb && o.rgbViaPlanar?12:0) + standardRgbBytes + integer16Bytes);
     const estimatedMemoryBytes=32*MIB + Math.ceil(variableBytes*3/2);
     const before=m.HEAPU8.buffer.byteLength;
     // Freed allocations reuse the retained heap. Its high-water size is not this
@@ -390,6 +424,8 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     stats={estimatedMemoryBytes,maxMemoryBytes,retainedHeapBytes:before,heapBefore:before};
     if (estimatedMemoryBytes>maxMemoryBytes) throw new MemoryBudgetError(estimatedMemoryBytes,before,maxMemoryBytes);
     const pointers: number[]=[];
+    // Boxed so a thrown null/undefined is still distinguishable from "no error".
+    const callbackState: {thrown?: {error: unknown}} = {};
     const alloc = (bytes: ArrayBufferView) => {
       const p=m._malloc(bytes.byteLength); if (!p) throw Error('WASM allocation failed');
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
@@ -401,13 +437,35 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
         boxes.xmp ? alloc(boxes.xmp) : 0, boxes.xmp?.length ?? 0, boxes.orientation, +boxes.compressBoxes);
       let status;
       if (rgb) {
-        const data=i.data!;
         if(icc)m._w_icc(alloc(icc),icc.length);
         m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
-        const channels=data.length/(i.width*i.height);
-        status=data instanceof Float32Array && channels===3
-          ? m._w_rgb(alloc(data),data.length)
-          : m._w_rgb_integer(alloc(data),data.length,sourceDepth,channels);
+        if (chunked) {
+          const provideRect=i.provideRect!;
+          const scratch=m._malloc(scratchBytes);
+          if (!scratch) throw Error('WASM allocation failed');
+          pointers.push(scratch);
+          provideCallback=(x: number,y: number,w: number,h: number)=>{
+            if(callbackState.thrown)return 1;
+            try {
+              if(w>2048 || h>2048 || w*h*3*(sourceDepth/8)>scratchBytes) throw new RangeError('provideRect request exceeds scratch');
+              const pixels: unknown=provideRect(x,y,w,h);
+              const valid=sourceDepth===32?pixels instanceof Float32Array:sourceDepth===16?pixels instanceof Uint16Array:pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray;
+              if(!valid || (pixels as RgbPixels).length!==w*h*3) fail('provideRect must return the matching TypedArray with exactly w*h*3 samples');
+              const view=pixels as RgbPixels;
+              m.HEAPU8.set(new Uint8Array(view.buffer,view.byteOffset,view.byteLength),scratch);
+              return 0;
+            } catch(error) {sourceFailure.failed=true;callbackState.thrown={error};return 1;}
+          };
+          if (!callback) callback=m.addFunction((x: number,y: number,w: number,h: number)=>provideCallback?.(x,y,w,h) ?? 1,'iiiii');
+          status=m._w_rgb_chunked(callback,scratch,scratchBytes,sourceDepth);
+          if(callbackState.thrown)throw callbackState.thrown.error;
+        } else {
+          const data=i.data!;
+          const channels=data.length/(i.width*i.height);
+          status=data instanceof Float32Array && channels===3
+            ? m._w_rgb(alloc(data),data.length)
+            : m._w_rgb_integer(alloc(data),data.length,sourceDepth,channels);
+        }
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
         for (let c=0;c<layouts.length;c++) {
@@ -425,7 +483,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       // Reported codec failures retain main's empty stats; admission failures
       // above keep their structured estimate without entering Wasm.
       stats={};throw error;
-    } finally {if (module) {if (!animationFrame) m._w_free();for(const p of pointers)m._free(p);}}
+    } finally {provideCallback=undefined;if (module) {if (!animationFrame) m._w_free();for(const p of pointers)m._free(p);}}
   }
   // Thin ingestion boundary for already-decoded, composited GIF/APNG frames.
   function encodeAnimation(input: AnimationInput, o: EncodeOptions = {}): Encoded {
@@ -434,6 +492,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       if (o[key] !== undefined) fail(`animation metadata option ${key} is unsupported`);
     }
     if (!input || typeof input !== 'object') fail('animation input must be an object');
+    if ('provideRect' in input) fail('chunked animation frames are unsupported; supply packed data');
     const {frames, loops = 0, ...common} = input;
     if (!Array.isArray(frames) || !integer(frames.length, 1, 256)) fail('animation requires 1..256 frames');
     if (!integer(loops, 0, 0xffffffff)) fail('loops must be a uint32 (0 means infinite)');
@@ -443,6 +502,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     for (let n = 0; n < frames.length; n++) {
       const frame = frames[n];
       if (!frame || typeof frame !== 'object') fail(`frame ${n} must be an object`);
+      if ('provideRect' in frame) fail('chunked animation frames are unsupported; supply packed data');
       if (Object.keys(frame).some(key => !['data','durationMs'].includes(key))) fail('frames accept only data/durationMs; supply composited full-canvas frames');
       const {data, durationMs} = frame;
       if (!(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array || data instanceof Float32Array)) fail('animation requires packed RGB/RGBA typed arrays');
@@ -567,16 +627,34 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     }
   }
 
-  return {encodeAnimation,encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
-    try{return run(i,o,true);}catch(error){
-      if(!module || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
+  function assertAvailable() {
+    if (!module) throw Error(`Encoder is ${state}`);
+    if (active) throw Error('Encoder is already encoding; provideRect must not reenter this instance');
+  }
+  function exclusive<T>(work: () => T): T {
+    assertAvailable(); active=true;
+    try { return work(); } finally { active=false; }
+  }
+  const guarded=(i: RuntimeInput,o: EncodeOptions,rgb: boolean,sourceFailure: SourceFailure={}): Encoded =>
+    exclusive(()=>run(i,o,rgb,false,sourceFailure));
+  return {encodeAnimation:(i,o={})=>exclusive(()=>encodeAnimation(i,o)),encodeJpeg:(i,o={})=>exclusive(()=>encodeJpeg(i,o)),encodePlanarYuv:(i,o={})=>guarded(i,o,false),encodeRgb:(i,o={})=>{
+    // Preserve prototype methods and the original receiver through normalization
+    // and the ICC retry (whose clean() helper copies only own properties).
+    assertAvailable();
+    const original=i;
+    const provider: RuntimeInput['provideRect']=('provideRect' in i)?i.provideRect:undefined;
+    const input: RuntimeInput=typeof provider !== 'function' ? i : {...i,provideRect:(x,y,w,h)=>provider.call(original,x,y,w,h)};
+    const sourceFailure: SourceFailure={};
+    try{return guarded(input,o,true,sourceFailure);}catch(error){
+      if(!module || sourceFailure.failed || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
       const clean=<T extends ColorOptions>(object: T)=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
-      const bytes=run(clean(i),clean(o),true);
+      const bytes=guarded(clean(input),clean(o),true);
       bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
       return bytes;
     }
   },dispose(){
-    try { if (module) m._w_free(); }
+    if (active) throw Error('Encoder is already encoding; provideRect must not dispose this instance');
+    try { if (module) { if(callback) {m.removeFunction(callback);callback=0;} provideCallback=undefined;m._w_free();} }
     finally { state = 'disposed'; module = undefined; stats = {}; }
   },get stats(){return {...stats};}};
 }

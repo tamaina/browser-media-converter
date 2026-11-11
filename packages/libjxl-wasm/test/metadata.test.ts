@@ -7,7 +7,7 @@ import {brotliDecompressSync} from 'node:zlib';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createEncoder} from '@browser-mc/libjxl-wasm';
-import type {EncodeOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
+import type {EncodeOptions, PlanarInput, RgbInput, ChunkedRgbInput} from '@browser-mc/libjxl-wasm';
 import {readExif, readExifAsync, writeExif, removeExif, transplantExif, prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -76,12 +76,13 @@ async function inspect(bytes: Uint8Array, applyOrientation = false): Promise<{wi
   return JSON.parse(await readFile(output,'utf8'));
 }
 const xmp=new TextEncoder().encode('<x:xmpmeta xmlns:x="adobe:ns:meta/"><test>pixel metadata</test></x:xmpmeta>');
-type Encode = (input: RgbInput | PlanarInput, options?: EncodeOptions) => Uint8Array;
+type Encode = (input: RgbInput | ChunkedRgbInput | PlanarInput, options?: EncodeOptions) => Uint8Array;
 for (const [name,input,encode] of [
   ['RGB',rgb,(i,o)=>encoder.encodeRgb(i as RgbInput,o)],
+  ['chunked RGB',{width:rgb.width,height:rgb.height,format:'RGB',provideRect:()=>rgb.data as Uint8Array},(i,o)=>encoder.encodeRgb(i as ChunkedRgbInput,o)],
   ['planar',yuv,(i,o)=>encoder.encodePlanarYuv(i as PlanarInput,o)],
   ['planar RGB baseline',yuv,(i,o)=>encoder.encodePlanarYuv(i as PlanarInput,{...o,rgbViaPlanar:true})]
-] as [string, RgbInput | PlanarInput, Encode][]) {
+] as [string, RgbInput | ChunkedRgbInput | PlanarInput, Encode][]) {
   test(`${name}: EXIF orientations, XMP and compression round trip`, async () => {
     for(const compressBoxes of [true,false])for(let orientation=1;orientation<=8;orientation++) {
       const little=orientation%2===0, prefix=orientation%3===0;

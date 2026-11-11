@@ -121,7 +121,10 @@ static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* 
     const int status=s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size());
     if(instrumentation)s.fill_ms+=planar_clock_ms()-start;
     if (status) { s.failed=true; return nullptr; }
-    if(s.gray) {for(size_t i=0;i<w*h;i++)pixels[i]=pixels[i*3];pixels.resize(w*h);}
+    if(s.gray) {for(size_t i=0;i<w*h;i++) {
+      if(pixels[i*3]!=pixels[i*3+1] || pixels[i*3]!=pixels[i*3+2]){s.failure="ICC: Gray profile requires R=G=B";s.failed=true;return nullptr;}
+      pixels[i]=pixels[i*3];
+    }pixels.resize(w*h);}
     s.live+=pixels.size()*sizeof(float);
     ++s.result.callbacks;
     s.result.peak_rgb_bytes=std::max(s.result.peak_rgb_bytes,s.live);
@@ -399,8 +402,9 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       input.experimental_yuv=standard_input || std::getenv("JXL_EXPERIMENT_DISABLE_FUSED")?nullptr:yuv;
       if(input.experimental_yuv && (c->transfer==13 || c->transfer==1 || c->transfer==1001 || c->transfer==8))
         input.experimental_fill_row=nullptr;
-      check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
+      const auto status=JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input);
       if(source.failed) throw std::runtime_error(source.failure.empty()?"planar region conversion failed":source.failure);
+      check(status);
     }
     std::vector<uint8_t> out(4096); size_t used=0;
     for(;;) {
@@ -441,6 +445,11 @@ extern "C" int hdr_jxl_encode_alpha(const Config* c,void* opaque,Fill fill,const
 }
 extern "C" void hdr_jxl_free(Encoded* result) { if(result) { std::free(result->data); std::free(result->xyb_data); *result={}; } }
 
+static const float* rgb_lut(int depth) {
+  static const auto u8=[] {std::array<float,256> a{};for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/255.0);return a;}();
+  static const auto u16=[] {std::vector<float> a(65536);for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/65535.0);return a;}();
+  return depth==8?u8.data():u16.data();
+}
 // Source type is selected once per encode, avoiding per-sample type branches.
 struct PackedRgb {const void* p;size_t width;int channels;const float* lut;};
 template<unsigned depth>
@@ -474,12 +483,40 @@ extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
   // `depth` describes full-range typed storage (8 or 16), not 10/12-bit
   // code values in U16. src/api.ts rejects conflicting source declarations.
   // Double division then float cast exactly reproduces JS Float32Array assignment.
-  static const auto u8=[] {std::array<float,256> a{};for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/255.0);return a;}();
-  static const auto u16=[] {std::vector<float> a(65536);for(size_t i=0;i<a.size();i++)a[i]=float(double(i)/65535.0);return a;}();
-  PackedRgb in{data,c->width,channels,depth==8?u8.data():u16.data()};
+  PackedRgb in{data,c->width,channels,rgb_lut(depth)};
   const Fill fill=depth==8?packed_fill<8>:depth==16?packed_fill<16>:packed_fill<32>;
   const Alpha alpha=channels==4?Alpha{static_cast<const uint8_t*>(data)+3*(depth/8),size_t(c->width)*4*(depth/8),size_t(4*(depth/8)),unsigned(depth)}:Alpha{};
   return encode(c,&in,fill,nullptr,nullptr,result,error,error_size,alpha);
+}
+
+// JS callback copies one tightly packed rectangle into reusable WASM scratch.
+using ProvideRect = int (*)(size_t,size_t,size_t,size_t);
+struct ChunkedRgb { ProvideRect provide; void* scratch; size_t capacity; int depth; };
+static int chunked_rgb_fill(void* opaque,size_t x,size_t y,size_t w,size_t h,float* out,size_t) {
+  auto& in=*static_cast<ChunkedRgb*>(opaque);
+  // Libjxl streaming patches include an 8-pixel border, so an internal
+  // rectangle can exceed 2048. Split without growing packed input scratch.
+  for(size_t dy=0;dy<h;dy+=2048)for(size_t dx=0;dx<w;dx+=2048) {
+    const size_t cw=std::min(size_t(2048),w-dx),ch=std::min(size_t(2048),h-dy);
+    if(cw*ch*3*size_t(in.depth/8)>in.capacity || in.provide(x+dx,y+dy,cw,ch))return 1;
+    PackedRgb packed{in.scratch,cw,3,rgb_lut(in.depth)};
+    const Fill fill=in.depth==8?packed_fill<8>:in.depth==16?packed_fill<16>:packed_fill<32>;
+    for(size_t j=0;j<ch;j++)
+      if(fill(&packed,0,j,cw,1,out+((dy+j)*w+dx)*3,cw*3))return 1;
+  }
+  return 0;
+}
+
+extern "C" int bridge_rgb_chunked(const Config* c,ProvideRect provide,void* scratch,size_t capacity,
+    int depth,Encoded* result,char* error,size_t error_size) {
+  auto bad=[&](const char* text){if(error && error_size)std::snprintf(error,error_size,"%s",text);return 1;};
+  if(!c || !provide || !scratch || !result || (depth!=8 && depth!=16 && depth!=32) ||
+     !c->width || !c->height || c->width>8192 || c->height>8192 || size_t(c->width)*c->height>4194304 ||
+     capacity<std::min(size_t(c->width),size_t(2048))*std::min(size_t(c->height),size_t(2048))*3*size_t(depth/8))
+    return bad("RGB chunked layout/dimension limit");
+  if(animation.active)return bad("chunked animation frames are unsupported");
+  ChunkedRgb in{provide,scratch,capacity,depth};
+  return encode(c,&in,chunked_rgb_fill,nullptr,nullptr,result,error,error_size,{});
 }
 
 // Lossless JPEG coefficients + reconstruction data. A fresh encoder lets

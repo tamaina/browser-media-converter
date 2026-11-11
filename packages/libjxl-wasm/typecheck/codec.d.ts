@@ -16,6 +16,8 @@ namespace RuntimeExports {
      * @return {string}
      */
     function UTF8ToString(ptr: number, maxBytesToRead?: number | undefined, ignoreNul?: boolean | undefined): string;
+    function addFunction(callback: (...args: number[]) => number, signature: string): number;
+    function removeFunction(pointer: number): void;
     let HEAPU8: Uint8Array;
 }
 interface WasmModule {
@@ -39,6 +41,7 @@ interface WasmModule {
   _free(_0: number): void;
   _w_rgb(_0: number, _1: number): number;
   _w_jpeg(_0: number, _1: number, _2: number): number;
+  _w_rgb_chunked(callback: number, scratch: number, capacity: number, depth: number): number;
   _w_rgb_integer(_0: number, _1: number, _2: number, _3: number): number;
   _w_error(): number;
   _w_data(): number;
