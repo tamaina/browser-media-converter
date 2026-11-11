@@ -1,5 +1,5 @@
 // Compile-only API contracts, checked with test/tsconfig.json.
-import type {ChunkedRgbInput} from '../src/api.ts';
+import type {ChunkedRgbInput, AnimationInput, AnimationFrame} from '../src/api.ts';
 const base={width:1,height:1,format:'RGB' as const};
 const u8: ChunkedRgbInput={...base,provideRect:()=>new Uint8Array(3)};
 const clamped: ChunkedRgbInput={...base,depth:8,provideRect:()=>new Uint8ClampedArray(3)};
@@ -18,3 +18,9 @@ const bitDepth: ChunkedRgbInput={...f32,bitDepth:8};
 // @ts-expect-error full-buffer and chunked source are exclusive
 const data: ChunkedRgbInput={...clamped,data:new Uint8Array(3)};
 void [u8,clamped,u16,f32,badArray,missingDepth,alpha,storage,bitDepth,data];
+
+// @ts-expect-error animation frames require packed data, never a provider
+const animatedFrame: AnimationFrame={data:new Uint8Array(3),durationMs:10,provideRect:u8.provideRect};
+// @ts-expect-error chunked sources cannot be used as animation common input
+const animatedInput: AnimationInput={...u8,frames:[{data:new Uint8Array(3),durationMs:10}]};
+void [animatedFrame,animatedInput];
