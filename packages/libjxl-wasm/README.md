@@ -147,24 +147,34 @@ const animation = encoder.encodeAnimation({
 
 All frames share dimensions, channel count, source depth and colour settings.
 U8/U8Clamped, full-range U16 and Float32 inputs follow `encodeRgb` semantics,
-including straight alpha and ICC fallback. Frames replace the entire canvas.
+including straight alpha and ICC fallback. Frames replace the entire canvas
+without inter-frame reuse; output may be much larger than the source GIF/APNG.
 `loops` is the JPEG XL loop count (0 = infinite, positive = total plays), not
 necessarily the loop field of a source GIF/APNG. Durations must be positive and
 finite; they round to milliseconds with a minimum of 1 and maximum of uint32.
-Limits: 1–256 frames, 4 megapixels per frame, 64 MiB combined packed source bytes.
-Planar/HDR animation and animation XYB observation are unsupported.
+Limits: 1–256 frames, 4 megapixels per frame. Source frames are copied into WASM
+one at a time; encoded output chunks accumulate until the file is assembled.
+Planar/HDR animation, animation XYB observation (`observe`) and `rgbViaPlanar`
+are unsupported. The latter two options are rejected. `AnimationFrame` and
+`AnimationEncodeOptions` are exported; `frames` accepts readonly arrays.
 
 The bridge creates one encoder and CMS per sequence. `JxlBasicInfo.have_animation`
 is true, ticks per second are `1000/1`, and `num_loops` is `loops`. Each
 `JxlFrameHeader.duration` is the rounded `durationMs`. Only the final frame calls
 `JxlEncoderCloseFrames` / `JxlEncoderCloseInput`; the owned output chunks are
-concatenated into one codestream. Failure releases encoder/CMS state, and ICC
-fallback restarts the whole sequence with a common sRGB header.
+concatenated into one JPEG XL file (bare codestream or container). Failure releases
+encoder/CMS state, and ICC fallback restarts the whole sequence with a common sRGB header.
 `encoder.stats` adds `frameCount`, `loops` and `durationsMs`; `encodeMs` and
-`totalMs` cover the sequence, while other detailed counters describe the final frame.
+`totalMs` cover the sequence, and `heapBefore` is sampled before the sequence
+begins. Failed animations restore the previous stats. Other detailed counters
+describe the final frame.
 
-Run `pnpm test:api` here after building native headers and WASM. The Node suite
-compiles `tools/inspect_animation.cc` with g++ and decodes via the independent
-system `/usr/lib/x86_64-linux-gnu/libjxl.so.0.11`; it checks frame counts, timing,
-loop metadata, replacement RGBA pixels, error recovery and still-image reuse.
+Run `pnpm test:api` here after building WASM. Still-image and WASM-only animation
+checks need no native toolchain. Independent decode checks lazily compile
+`tools/inspect_animation.cc` with `CXX` (default `c++`). They use the local
+`build/native/lib/libjxl.so` if present, otherwise `pkg-config --cflags --libs libjxl`.
+Set `JXL_LIBRARY` to a libjxl library file and `JXL_INCLUDE` to its header directory
+to override local discovery. Missing compiler, headers or library cause only the
+native decode checks to skip with a diagnostic. The decoder checks frame counts,
+timing, loop metadata, RGB/RGBA pixels and valid RGB/Gray ICC sequences.
 Playback in browser image renderers is not covered by this Node decoder test.

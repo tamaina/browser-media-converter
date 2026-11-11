@@ -52,16 +52,23 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export interface AnimationFrame {
+  data: RgbInput['data'];
+  /** Positive finite; rounded to ms, minimum 1 ms, maximum uint32. */
+  durationMs: number;
+}
+/** Animation does not support XYB observation or the planar RGB reference path. */
+export type AnimationEncodeOptions = Omit<EncodeOptions, 'observe' | 'rgbViaPlanar'> & {observe?: never; rgbViaPlanar?: never};
 /** Already-decoded, composited full-canvas frames; shared colour settings. */
 export interface AnimationInput extends Omit<RgbInput, 'data'> {
   /** Total plays; 0 (default) means infinite. */
   loops?: number;
-  /** 1..256 frames, at most 64 MiB total packed source bytes. Same source depth and channel count. */
-  frames: {data: RgbInput['data']; /** Positive finite; rounded to ms, minimum 1 ms, maximum uint32. */ durationMs: number}[];
+  /** 1..256 frames, at most 4 megapixels each. Same source depth and channel count. */
+  frames: readonly AnimationFrame[];
 }
 export interface Encoder {
   /** Packed SDR RGB(A) animation. No GIF/APNG decoding, disposal or blending. */
-  encodeAnimation(input: AnimationInput, options?: EncodeOptions): Encoded;
+  encodeAnimation(input: AnimationInput, options?: AnimationEncodeOptions): Encoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
@@ -77,6 +84,9 @@ export type ModuleOptions = Parameters<typeof createModule>[0] & {
   [key: string]: unknown;
 };
 export interface EncoderStats {
+  frameCount?: number;
+  loops?: number;
+  durationsMs?: number[];
   colorResolved?: ColorResolved;
   warnings?: string[];
   [key: string]: unknown;
@@ -297,7 +307,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const {frames, loops = 0, ...common} = input;
     if (!Array.isArray(frames) || !integer(frames.length, 1, 256)) fail('animation requires 1..256 frames');
     if (!integer(loops, 0, 0xffffffff)) fail('loops must be a uint32 (0 means infinite)');
-    let total = 0, sourceDepth: number | undefined, channels: number | undefined;
+    let sourceDepth: number | undefined, channels: number | undefined;
     const durations: number[] = [];
     for (let n = 0; n < frames.length; n++) {
       const frame = frames[n];
@@ -312,12 +322,14 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       if (common.format != null && common.format !== (count === 4 ? 'RGBA' : 'RGB')) fail('RGB format/channel mismatch');
       if (n && (depth !== sourceDepth || count !== channels)) fail('animation frames must share source depth and channel count');
       sourceDepth = depth; channels = count;
-      total += data.byteLength;
-      if (total > 67108864) fail('animation source cap: 64 MiB');
       if (typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs <= 0 || Math.round(durationMs) > 0xffffffff) fail('durationMs must be positive finite and round to uint32 milliseconds');
       durations.push(Math.max(1, Math.round(durationMs)));
     }
     if (o.observe) fail('animation XYB observation is unsupported');
+    if (o.rgbViaPlanar !== undefined) fail('animation rgbViaPlanar is unsupported');
+    // run() replaces stats and mutates totalMs even on failure. Keep an owned snapshot.
+    const previousStats = {...stats};
+    const heapBefore = m.HEAPU8.buffer.byteLength;
     const start = performance.now();
     const chunks: Encoded[] = [];
     let size = 0, encodeMs = 0, resultStats: EncoderStats | undefined;
@@ -331,7 +343,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       const bytes = new Uint8Array(size);
       let offset = 0;
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-      resultStats = {...stats, encodeMs, totalMs:performance.now()-start, frameCount:frames.length, loops, durationsMs:durations};
+      resultStats = {...stats, heapBefore, encodeMs, totalMs:performance.now()-start, frameCount:frames.length, loops, durationsMs:durations};
       // Every frame shares one colour header, so the last frame's resolution applies to all.
       const last = chunks[chunks.length - 1];
       return Object.assign(bytes, {colorResolved:last.colorResolved, warnings:last.warnings});
@@ -342,11 +354,11 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       const clean = <T extends ColorOptions>(object: T) => {const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object; return rest;};
       const bytes = encodeAnimation({...clean(common), frames, loops}, {...clean(o), iccFallback:'error'});
       bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
-      resultStats = stats;
+      resultStats = {...stats, heapBefore, totalMs:performance.now()-start};
       return bytes;
     } finally {
       m._w_animation_end();
-      if (resultStats) stats = resultStats;
+      stats = resultStats ?? previousStats;
     }
   }
   return {encodeAnimation,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{

@@ -254,25 +254,36 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       header.layer_info.blend_info.blendmode=JXL_BLEND_REPLACE;
       check(JxlEncoderSetFrameHeader(settings,&header));
       const size_t pixels=size_t(c->width)*c->height;
-      std::vector<float> color(pixels*3);
-      if(rgb)std::copy_n(rgb,pixels*3,color.data());
-      else if(fill(opaque,0,0,c->width,c->height,color.data(),color.size()))
-        throw std::runtime_error("RGB samples must be finite nominal-range");
-      const size_t channels=(source.gray?1:3)+(alpha.data?1:0);
-      std::vector<float> packed(pixels*channels);
-      for(size_t i=0;i<pixels;i++) {
-        for(size_t k=0;k<(source.gray?1u:3u);k++)packed[i*channels+k]=color[i*3+k];
-        if(alpha.data) {
-          const auto* p=alpha.data+(i/c->width)*alpha.stride+(i%c->width)*alpha.pixel_stride;
-          float v;
-          if(alpha.depth==32)std::memcpy(&v,p,4);
-          else v=float(double(alpha.depth==8?p[0]:unsigned(p[0])+(unsigned(p[1])<<8))/double((1u<<alpha.depth)-1));
-          if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("alpha must be finite nominal-range");
-          packed[i*channels+channels-1]=v;
+      const size_t color_channels=source.gray?1:3;
+      const size_t channels=color_channels+(alpha.data?1:0);
+      // Borrow float RGB directly; otherwise pack using just one RGB scratch row.
+      // libjxl copies the submitted buffer before this call returns.
+      std::vector<float> packed;
+      const float* samples=rgb;
+      if(!rgb || source.gray || alpha.data) {
+        packed.resize(pixels*channels);
+        std::vector<float> row_rgb(rgb?0:size_t(c->width)*3);
+        for(size_t y=0;y<c->height;y++) {
+          const float* color=rgb?rgb+y*c->width*3:row_rgb.data();
+          if(!rgb && fill(opaque,0,y,c->width,1,row_rgb.data(),row_rgb.size()))
+            throw std::runtime_error("RGB samples must be finite nominal-range");
+          for(size_t x=0;x<c->width;x++) {
+            const size_t i=y*c->width+x;
+            for(size_t k=0;k<color_channels;k++)packed[i*channels+k]=color[x*3+k];
+            if(alpha.data) {
+              const auto* p=alpha.data+y*alpha.stride+x*alpha.pixel_stride;
+              float v;
+              if(alpha.depth==32)std::memcpy(&v,p,4);
+              else v=float(double(alpha.depth==8?p[0]:unsigned(p[0])+(unsigned(p[1])<<8))/double((1u<<alpha.depth)-1));
+              if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("alpha must be finite nominal-range");
+              packed[i*channels+channels-1]=v;
+            }
+          }
         }
+        samples=packed.data();
       }
       JxlPixelFormat f{uint32_t(channels),JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};
-      check(JxlEncoderAddImageFrame(settings,&f,packed.data(),packed.size()*sizeof(float)));
+      check(JxlEncoderAddImageFrame(settings,&f,samples,pixels*channels*sizeof(float)));
       if(animation.last) {JxlEncoderCloseFrames(enc.get());JxlEncoderCloseInput(enc.get());}
     } else if(rgb && !observed_reference) {
       JxlPixelFormat f{3,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};

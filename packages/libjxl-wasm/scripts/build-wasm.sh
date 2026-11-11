@@ -16,6 +16,8 @@ cargo rustc --lib --release --locked --jobs 1 \
 PLANAR_SESSION_LIB="$CARGO_TARGET_DIR/wasm32-unknown-emscripten/release/libjxl_planar_session.a"
 fetch_libjxl
 cmake="${CMAKE:-$HOME/opt/cmake-3.31.6-linux-x86_64/bin/cmake}"
+# Keep the CMake install prefix aligned with the selected Emscripten cache
+# sysroot (including custom caches). This build does not run an install step.
 emcmake "$cmake" -S build/libjxl -B build/wasm-codec \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
   -DCMAKE_INSTALL_PREFIX="$EM_CACHE/sysroot" \
