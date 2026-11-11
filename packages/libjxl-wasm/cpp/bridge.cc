@@ -1,6 +1,6 @@
 // MIT experiment: small C ABI over patched BSD libjxl, no image-file IO.
 // Colour: the Rust CMS (rust/cms.rs) is installed
-// through the stock JxlEncoderSetCms; libjxl colour code is unpatched.
+// through JxlEncoderSetCms, including the patched JPEG ICC header path.
 #include <jxl/cms_interface.h>
 #include <jxl/encode.h>
 #include <algorithm>
@@ -78,6 +78,7 @@ struct Source {
   size_t capture_width=0,capture_height=0;
   std::vector<uint8_t> captured_pixels;
   std::map<const void*,std::vector<float>> buffers;
+  std::string failure;
 };
 #ifdef __EMSCRIPTEN__
 extern float wasm_distance;
@@ -95,19 +96,21 @@ static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* 
     s.result.peak_rgb_bytes=std::max(s.result.peak_rgb_bytes,s.live);
     *stride=w*(s.gray?1:3)*sizeof(float); const void* p=pixels.data();
     s.buffers.emplace(p,std::move(pixels)); return p;
-  } catch (...) { s.failed=true; return nullptr; }
+  } catch (const std::exception& e) { s.failed=true; s.failure=e.what(); return nullptr; }
+  catch (...) { s.failed=true; s.failure="pixel callback failed"; return nullptr; }
 }
 static int row(void* opaque,size_t x,size_t y,size_t w,float* r,float* g,float* b) noexcept {
   auto& s=*static_cast<Source*>(opaque);
   try {
     std::vector<float> pixels(w*3);
-    if(s.fill(s.opaque,x,y,w,1,pixels.data(),pixels.size())) return 1;
+    if(s.fill(s.opaque,x,y,w,1,pixels.data(),pixels.size())) { s.failed=true; return 1; }
     ++s.result.callbacks;
     // Packed row plus encoder's three planar scratch rows, excluding padding.
     s.result.peak_rgb_bytes=std::max(s.result.peak_rgb_bytes,w*6*sizeof(float));
     for(size_t i=0;i<w;++i) { r[i]=pixels[3*i];g[i]=pixels[3*i+1];b[i]=pixels[3*i+2]; }
     return 0;
-  } catch(...) { return 1; }
+  } catch(const std::exception& e) { s.failed=true; s.failure=e.what(); return 1; }
+  catch(...) { s.failed=true; s.failure="row callback failed"; return 1; }
 }
 static void observe(void* opaque,size_t row_x,size_t row_y,size_t w,const float* x,const float* y,const float* b) {
   auto& source=*static_cast<Source*>(opaque);
@@ -151,7 +154,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
        (source_exif_size && !source_exif) || (source_xmp_size && !source_xmp) ||
        source_orientation<1 || source_orientation>8)
       throw std::runtime_error("metadata size/pointer/orientation limit");
-    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
+    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}, {}};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
@@ -227,7 +230,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
-    if(!settings) throw std::runtime_error("frame settings allocation failed");
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
     #ifdef __EMSCRIPTEN__
     check(JxlEncoderSetFrameDistance(settings,wasm_distance));
     check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,wasm_effort));
@@ -277,7 +280,8 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
             *stride=w*sizeof(float);const void* p=values.data();
             s.live+=values.size()*sizeof(float);
             s.buffers.emplace(p,std::move(values));return p;
-          }catch(...){s.failed=true;return nullptr;}
+          }catch(const std::exception& e){s.failed=true;s.failure=e.what();return nullptr;}
+          catch(...){s.failed=true;s.failure="alpha callback failed";return nullptr;}
         };
       }
       input.experimental_borrowed=true;
@@ -289,18 +293,19 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       if(input.experimental_yuv && (c->transfer==13 || c->transfer==1 || c->transfer==1001 || c->transfer==8))
         input.experimental_fill_row=nullptr;
       check(JxlEncoderAddChunkedFrame(settings,JXL_TRUE,input));
-      if(source.failed) throw std::runtime_error("planar region conversion failed");
+      if(source.failed) throw std::runtime_error(source.failure.empty()?"planar region conversion failed":source.failure);
     }
     std::vector<uint8_t> out(4096); size_t used=0;
     for(;;) {
       auto* next=out.data()+used; size_t available=out.size()-used;
       auto status=JxlEncoderProcessOutput(enc.get(),&next,&available); used=out.size()-available;
+      if(source.failed) throw std::runtime_error(source.failure.empty()?"planar region conversion failed":source.failure);
       if(status==JXL_ENC_SUCCESS) break;
       if(status!=JXL_ENC_NEED_MORE_OUTPUT) throw std::runtime_error("libjxl output failed");
       out.resize(out.size()*2);
     }
     result->data=static_cast<uint8_t*>(std::malloc(used));
-    if(!result->data) throw std::runtime_error("output allocation failed");
+    if(!result->data) throw std::runtime_error("OOM: output allocation failed");
     std::memcpy(result->data,out.data(),used); result->size=used;
     if(!source.captured.empty()) {
       if(std::find(source.captured_pixels.begin(),source.captured_pixels.end(),0)!=source.captured_pixels.end())
@@ -336,7 +341,7 @@ static int packed_fill(void* opaque,size_t x,size_t y,size_t w,size_t h,float* o
     const size_t at=((y+j)*in.width+x+i)*in.channels+k;
     if constexpr(depth==32) {
       const float v=static_cast<const float*>(in.p)[at];
-      if(!std::isfinite(v) || v<0 || v>1)return 1;
+      if(!std::isfinite(v) || v<0 || v>1)throw std::runtime_error("RGB must be finite nominal-range");
       out[(j*w+i)*3+k]=v;
     } else {
       const unsigned v=depth==8?static_cast<const uint8_t*>(in.p)[at]:static_cast<const uint16_t*>(in.p)[at];
@@ -366,4 +371,64 @@ extern "C" int bridge_rgb_integer(const Config* c,const void* data,size_t count,
   const Fill fill=depth==8?packed_fill<8>:depth==16?packed_fill<16>:packed_fill<32>;
   const Alpha alpha=channels==4?Alpha{static_cast<const uint8_t*>(data)+3*(depth/8),size_t(c->width)*4*(depth/8),size_t(4*(depth/8)),unsigned(depth)}:Alpha{};
   return encode(c,&in,fill,nullptr,nullptr,result,error,error_size,alpha);
+}
+
+// Lossless JPEG coefficients + reconstruction data. A fresh encoder lets
+// AddJPEGFrame infer uses_original_profile=true (XYB is forbidden by libjxl).
+extern "C" int bridge_jpeg(const uint8_t* jpeg,size_t size,int compress_boxes,
+    Encoded* result,char* error,size_t error_size) {
+  *result={};
+  try {
+    if(!jpeg || !size) throw std::runtime_error("JPEG input is empty");
+    // Keep the CMS alive until after the encoder is destroyed. JPEG coefficients
+    // are never transformed; this CMS only interprets the embedded ICC header.
+    std::unique_ptr<PlanarCms,decltype(&planar_cms_destroy)> cms(
+        planar_cms_create(nullptr,0,0,error,error_size),planar_cms_destroy);
+    if(!cms) throw std::runtime_error("JPEG CMS allocation failed (OOM)");
+    std::unique_ptr<JxlEncoder,decltype(&JxlEncoderDestroy)> enc(JxlEncoderCreate(nullptr),JxlEncoderDestroy);
+    if(!enc) throw std::runtime_error("OOM: encoder allocation failed");
+    JxlEncoderSetCms(enc.get(),planar_cms_interface(cms.get()));
+    auto check=[&](JxlEncoderStatus status) {
+      if(status==JXL_ENC_SUCCESS) return;
+      const char* reason;
+      switch(JxlEncoderGetError(enc.get())) {
+        case JXL_ENC_ERR_BAD_INPUT: reason="BAD_INPUT: invalid JPEG or unsupported ICC profile"; break;
+        case JXL_ENC_ERR_JBRD: reason="JBRD: JPEG reconstruction data cannot be represented"; break;
+        case JXL_ENC_ERR_OOM: reason="OOM: encoder out of memory"; break;
+        case JXL_ENC_ERR_NOT_SUPPORTED: reason="NOT_SUPPORTED: JPEG feature is unsupported"; break;
+        case JXL_ENC_ERR_API_USAGE: reason="API_USAGE: invalid encoder configuration"; break;
+        default: reason="GENERIC: internal encoder failure"; break;
+      }
+      throw std::runtime_error(std::string("lossless JPEG recompression failed (")+reason+")");
+    };
+    check(JxlEncoderStoreJPEGMetadata(enc.get(),JXL_TRUE));
+    auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
+    if(!settings) throw std::runtime_error("OOM: frame settings allocation failed");
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_EFFORT,3));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_EXIF,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_KEEP_XMP,1));
+    check(JxlEncoderFrameSettingsSetOption(settings,JXL_ENC_FRAME_SETTING_JPEG_COMPRESS_BOXES,compress_boxes));
+    // Also interprets EXIF orientation and adds the matching Exif box.
+    check(JxlEncoderAddJPEGFrame(settings,jpeg,size));
+    JxlEncoderCloseInput(enc.get());
+    std::vector<uint8_t> bytes(4096);
+    size_t used=0;
+    for(;;) {
+      auto* next=bytes.data()+used;
+      size_t available=bytes.size()-used;
+      auto status=JxlEncoderProcessOutput(enc.get(),&next,&available);
+      used=bytes.size()-available;
+      if(status==JXL_ENC_SUCCESS) break;
+      if(status!=JXL_ENC_NEED_MORE_OUTPUT) check(status);
+      bytes.resize(bytes.size()*2);
+    }
+    auto* data=static_cast<uint8_t*>(std::malloc(used));
+    if(!data) throw std::runtime_error("OOM: output allocation failed");
+    std::memcpy(data,bytes.data(),used);
+    result->data=data;result->size=used;
+    return 0;
+  } catch(const std::exception& e) {
+    if(error && error_size) std::snprintf(error,error_size,"%s",e.what());
+    return 1;
+  }
 }

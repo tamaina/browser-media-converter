@@ -31,7 +31,7 @@ if (!nativeSkip) execFileSync(process.env.CXX ?? 'c++', ['-std=c++17', '-O2',
   '-I', include, '-I', join(root, 'build/native/lib/include'),
   join(root, 'tools/inspect_metadata.cc'), library, `-Wl,-rpath,${resolve(library, '..')}`, '-o', inspector],
   {stdio:'inherit'});
-const test = (name: string, fn: () => unknown) => nodeTest(name, {skip:nativeSkip}, fn);
+const test = (name: string, fn: () => void | Promise<void>) => nodeTest(name, {skip:nativeSkip}, fn);
 const wasm = await readFile(join(root, 'build/wasm/codec.wasm'));
 const encoder = await createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));

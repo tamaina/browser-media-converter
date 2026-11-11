@@ -3,6 +3,7 @@
 #include <hwy/targets.h>
 #include <hwy/detect_targets.h>
 #include <cstdlib>
+#include <cstdio>
 // Internal transfer codes: 1 = BT.1886 Lb=0; 13 = sRGB; 1001 = inverse709.
 static PlanarInput input{};
 static PlanarPlane alpha{};
@@ -13,6 +14,7 @@ int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" int bridge_jpeg(const uint8_t*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_metadata(const uint8_t*,size_t,const uint8_t*,size_t,int,int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
@@ -54,7 +56,8 @@ int w_encode(int mode) {
   for(auto& t:times)t=0;
   double start=planar_clock_ms();
   int status=planar_create_profile(&input,&session,mode!=0 && validation==0?2:validation,times,error,sizeof(error));
-  if(!status) status=planar_set_bit_depth(session,output_depth);
+  if(!status && (status=planar_set_bit_depth(session,output_depth)))
+    std::snprintf(error,sizeof(error),"output bit depth rejected");
   times[5]=times[2];
   times[2]=planar_clock_ms()-start;
   float* rgb=nullptr;
@@ -62,7 +65,9 @@ int w_encode(int mode) {
     start=planar_clock_ms();
     size_t count=size_t(input.width)*input.height*3;
     rgb=static_cast<float*>(std::malloc(count*sizeof(float)));
-    status=!rgb || planar_region(session,0,0,input.width,input.height,rgb,count);
+    if(!rgb) {status=1;std::snprintf(error,sizeof(error),"RGB allocation failed");}
+    else if((status=planar_region(session,0,0,input.width,input.height,rgb,count)))
+      std::snprintf(error,sizeof(error),"planar region conversion failed");
     if(!status && mode==1) planar_quantize_rgb_depth(rgb,count,input.depth);
     times[3]=planar_clock_ms()-start;
   }
@@ -74,7 +79,9 @@ int w_encode(int mode) {
     } else status=planar_encode_alpha(session,alpha.data?&alpha:nullptr,&output,error,sizeof(error));
   }
   times[4]=planar_clock_ms()-start;
-  std::free(rgb);planar_destroy(session);return status;
+  std::free(rgb);planar_destroy(session);
+  if(status && !error[0]) std::snprintf(error,sizeof(error),"planar encode failed");
+  return status;
 }
 int w_rgb(const float* p,size_t count) {
   PlanarRgbConfig c{input.width,input.height,input.primaries,input.transfer,input.intensity,uint32_t(output_depth)};
@@ -90,10 +97,17 @@ int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
   const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
+int w_jpeg(const uint8_t* p,size_t size,int compress_boxes) {
+  planar_free(&output);error[0]=0;
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_jpeg(p,size,compress_boxes,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
 const char* w_error(){return error;}
 const uint8_t* w_data(){return output.data;}
 size_t w_size(){return output.size;}
 size_t w_lanes(){return output.simd_lanes;}
 const char* w_target(){return hwy::TargetName(HWY_STATIC_TARGET);}
-void w_free(){planar_free(&output);alpha={};bridge_icc(nullptr,0);}
+void w_free(){planar_free(&output);alpha={};bridge_icc(nullptr,0);bridge_metadata(nullptr,0,nullptr,0,1,1);}
 }
