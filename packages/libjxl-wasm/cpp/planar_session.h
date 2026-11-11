@@ -43,6 +43,8 @@ int rgb_encode(const PlanarRgbConfig*,const float* rgb,size_t float_count,Planar
 // Source pointers stay valid through the synchronous call; no opacity scan.
 int rgb_encode_packed(const PlanarRgbConfig*,const uint8_t*,size_t,int depth,int channels,PlanarEncoded*,char*,size_t);
 int rgb_encode_packed_icc(const PlanarRgbConfig*,const uint8_t*,size_t,int depth,int channels,const uint8_t* icc,size_t,PlanarEncoded*,char*,size_t);
+// JPEG bytes only: preserves EXIF/XMP and stores bit-exact reconstruction data.
+// Fresh encoder, non-XYB; result must be empty and is released by planar_free.
 void planar_free(PlanarEncoded*);
 #ifdef __cplusplus
 }

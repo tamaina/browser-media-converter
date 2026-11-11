@@ -22,7 +22,9 @@ target/                    ignored Cargo outputs
 `patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
 SIMD kernel. `patches/libjxl-external-cms.patch` adds `JPEGXL_EXTERNAL_CMS`:
 encoder builds use a rejecting default CMS stub and the bridge installs the
-Rust CMS with `JxlEncoderSetCms`. The CMS uses moxcms pinned to `=0.9.2` for
+Rust CMS with `JxlEncoderSetCms`. `patches/libjxl-jpeg-cms.patch` routes JPEG
+coefficient parsing and colour setup through that installed CMS.
+The CMS uses moxcms pinned to `=0.9.2` for
 LUT ICC profiles. Only Highway and Brotli submodules are needed; populated
 source trees are reused without a network fetch.
 
@@ -87,7 +89,7 @@ packages' `test:package` scripts; Electron-only tests are not included.
 
 For optional native tools, run `bash scripts/build-native.sh` (one job by
 default). This builds the patched encoder library, a separate reference decoder
-using system LCMS2, and `build/decode-float`. To link the native Rust cdylib,
+using system LCMS2, and `build/decode-float` plus `build/jpeg-info` (required by the JPEG tests). To link the native Rust cdylib,
 set `JXL_INCLUDE="$PWD/build/libjxl/lib/include"` and
 `JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"` before `cargo build --locked --jobs 1`.
 `JXL_LIBRARY` is required when `JXL_INCLUDE` is set; never point it at an
@@ -181,3 +183,66 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+## Lossless JPEG recompression
+
+`encoder.encodeJpeg(jpegBytes: Uint8Array, {compressBoxes?: boolean})` returns
+an owned `Uint8Array` with `colorResolved.policy: 'jpeg-lossless'` and empty
+`warnings`. `compressBoxes` defaults to true (Brotli metadata box compression).
+This uses `JxlEncoderStoreJPEGMetadata(1)` + `JxlEncoderAddJPEGFrame`: JPEG
+coefficients are recompressed losslessly, and reconstruction data enables a
+bit-exact return to the original JPEG with `djxl input.jxl output.jpg`.
+The output need not be smaller than the input, especially for tiny JPEGs.
+
+| API | Input | Output |
+| --- | --- | --- |
+| `encodeJpeg(bytes, options?)` | Original JPEG bytes, no pixel decode | Non-XYB JXL container with JPEG reconstruction data |
+
+Both builds enable `JPEGXL_ENABLE_TRANSCODE_JPEG=ON`, retaining EXTERNAL_CMS
+and the existing patches. This uses libjxl's internal JPEG bitstream parser;
+system libjpeg headers/libraries are not required. A fresh encoder lets
+AddJPEGFrame infer `uses_original_profile=true`; XYB is forbidden.
+
+EXIF/XMP are always retained using `JPEG_KEEP_EXIF`/`JPEG_KEEP_XMP` frame
+settings. libjxl requires both for reconstruction, so metadata removal is not
+exposed. AddJPEGFrame's `InterpretExif` applies EXIF orientation to codestream
+orientation and preserves the matching Exif box without rewriting orientation
+or rotating coefficients. No JS-side rotation or EXIF edits are performed.
+Effort is explicitly fixed at 3, matching the pixel API default. libjxl also
+supports other efforts for JPEG recompression (speed/size only); this API does
+not expose them. Only `compressBoxes` is configurable. Distance, effort, XYB
+and pixel colour options are rejected by this API.
+
+Inputs are limited to 64 MiB, 4,194,304 pixels and 8192 pixels per axis, matching
+the pixel API's dimension policy. A bounded SOF marker walk enforces dimensions
+before copying input into WASM. These caps reduce peak memory use; they do not
+guarantee allocation success. The synchronous encoder can block the calling
+thread; use a Worker for interactive applications.
+
+Only JPEGs supported by libjxl's coefficient parser can be recompressed;
+malformed/unsupported input throws. The JPEG ICC path is patched to use the
+installed Rust CMS instead of the EXTERNAL_CMS rejecting default. Embedded
+sRGB and Display-P3 matrix/TRC profiles can be interpreted without transforming
+JPEG coefficients, and the original ICC bytes are preserved for reconstruction.
+Profiles outside the Rust CMS's supported header interpretation may still be
+rejected. There is no silent profile stripping or pixel fallback.
+
+Encoder errors include libjxl's category: `BAD_INPUT` (invalid input or an
+unsupported ICC), `JBRD` (reconstruction data cannot be represented), `OOM`,
+`NOT_SUPPORTED`, `API_USAGE`, or `GENERIC`. Input validation throws TypeError;
+encoder failures throw Error. After a recoverable failed `encodeJpeg`, stats contain
+only the new `totalMs`. As with the pixel methods, an escaping Wasm exception
+poisons the instance and clears stats; all encode methods reject calls after
+poisoning or `dispose()`. JPEG results retain their `colorResolved.policy = 'jpeg-lossless'`;
+statistics expose that value as `stats.jpegColorResolved`. The existing
+`stats.colorResolved?: ColorResolved` remains reserved for pixel encodes.
+
+`pnpm --filter @browser-mc/libjxl-wasm test:api` (after a WASM build)
+covers baseline, progressive, grayscale, EXIF orientation 6, XMP, sRGB/Display-P3 ICC,
+4:4:4 output-buffer growth, 4:2:2 restart markers and trailing data, CMYK
+rejection, input limits, errors, statistics and subsequent RGB calls.
+Byte-exact reconstruction and independent header inspection use optional
+native tools: `DJXL` and `JPEG_INFO` override executable paths (or PATH names),
+otherwise `build/native/tools/djxl` and `build/jpeg-info` are used. Missing
+tools skip only their verification subtests with a reason; WASM encoding still
+runs. Test temporary files respect `TMPDIR`.

@@ -14,6 +14,7 @@ int wasm_effort=3;
 static double times[6]{};
 static int validation=0;
 static int output_depth=8;
+extern "C" int bridge_jpeg(const uint8_t*,size_t,int,PlanarEncoded*,char*,size_t);
 extern "C" void bridge_diagnostics(int);
 extern "C" void bridge_icc(const uint8_t*,size_t);
 extern "C" int bridge_icc_path();
@@ -89,6 +90,13 @@ int w_rgb_integer(const void* p,size_t count,int depth,int channels) {
   for(auto& t:times)t=0;
   const double start=planar_clock_ms();
   const int status=bridge_rgb_integer(&c,p,count,depth,channels,&output,error,sizeof(error));
+  times[4]=planar_clock_ms()-start;return status;
+}
+int w_jpeg(const uint8_t* p,size_t size,int compress_boxes) {
+  planar_free(&output);error[0]=0;
+  for(auto& t:times)t=0;
+  const double start=planar_clock_ms();
+  const int status=bridge_jpeg(p,size,compress_boxes,&output,error,sizeof(error));
   times[4]=planar_clock_ms()-start;return status;
 }
 const char* w_error(){return error;}

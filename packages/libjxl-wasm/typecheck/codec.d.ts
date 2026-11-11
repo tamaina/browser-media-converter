@@ -34,6 +34,7 @@ interface WasmModule {
   _malloc(_0: number): number;
   _free(_0: number): void;
   _w_rgb(_0: number, _1: number): number;
+  _w_jpeg(_0: number, _1: number, _2: number): number;
   _w_rgb_integer(_0: number, _1: number, _2: number, _3: number): number;
   _w_error(): number;
   _w_data(): number;

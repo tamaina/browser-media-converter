@@ -53,7 +53,17 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export interface JpegEncodeOptions {
+  /** Compress metadata boxes with Brotli (default true). EXIF/XMP are always kept. */
+  compressBoxes?: boolean;
+}
+export type JpegEncoded = Uint8Array & {
+  colorResolved: {policy: 'jpeg-lossless'; source: {profile: 'jpeg'}};
+  warnings: string[];
+};
 export interface Encoder {
+  /** Bit-exact JPEG recompression, effort 3. EXIF/XMP kept. Max 64 MiB, 4 MP, 8192 per axis. */
+  encodeJpeg(jpegBytes: Uint8Array, options?: JpegEncodeOptions): JpegEncoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
@@ -72,6 +82,8 @@ export type ModuleOptions = Parameters<typeof createModule>[0] & {
 };
 export interface EncoderStats {
   colorResolved?: ColorResolved;
+  /** JPEG coefficient recompression does not resolve pixel colour fields. */
+  jpegColorResolved?: JpegEncoded['colorResolved'];
   warnings?: string[];
   [key: string]: unknown;
 }
@@ -306,7 +318,62 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       return bytes as Encoded;
     } finally {if (module) {m._w_free();for(const p of pointers)m._free(p);}}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+  function encodeJpeg(jpeg: Uint8Array, options: JpegEncodeOptions = {}): JpegEncoded {
+    if (!module) throw Error(`Encoder is ${state}`);
+    const start = performance.now();
+    stats = {};
+    let pointer = 0;
+    try {
+      if (!(jpeg instanceof Uint8Array) || jpeg.length === 0) fail('JPEG input must be a nonempty Uint8Array');
+      if (jpeg.length > 64 * 1024 * 1024) fail('JPEG input size limit: 64 MiB');
+      if (options === null || typeof options !== 'object' || Array.isArray(options)) fail('JPEG options must be an object');
+      for (const key of Object.keys(options)) {
+        if (key !== 'compressBoxes') fail(`unsupported JPEG option: ${key}; effort is fixed at 3; lossless recompression preserves EXIF/XMP and does not accept pixel or lossy options`);
+      }
+      if (options.compressBoxes !== undefined && typeof options.compressBoxes !== 'boolean') fail('compressBoxes must be boolean');
+      // Walk bounded marker segments before allocating in WASM. Do not scan
+      // entropy data: the SOF must precede SOS; libjxl validates the full JPEG.
+      const badHeader = () => fail('BAD_INPUT: invalid JPEG header');
+      if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) badHeader();
+      let foundSof = false;
+      for (let pos = 2; pos < jpeg.length;) {
+        if (jpeg[pos++] !== 0xff) badHeader();
+        while (jpeg[pos] === 0xff) pos++;
+        const marker = jpeg[pos++];
+        if (marker === 0xda || marker === 0xd9) break;
+        if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+        if (pos + 2 > jpeg.length) badHeader();
+        const length = jpeg[pos] * 256 + jpeg[pos + 1];
+        if (length < 2 || length > jpeg.length - pos) badHeader();
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          if (length < 8) badHeader();
+          const height = jpeg[pos + 3] * 256 + jpeg[pos + 4];
+          const width = jpeg[pos + 5] * 256 + jpeg[pos + 6];
+          if (!width || !height) badHeader();
+          if (width > 8192 || height > 8192 || width * height > 4194304) fail('JPEG dimension limit: 4 megapixels, 8192 per axis');
+          foundSof = true;
+        }
+        pos += length;
+      }
+      if (!foundSof) badHeader();
+      pointer = m._malloc(jpeg.length);
+      if (!pointer) throw Error('OOM: WASM allocation failed');
+      m.HEAPU8.set(jpeg, pointer);
+      if (m._w_jpeg(pointer, jpeg.length, +(options.compressBoxes ?? true))) throw Error(m.UTF8ToString(m._w_error()));
+      const bytes = m.HEAPU8.slice(m._w_data(), m._w_data() + m._w_size());
+      const colorResolved: JpegEncoded['colorResolved'] = {policy:'jpeg-lossless', source:{profile:'jpeg'}};
+      const result = Object.assign(bytes, {colorResolved, warnings:[] as string[]});
+      stats = {jpegColorResolved:colorResolved, warnings:result.warnings, encodeMs:m._w_time(4)};
+      return result;
+    } finally {
+      if (module) {
+        if (pointer) {m._w_free();m._free(pointer);}
+        stats.totalMs = performance.now() - start;
+      }
+    }
+  }
+
+  return {encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
     try{return run(i,o,true);}catch(error){
       if(!module || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
       const clean=<T extends ColorOptions>(object: T)=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
