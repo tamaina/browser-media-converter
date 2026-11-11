@@ -202,8 +202,8 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
   *result={}; result->xyb_hash=14695981039346656037ULL;
   try {
     auto check=[](JxlEncoderStatus s) { if(s!=JXL_ENC_SUCCESS) throw std::runtime_error("libjxl API/encoding failed"); };
-    if((c->transfer==16 || c->transfer==18) && (source_profile || header_mode>=2))
-      throw std::runtime_error("HDR requires enum color encoding; HDR ICC/SDR header override unsupported");
+    if((c->transfer==16 || c->transfer==18) && header_mode>=2)
+      throw std::runtime_error("HDR requires enum color encoding; SDR header override unsupported");
     const float distance=frame_distance();
     const bool lossless=distance==0;
     const int effort=frame_effort();
@@ -297,10 +297,17 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
           JxlColorEncoding target; JxlColorEncodingSetToSRGB(&target,JXL_FALSE);
           target.primaries=header_mode==2?JXL_PRIMARIES_2100:JXL_PRIMARIES_P3;
           check(JxlEncoderSetColorEncoding(enc.get(),&target));
+        } else if(c->transfer==16 || c->transfer==18) {
+          // HDR CICP describes the pixels, including for lossless coding.
+          // SetICCProfile retains the dummy TRCs when uses_original_profile is true.
+          JxlColorEncoding hdr; JXL_BOOL cmyk=JXL_FALSE;
+          if(!interface.set_fields_from_icc(interface.set_fields_data,source_profile,source_profile_size,&hdr,&cmyk))
+            throw std::runtime_error("ICC: CMS could not describe HDR CICP");
+          check(JxlEncoderSetColorEncoding(enc.get(),&hdr));
         } else if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
           throw std::runtime_error("ICC: libjxl CMS rejected the profile");
         // Exact mode (1) always embeds; auto embeds unless the CMS described it.
-        source_profile_header=header_mode>=2?0:(lossless || !planar_cms_enum_header(active_cms));
+        source_profile_header=header_mode>=2 || c->transfer==16 || c->transfer==18?0:(lossless || !planar_cms_enum_header(active_cms));
       } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     } // global header is set only once per animation
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);

@@ -668,16 +668,21 @@ impl Context {
         if !is_linear_srgb_target(&output.color_encoding) { return None; }
         let icc = if input.icc_data.is_null() || input.icc_size == 0 { &[][..] }
                   else { unsafe { std::slice::from_raw_parts(input.icc_data, input.icc_size) } };
-        let ce = &input.color_encoding;
+        let mut ce = &input.color_encoding;
         let channels = input.num_channels;
         if let Some(source) = &self.source {
             let header_override = self.mode >= 2 && !source.gray && ce.color_space == CS_RGB;
             let described = self.described.as_ref().is_some_and(|d| same_encoding(d, ce));
             if (self.is_source(icc) || header_override || described) && channels == if source.gray { 1 } else { 3 } {
-                return Some(match &source.kind {
-                    SourceKind::Matrix(m) => Op::Matrix(m.clone(), source.gray),
-                    SourceKind::Lut(t) => Op::Lut(t.clone()),
-                });
+                // CICP is authoritative for HDR, including profiles with dummy TRCs.
+                if let Some(d) = self.described.as_ref().filter(|d| matches!(d.transfer_function, TF_PQ | TF_HLG)) {
+                    ce = d;
+                } else {
+                    return Some(match &source.kind {
+                        SourceKind::Matrix(m) => Op::Matrix(m.clone(), source.gray),
+                        SourceKind::Lut(t) => Op::Lut(t.clone()),
+                    });
+                }
             }
         }
         let tf = tf_of(ce, intensity)?;
@@ -864,9 +869,12 @@ pub unsafe extern "C" fn planar_cms_create(icc: *const u8, size: usize, mode: i3
         if !icc.is_null() && size > 0 {
             let bytes = unsafe { std::slice::from_raw_parts(icc, size) }.to_vec();
             let inspected = inspect(&bytes).map_err(|e| format!("ICC: {e}"))?;
-            if tag_data(&bytes, b"cicp").is_some_and(|t|
-                t.len() >= 12 && &t[..4] == b"cicp" && matches!(t[9], 16 | 18)) {
-                return Err("ICC: HDR PQ/HLG CICP profiles are unsupported".into());
+            let described = describe(&bytes, inspected.gray, inspected.matrix.as_ref());
+            if described.as_ref().is_some_and(|d| matches!(d.transfer_function, TF_PQ | TF_HLG)) {
+                if inspected.gray { return Err("ICC: HDR CICP Gray profiles are unsupported".into()); }
+                if inspected.matrix.is_none() { return Err("ICC: HDR CICP requires a matrix/TRC profile; LUT-only is unsupported".into()); }
+                if mode != 0 { return Err("ICC: HDR CICP requires auto enum header; exact/SDR overrides are unsupported".into()); }
+                ctx.described = described;
             }
             if inspected.gray && mode > 1 { return Err("ICC: Gray profiles cannot select an RGB header target".into()); }
             let kind = match inspected.matrix {
@@ -983,19 +991,61 @@ mod tests {
         icc
     }
     #[test]
-    fn hdr_cicp_fixture_rejects_header_curve_mismatch() {
+    fn hdr_cicp_fixture_uses_enum_eotf_instead_of_dummy_trc() {
         for tf in [16, 18] {
             let icc = hdr_cicp_fixture(tf);
             let inspected = inspect(&icc).unwrap();
             let matrix = inspected.matrix.as_ref().unwrap();
             let described = describe(&icc, false, Some(matrix)).unwrap();
             assert_eq!(described.transfer_function, i32::from(tf));
+            assert!((matrix.curves[0].eval(0.5) - 0.214).abs() < 0.001);
+            let mut error = [0 as c_char; 256];
+            let ctx = unsafe { planar_cms_create(icc.as_ptr(), icc.len(), 0, error.as_mut_ptr(), error.len()) };
+            assert!(!ctx.is_null());
+            let mut enum_ctx = Context { source: None, mode: 0, enum_header: false, described: None, path: 0 };
+            let input = JxlColorProfile { icc_data: icc.as_ptr(), icc_size: icc.len(), color_encoding: described, num_channels: 3 };
+            let output = JxlColorProfile { icc_data: std::ptr::null(), icc_size: 0,
+                color_encoding: JxlColorEncoding { color_space: CS_RGB, white_point: WP_D65, primaries: PR_SRGB, transfer_function: TF_LINEAR, ..Default::default() }, num_channels: 3 };
+            for intensity in [300.0, 1000.0, 10000.0] {
+                let op = unsafe { &mut *ctx }.op_for(&input, &output, intensity).unwrap();
+                assert!(matches!(op, Op::Enum { .. }));
+                let expected_op = enum_ctx.op_for(&input, &output, intensity).unwrap();
+                let mut actual = [0.0; 3];
+                let mut expected = [0.0; 3];
+                assert_eq!(convert(&op, &[0.5; 3], &mut actual), 1);
+                assert_eq!(convert(&expected_op, &[0.5; 3], &mut expected), 1);
+                assert_eq!(actual, expected);
+                let eotf = linearize(tf_of(&input.color_encoding, intensity).unwrap(), 0.5);
+                let expected_gray = if tf == 18 { hlg_ootf_gamma(intensity).map_or(eotf, |g| eotf.powf(g)) } else { eotf };
+                assert!((actual[1] - expected_gray).abs() < 1e-5);
+                assert!((actual[1] - 0.214).abs() > 0.01);
+            }
+            unsafe { planar_cms_destroy(ctx); }
+            for mode in [1, 2, 3] {
+                let ctx = unsafe { planar_cms_create(icc.as_ptr(), icc.len(), mode, error.as_mut_ptr(), error.len()) };
+                assert!(ctx.is_null());
+            }
+        }
+    }
+    #[test]
+    fn hdr_cicp_rejects_lut_only_and_gray() {
+        let base = hdr_lut_profile(1.0);
+        let hdr = hdr_cicp_fixture(16);
+        let mut lut = profile(&[(b"wtpt", tag_data(&base, b"wtpt").unwrap().to_vec()),
+            (b"A2B0", tag_data(&base, b"A2B0").unwrap().to_vec()),
+            (b"cicp", tag_data(&hdr, b"cicp").unwrap().to_vec())]);
+        lut[4..128].copy_from_slice(&base[4..128]);
+        let mut gray = profile(&[(b"wtpt", tag_data(&hdr, b"wtpt").unwrap().to_vec()),
+            (b"kTRC", tag_data(&hdr, b"rTRC").unwrap().to_vec()),
+            (b"cicp", tag_data(&hdr, b"cicp").unwrap().to_vec())]);
+        gray[4..128].copy_from_slice(&hdr[4..128]);
+        gray[16..20].copy_from_slice(b"GRAY");
+        for (icc, reason) in [(lut, "LUT-only"), (gray, "Gray")] {
             let mut error = [0 as c_char; 256];
             let ctx = unsafe { planar_cms_create(icc.as_ptr(), icc.len(), 0, error.as_mut_ptr(), error.len()) };
             assert!(ctx.is_null());
-            assert!(unsafe { std::ffi::CStr::from_ptr(error.as_ptr()) }.to_str().unwrap().contains("ICC: HDR PQ/HLG"));
-            // Actual pixel math uses the ICC sRGB TRC, not PQ/HLG.
-            assert!((matrix.curves[0].eval(0.5) - 0.214).abs() < 0.001);
+            let message = unsafe { std::ffi::CStr::from_ptr(error.as_ptr()) }.to_str().unwrap();
+            assert!(message.starts_with("ICC:") && message.contains(reason), "{message}");
         }
     }
     #[test]

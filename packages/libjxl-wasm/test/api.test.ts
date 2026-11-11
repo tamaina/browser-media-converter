@@ -1251,16 +1251,46 @@ test('CMYK JPEG reports an unsupported coefficient input and recovers', async ()
   assert.ok(encoder.encodeRgb(rgb()).length > 0);
 });
 
-test('ICC matrix/TRC encodes; PQ/HLG CICP ICC rejects or explicitly falls back', () => {
+test('ICC matrix/TRC encodes; HDR CICP overrides dummy TRCs with enum HDR', () => {
   assert.ok(encoder.encodeRgb(rgb({icc:iccFixture()})).length > 0);
   for (const transfer of [16,18] as const) {
-    const input = rgb({icc:iccFixture(transfer)});
-    for (const iccHeader of ['auto','exact','bt2020','p3'] as const) {
-      assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /ICC: HDR PQ\/HLG/);
+    for (const primaries of [9,12]) {
+      const input = rgb({icc:iccFixture(transfer, primaries)});
+      const bytes = encoder.encodeRgb(input);
+      assert.ok(bytes.length > 0);
+      assert.equal(bytes.colorResolved.transfer, transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.primaries, primaries === 9 ? 'bt2020' : 'smpte432');
+      assert.equal(bytes.colorResolved.intensityTarget, transfer === 16 ? 10000 : 1000);
+      assert.equal(bytes.colorResolved.header, 'enum');
+      assert.equal(bytes.colorResolved.matrix,'rgb');
+      assert.equal(bytes.colorResolved.fullRange,true);
+      assert.equal(bytes.colorResolved.chromaSiting,undefined);
+      assert.equal(encoder.encodeRgb(input,{intensityTargetNits:300}).colorResolved.intensityTarget,300);
+      assert.ok(encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])}).length > 0);
+      const lossless=encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])},{lossless:true});
+      assert.ok(lossless.length > 0);
+      assert.equal(lossless.colorResolved.header,'enum');
+      assert.equal(lossless.colorResolved.transfer,transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(encoder.stats.lossless,true);
+      assert.deepEqual([...lossless],[...encoder.encodeRgb({...input,data:new Uint16Array([20000,30000,40000])},{distance:0,bitDepth:16})]);
+      assert.throws(() => encoder.encodeRgb({...input,data:new Uint8Array([100,120,140])}), /8-bit RGB source/);
+      assert.throws(() => encoder.encodeRgb(input,{bitDepth:8}), /HDR output/);
+      for (const iccHeader of ['exact','bt2020','p3'] as const)
+        assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /HDR CICP/);
+      assert.throws(() => encoder.encodeRgb(input, {iccFallback:'srgb'}), /HDR CICP/);
     }
-    const bytes = encoder.encodeRgb(input, {iccFallback:'srgb'});
-    assert.equal(bytes.colorResolved.profile, 'none');
-    assert.ok(bytes.warnings.some(w => /ICC fallback/.test(w)));
+    for (const depth of [10,12] as const) {
+      const input = planar(depth === 10 ? 'I444AP10' : 'I444AP12',depth,transfer === 16 ? 'pq' : 'hlg');
+      delete input.transfer; delete input.primaries;
+      input.icc=iccFixture(transfer);
+      const bytes=encoder.encodePlanarYuv(input);
+      assert.ok(bytes.length > 0);
+      assert.equal(bytes.colorResolved.header,'enum');
+      assert.equal(bytes.colorResolved.transfer,transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.intensityTarget,transfer === 16 ? 10000 : 1000);
+      const explicit=planar(depth === 10 ? 'I444AP10' : 'I444AP12',depth,transfer === 16 ? 'pq' : 'hlg');
+      assert.deepEqual([...bytes],[...encoder.encodePlanarYuv(explicit)]);
+    }
   }
 });
 
@@ -1449,15 +1479,18 @@ test('animation lossless integer depth and per-frame effort semantics', () => {
   }
 });
 
-test('animation HDR ICC rejects and explicit fallback restarts the sequence', () => {
-  const frames = [{data:rgb().data,durationMs:10}, {data:rgb().data,durationMs:20}];
+test('animation HDR CICP uses enum HDR and disallows SDR fallback', () => {
   for (const transfer of [16,18] as const) {
-    const input = {width:1,height:1,frames,icc:iccFixture(transfer)};
-    assert.throws(() => encoder.encodeAnimation(input), /ICC: HDR PQ\/HLG/);
-    const bytes = encoder.encodeAnimation(input, {iccFallback:'srgb'});
-    assert.ok(bytes.warnings.some(w => /ICC fallback/.test(w)));
-    assert.equal(encoder.stats.frameCount, 2);
-    assert.equal(bytes.colorResolved.profile, 'none');
+    for (const data of [rgb().data, new Uint16Array([10000,20000,30000])]) {
+      const frames = [{data,durationMs:10}, {data,durationMs:20}];
+      const input = {width:1,height:1,frames,icc:iccFixture(transfer)};
+      const bytes = encoder.encodeAnimation(input);
+      assert.equal(bytes.colorResolved.transfer, transfer === 16 ? 'pq' : 'hlg');
+      assert.equal(bytes.colorResolved.header, 'enum');
+      assert.equal(encoder.stats.frameCount, 2);
+      assert.throws(() => encoder.encodeAnimation(input, {iccFallback:'srgb'}), /HDR CICP/);
+      assert.throws(() => encoder.encodeAnimation({...input,frames:[{data:new Uint8Array(3),durationMs:10}]}), /8-bit RGB source/);
+    }
   }
 });
 
@@ -1519,15 +1552,28 @@ test('all public methods reject reentry from a chunked provider without corrupti
   assert.ok(encoder.encodeRgb(rgb()).length>0);
 });
 
-test('chunked HDR ICC CICP is rejected and explicit sRGB fallback replays safely', () => {
-  for(const transfer of [16,18] as const) {
+test('chunked HDR CICP matches packed HDR and disallows SDR fallback', () => {
+  for (const transfer of [16,18] as const) {
+    for (const depth of [16,32] as const) {
+      let calls=0;
+      const data=depth===16?new Uint16Array([10000,20000,30000]):new Float32Array([0.1,0.2,0.3]);
+      const input={width:1,height:1,format:'RGB' as const,icc:iccFixture(transfer),
+        ...(depth===16?{depth,provideRect(){calls++;return data as Uint16Array;}}:
+          {depth,provideRect(){calls++;return data as Float32Array;}})};
+      const bytes=encoder.encodeRgb(input);
+      assert.ok(calls>0);
+      assert.deepEqual([...bytes],[...encoder.encodeRgb({width:1,height:1,data,icc:input.icc})]);
+      assert.equal(bytes.colorResolved.header,'enum');
+      assert.equal(bytes.colorResolved.transfer,transfer===16?'pq':'hlg');
+      calls=0;
+      assert.throws(()=>encoder.encodeRgb(input,{iccFallback:'srgb'}),/HDR CICP/);
+      assert.equal(calls,0);
+    }
     let calls=0;
     const input: ChunkedRgbInput={width:1,height:1,format:'RGB',icc:iccFixture(transfer),provideRect(){calls++;return new Uint8Array([10,20,30]);}};
-    assert.throws(()=>encoder.encodeRgb(input),/ICC: HDR PQ\/HLG/);
+    assert.throws(()=>encoder.encodeRgb(input),/8-bit RGB source/);
+    assert.throws(()=>encoder.encodeRgb(input,{iccFallback:'srgb'}),/HDR CICP/);
     assert.equal(calls,0);
-    const fallback=encoder.encodeRgb(input,{iccFallback:'srgb'});
-    assert.ok(calls>0);
-    assert.ok(fallback.warnings.some(w=>/ICC fallback/.test(w)));
   }
 });
 

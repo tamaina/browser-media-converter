@@ -384,10 +384,24 @@ remain test failures.
 
 Planar BT.2020 primaries + BT.2020 NCL, 10/12-bit I420/I422/I444 accepts
 `transfer: 'pq' | 'hlg'` (aliases `smpte2084` / `arib-std-b67`). It uses the
-non-fused row/CMS path. 8-bit HDR, BT.709 matrices, P3 HDR and `encodeRgb` HDR
-are rejected (including an 8-bit output override; float32 output remains available). HDR is recorded with PQ/HLG enum encoding; HDR ICC input is out
-of scope. ICC profiles carrying PQ/HLG CICP tags are rejected with an `ICC:`
-error (or explicitly fall back to untagged sRGB via `iccFallback`). HDR with `iccHeader: 'bt2020' | 'p3'` or `iccFallback: 'srgb'` is rejected.
+non-fused row/CMS path. 8-bit HDR, BT.709 matrices and explicit enum
+`encodeRgb` HDR are rejected (including an 8-bit output override).
+
+ICC v4 RGB matrix/TRC profiles with an accepted `cicp` tag (identity matrix,
+full range, known primaries, transfer 16/PQ or 18/HLG) use CICP primaries and
+transfer in preference to the ICC TRCs, which may be dummy SDR curves.
+`iccHeader: 'auto'` writes a PQ/HLG enum header. The CMS applies the real
+PQ/HLG EOTF and intensity scaling, plus HLG OOTF, before computing XYB.
+This accepts Float32 and full-range U16 RGB (including Display P3 HDR);
+U16 defaults to float32 output for lossy coding and 16-bit output for lossless
+coding; explicit 10/12/16-bit RGB output is also available. U8 RGB is rejected regardless of output depth.
+BT.2020 NCL 10/12-bit planar input also accepts these HDR ICC profiles;
+its YUV matrix/range must describe the source planes.
+HDR CICP rejects `iccHeader: 'exact'` (dummy TRCs would misdescribe the pixels),
+SDR header overrides (`'bt2020'` / `'p3'`) and `iccFallback: 'srgb'`.
+Gray HDR CICP and LUT-only HDR CICP are rejected. ICC.2/ICC v5 spectral or HDR
+LUT profiles, detecting HDR from curves/LUTs without CICP, and tone mapping
+are unsupported. The moxcms version is unchanged.
 
 `intensityTargetNits` on input or encode options (options win) is variable for
 HDR and SDR. Defaults are PQ 10000, HLG 1000, SDR 255 nits. Values must be
@@ -431,7 +445,8 @@ VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 
 ## Streaming RGB input
 
-`encodeRgb` also accepts a synchronous rectangle source (SDR RGB only):
+`encodeRgb` also accepts a synchronous rectangle source (SDR RGB or
+matrix/TRC HDR CICP ICC with U16/Float32 samples):
 
 ```js
 const bytes = encoder.encodeRgb({
@@ -570,7 +585,8 @@ truncated TIFF, omit EXIF and report a warning. See the
 
 ## JPEG XL animation (feature 5)
 
-`encodeAnimation` accepts already-decoded, composited full-canvas SDR RGB/RGBA
+`encodeAnimation` accepts already-decoded, composited full-canvas RGB/RGBA
+(SDR, or U16/Float32 with matrix/TRC HDR CICP ICC)
 frames. GIF/APNG decoding is out of scope; callers resolve disposal, blending,
 frame rectangles and source loop conventions before passing frames.
 
@@ -607,8 +623,10 @@ budget and heap exceedance flags; rejected admission keeps the estimate.
 `exif`, `xmp` and `compressBoxes` are unsupported for animations and explicitly
 rejected before entering Wasm; still-image metadata and JPEG preservation remain
 available through their respective APIs.
-Planar/HDR animation, animation XYB observation (`observe`) and `rgbViaPlanar`
-are unsupported. The latter two options are rejected. `AnimationFrame` and
+Planar animation, explicit enum HDR animation, animation XYB observation (`observe`) and `rgbViaPlanar`
+are unsupported. Matrix/TRC HDR CICP ICC animation uses enum HDR, as for packed
+RGB; U8 HDR frames and SDR header/fallback overrides are rejected. The latter
+two animation options are rejected. `AnimationFrame` and
 `AnimationEncodeOptions` are exported; `frames` accepts readonly arrays.
 
 The bridge creates one encoder and CMS per sequence. `JxlBasicInfo.have_animation`
