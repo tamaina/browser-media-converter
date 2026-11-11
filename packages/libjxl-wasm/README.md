@@ -124,6 +124,101 @@ const bytes = encoder.encodeRgb({width: 1, height: 1, data: new Uint8Array([64, 
 encoder.dispose();
 ```
 
+## Memory budget
+
+`encodeRgb(input, {maxMemoryBytes})` and `encodePlanarYuv(input,
+{maxMemoryBytes})` validate sizes and check a conservative memory reservation
+in `src/api.ts` **before any WASM call or input/ICC copy**. The default is
+**768 MiB**; see the compatibility and measurement notes below. The override
+must be a positive safe integer no greater
+than **1984 MiB** (2080374784 bytes; 2 GiB minus 64 MiB), leaving wasm32
+address-space headroom. The existing 8192 px/axis, 4 MP, 64 MiB plane-span and
+4 MiB ICC caps still apply.
+
+```ts
+const bytes = encoder.encodeRgb(input, {maxMemoryBytes: 1024 * 1024 * 1024});
+```
+
+The default is **768 MiB**, raised from this branch's initial 512 MiB policy
+so tightly packed lossy effort-3 inputs up to the existing 4 MP limit (including
+U8 RGBA, U16 RGB, Float32 RGBA and planar alpha) without metadata are admitted.
+Standard-RGB paths, 16-bit output, metadata, large plane padding or ICC data
+can require a larger budget. This default-on policy can still reject valid inputs: it changes
+admission behaviour relative to the base API without a budget. It is not a
+512 MiB mobile memory guarantee. The formula (bytes, upward rounding) is:
+
+```text
+P = width * height
+S = packed RGB byteLength, or sum of validated plane spans (including padding)
+I = ICC byteLength, or zero
+M = EXIF TIFF byteLength + 4 offset bytes (if present) + XMP byteLength
+V = 2*S + 4*I + 4*M + P*(12 + 12 + 48 + A + R + C + D)
+estimate = 32 MiB + ceil(3*V/2)
+required = estimate
+```
+
+- `2*S` reserves the JS→WASM input copy and Rust's owned planar copy
+  (conservatively also reserved for RGB and borrowed alpha).
+- 12 B/pixel is float XYB; another 12 reserves RGB staging/callback buffers.
+  48 B/pixel allows libjxl working buffers and output growth/copy.
+- `A` is 16 B/pixel with alpha, otherwise zero, for float alpha staging/coding.
+- `observe` only hashes; diagnostics/capture buffers are not enabled by this API
+  and are not reserved.
+- `R` is 12 B/pixel for planar `rgbViaPlanar`, otherwise zero.
+- `C` is 12 B/pixel for lossless or effort >=8 (`standard-rgb`), reserving
+  an additional whole-frame float RGB buffer alongside staging/callback buffers.
+- `D` is 6 B/pixel (RGB) or 8 B/pixel (RGBA) for 16-bit output, otherwise
+  zero: an extra integer coding/output allowance, in addition to float staging.
+- `4*M` reserves metadata input/box copies, compression and output growth/copy,
+  whether or not `compressBoxes` is enabled.
+- `4*I` allows ICC copies/parsing. Variable reservation gets 50% headroom;
+  the fixed 32 MiB covers runtime, stack, allocator, tables and row padding.
+
+On the shipped build, deterministic textured 512², 1024² and 2048² inputs were
+measured on fresh instances (distance 1, effort 3). At 2048², retained WASM heap
+high-water sizes were approximately 342 MiB RGB, 403 MiB RGBA, 339 MiB I444,
+425 MiB I444A and 440 MiB planar `rgbViaPlanar`, against estimates of 500,
+608, 500, 608 and 572 MiB. Tests check growing 1024² frames on all five paths
+and a default-budget 2048² U8 RGBA followed by 1×1. These samples support
+keeping the conservative allowance; they do not bound all images/settings.
+These measurements cover the lossy effort-3 paths only; the additional
+standard-RGB, 16-bit and metadata reservations above are conservative allowances,
+not measured peak guarantees.
+
+Invalid budgets throw `TypeError`; omission or `null` uses the default.
+Exceeding a valid budget throws exported `MemoryBudgetError` (a `RangeError`)
+with `estimatedMemoryBytes`, `retainedHeapBytes` and `maxMemoryBytes` fields.
+Budget errors do not trigger ICC fallback. `encoder.stats` is reset at each
+attempt; a budget rejection exposes that call's estimate, budget and retained
+heap, without stale color/timing data from a previous success.
+
+WASM memory never shrinks. The retained heap is reusable and is **not** compared
+with the per-frame budget: a small encode can succeed after a large one even
+when that high-water size exceeds its budget. Successful stats include
+`heapBefore`, `heapAfter`, `estimatedMemoryBytes`, `maxMemoryBytes`, and boolean
+`memoryBudgetExceeded` / `memoryEstimateExceeded`, comparing `heapAfter` with
+the budget / estimate. These flags include growth slack and memory retained
+from previous calls; they do not measure live allocations or prove the current
+frame exceeded its estimated working set.
+
+This is a conservative admission policy, not an exact peak bound or a hard
+allocator limit. Device/process pressure, multiple encoder instances, caller's
+JS input/output and other JS allocations are outside it; a permitted encode
+can still fail allocation. The guard uses only dimensions, types and layouts,
+with no extra pixel scan. It lives in the TypeScript API; direct native/WASM
+ABI users must manage their own budget. No WASM relink is needed for it.
+
+`encodeJpeg` retains its separate 64 MiB input, 4 MP and 8192 px/axis limits
+and accepts only `compressBoxes`. It recompresses JPEG coefficients without the
+pixel reconstruction/staging used by this estimate, so `maxMemoryBytes` and the
+pixel memory-budget stats do not apply to it. Its limits are admission caps,
+not a heap guarantee.
+
+No chunked/streaming API is added: the internal chunked callbacks still feed
+an encoder that owns full-frame XYB and working buffers. Slicing the input
+alone would not bound peak memory; changing that ownership requires a larger
+libjxl/session redesign.
+
 ## Encoding options
 
 Shared by `encodeRgb(input, options)` and `encodePlanarYuv(input, options)`:

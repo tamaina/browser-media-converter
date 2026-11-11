@@ -24,6 +24,9 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Preflight WASM budget: default 768 MiB (null also uses the default); safe integer 1..2080374784 (1984 MiB).
+   * Conservative estimate, not an allocator limit or device-memory guarantee. */
+  maxMemoryBytes?: number | null;
   /** Raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes. Four zero offset bytes are added internally.
    * IFD0 Orientation (1..8) sets codestream orientation; supply pixels before that transform. */
   exif?: Uint8Array;
@@ -87,12 +90,39 @@ export interface Encoder {
 import createModule from '../build/wasm/codec.mjs';
 import {metadataOptions} from './metadata.ts';
 
+const MIB = 1024 * 1024;
+const DEFAULT_MEMORY_BYTES = 768 * MIB;
+// Leave address space for the stack, allocator and Emscripten growth below 2 GiB.
+const MAX_MEMORY_BYTES = 2048 * MIB - 64 * MIB;
+
 export type ModuleOptions = Parameters<typeof createModule>[0] & {
   locateFile?: (path: string, prefix: string) => string;
   instantiateWasm?: (imports: WebAssembly.Imports, receive: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) => WebAssembly.Exports;
   [key: string]: unknown;
 };
+/** Admission failure; fields describe the rejected call, without parsing its message. */
+export class MemoryBudgetError extends RangeError {
+  readonly estimatedMemoryBytes: number;
+  readonly retainedHeapBytes: number;
+  readonly maxMemoryBytes: number;
+  constructor(estimatedMemoryBytes: number, retainedHeapBytes: number, maxMemoryBytes: number) {
+    super(`WASM memory budget exceeded: estimated ${estimatedMemoryBytes} bytes, retained heap ${retainedHeapBytes} bytes, budget ${maxMemoryBytes} bytes; reduce dimensions or raise maxMemoryBytes (maximum ${MAX_MEMORY_BYTES})`);
+    this.name = 'MemoryBudgetError';
+    this.estimatedMemoryBytes = estimatedMemoryBytes;
+    this.retainedHeapBytes = retainedHeapBytes;
+    this.maxMemoryBytes = maxMemoryBytes;
+  }
+}
 export interface EncoderStats {
+  /** True when the retained heap after success exceeds the admission budget/estimate.
+   * Includes growth slack and memory retained from earlier calls, not live allocations. */
+  memoryBudgetExceeded?: boolean;
+  memoryEstimateExceeded?: boolean;
+  retainedHeapBytes?: number;
+  heapBefore?: number;
+  heapAfter?: number;
+  estimatedMemoryBytes?: number;
+  maxMemoryBytes?: number;
   lossless?: boolean;
   distance?: number;
   effort?: EncodeOptions['effort'];
@@ -277,7 +307,6 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     if (effort >= 9) warnings.push('Effort 9/10 can take a long time on this synchronous, single-threaded encoder; use a Worker');
     i={...i,...(icc?{primaries:"bt709",transfer:"iec61966-2-1",linearization:"srgb",matrix:"rgb",fullRange:true,chromaSiting:"left"}:colorResolved)} as RuntimeInput;
     if(o.validation!==undefined && !["clip","strict"].includes(o.validation))fail("unknown validation");
-    m._w_options(+(o.observe??false),+(o.validation==="strict"));
     const formats=['I420','I422','I444','NV12'];
     const match=/^(I420|I422|I444)(A)?(?:P(10|12))?$/.exec(i.format??'');
     const sourceDepth=rgb?(i.data instanceof Uint16Array?16:i.data instanceof Float32Array?32:8):(match?Number(match[3]??8):8);
@@ -293,13 +322,60 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format ?? '');
     const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6,'bt2020-ncl':9} as Record<string, number>)[i.matrix!];
     if (format<0 || !matrix || (!rgb && typeof i.fullRange !== 'boolean')) fail('explicit supported format required');
-    const pointers: number[]=[];
+    const maxMemoryBytes=o.maxMemoryBytes ?? DEFAULT_MEMORY_BYTES;
+    if (!integer(maxMemoryBytes,1,MAX_MEMORY_BYTES)) fail(`maxMemoryBytes must be a safe integer in 1..${MAX_MEMORY_BYTES} (1984 MiB)`);
+    let inputBytes=0, hasAlpha=false;
+    const layouts: {p: Plane; span: number}[]=[];
+    if (rgb) {
+      const data=i.data!;
+      if (!(data instanceof Float32Array || data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array)) fail('RGB requires packed Float32Array or integer RGB/RGBA');
+      if (![3,4].includes(data.length/(i.width*i.height))) fail(data instanceof Float32Array ? 'RGB requires packed Float32Array RGB or RGBA' : 'RGB integer input requires packed RGB or RGBA');
+      const channels=data.length/(i.width*i.height);
+      if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
+      inputBytes=data.byteLength;
+      hasAlpha=channels===4;
+    } else {
+      const expected=format===3?2:match?.[2]?4:3;
+      if (!Array.isArray(i.planes) || i.planes.length !== expected) fail('plane count');
+      // Validate every required index before allocating, including sparse holes.
+      for (let c=0;c<expected;c++) {
+        const p=i.planes![c];
+        if (p === null || typeof p !== 'object') fail(`plane ${c} must be an object`);
+        const w=c!==0&&c!==3?Math.ceil(i.width/(format===2?1:2)):i.width;
+        const h=c!==0&&c!==3?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
+        const row=w*(format===3&&c?2:1)*(sourceDepth===8?1:2);
+        if (!(p.data instanceof Uint8Array) || !integer(p.offset??0,0,p.data.length) || !integer(p.stride,row,67108864)) fail('plane data/offset/stride');
+        const span=(h-1)*p.stride+row;
+        if ((p.offset??0)+span>p.data.length) fail('plane bounds');
+        inputBytes+=span;if(inputBytes>67108864) fail('plane span cap: 64 MiB');
+        layouts.push({p,span});
+      }
+      hasAlpha=layouts.length===4;
+    }
+    // Conservative reservation checked on representative growing heaps (README):
+    // XYB (12 B/px), RGB staging (12), working/output allowance (48), extras.
+    // Standard callbacks can materialize another whole-frame float RGB buffer;
+    // reserve additional integer coding/output space for 16-bit RGB headers.
+    // Metadata allows input/box copies, compression and output growth/copy.
+    // 50% variable headroom plus 32 MiB for runtime/stack/allocator/row padding.
+    // Sizes are bounded above, so all arithmetic stays within safe integers.
+    const standardRgbBytes=lossless || effort>=8 ? 12 : 0;
+    const integer16Bytes=outputDepth===16 ? 2*(hasAlpha?4:3) : 0;
+    const metadataBytes=(boxes.exif ? boxes.exif.byteLength+4 : 0) + (boxes.xmp?.byteLength??0);
+    const variableBytes=2*inputBytes + 4*(icc?.byteLength??0) + 4*metadataBytes + i.width*i.height*(72 + (hasAlpha?16:0) + (!rgb && o.rgbViaPlanar?12:0) + standardRgbBytes + integer16Bytes);
+    const estimatedMemoryBytes=32*MIB + Math.ceil(variableBytes*3/2);
     const before=m.HEAPU8.buffer.byteLength;
+    // Freed allocations reuse the retained heap. Its high-water size is not this
+    // frame's requirement, and must never lock out subsequent smaller frames.
+    stats={estimatedMemoryBytes,maxMemoryBytes,retainedHeapBytes:before,heapBefore:before};
+    if (estimatedMemoryBytes>maxMemoryBytes) throw new MemoryBudgetError(estimatedMemoryBytes,before,maxMemoryBytes);
+    const pointers: number[]=[];
     const alloc = (bytes: ArrayBufferView) => {
       const p=m._malloc(bytes.byteLength); if (!p) throw Error('WASM allocation failed');
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
+      m._w_options(+(o.observe??false),+(o.validation==="strict"));
       m._w_init(i.width,i.height,format,matrix,+i.fullRange!,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18} as Record<string, number>)[i.linearization!],({left:0,center:1,topleft:2} as Record<string, number>)[i.chromaSiting ?? 'left'],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9} as Record<string, number>)[i.primaries!],colorResolved.intensityTarget);
       m._w_metadata(boxes.exif ? alloc(boxes.exif) : 0, boxes.exif?.length ?? 0,
         boxes.xmp ? alloc(boxes.xmp) : 0, boxes.xmp?.length ?? 0, boxes.orientation, +boxes.compressBoxes);
@@ -308,37 +384,13 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
         const data=i.data!;
         if(icc)m._w_icc(alloc(icc),icc.length);
         m._w_icc_header_mode(({auto:0,exact:1,bt2020:2,p3:3})[o.iccHeader??'auto']);
-        if(data instanceof Uint8Array || data instanceof Uint8ClampedArray || data instanceof Uint16Array) {
-          const channels=data.length/(i.width*i.height);
-          if(![3,4].includes(channels)) fail('RGB integer input requires packed RGB or RGBA');
-          if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
-          status=m._w_rgb_integer(alloc(data),data.length,data instanceof Uint16Array?16:8,channels);
-        } else {
-          if (!(data instanceof Float32Array) || ![3,4].includes(data.length/(i.width*i.height))) fail('RGB requires packed Float32Array or integer RGB/RGBA');
-          const channels=data.length/(i.width*i.height);
-          if(i.format!=null && i.format!==(channels===3?'RGB':'RGBA'))fail('RGB format/channel mismatch');
-          status=channels===4?m._w_rgb_integer(alloc(data),data.length,32,4):m._w_rgb(alloc(data),data.length);
-        }
+        const channels=data.length/(i.width*i.height);
+        status=data instanceof Float32Array && channels===3
+          ? m._w_rgb(alloc(data),data.length)
+          : m._w_rgb_integer(alloc(data),data.length,sourceDepth,channels);
         if(!status && icc)Object.assign(colorResolved,{header:m._w_icc_header()?'icc':'enum',path:m._w_icc_path()===2?'cms':'builtin',iccModel:m._w_icc_path()===3?'gray':m._w_icc_path()===1?'matrix-trc':'lut-or-other-trc',...(o.iccHeader && o.iccHeader!=='auto'?{iccHeader:o.iccHeader}:{})});
       } else {
-        const expected=format===3?2:match?.[2]?4:3;
-        if (!Array.isArray(i.planes) || i.planes.length !== expected) fail('plane count');
-        let total=0;
-        const layouts=[];
-        // Validate every required index before allocating, including sparse holes.
-        for (let c=0;c<expected;c++) {
-          const p=i.planes![c];
-          if (p === null || typeof p !== 'object') fail(`plane ${c} must be an object`);
-          const w=c!==0&&c!==3?Math.ceil(i.width/(format===2?1:2)):i.width;
-          const h=c!==0&&c!==3?Math.ceil(i.height/([0,3].includes(format)?2:1)):i.height;
-          const row=w*(format===3&&c?2:1)*(sourceDepth===8?1:2);
-          if (!(p.data instanceof Uint8Array) || !integer(p.offset??0,0,p.data.length) || !integer(p.stride,row,67108864)) fail('plane data/offset/stride');
-          const span=(h-1)*p.stride+row;
-          if ((p.offset??0)+span>p.data.length) fail('plane bounds');
-          total+=span;if(total>67108864) fail('plane span cap: 64 MiB');
-          layouts.push({p,span});
-        }
-        for (let c=0;c<expected;c++) {
+        for (let c=0;c<layouts.length;c++) {
           const {p,span}=layouts[c];
           m._w_plane(c,alloc(p.data.subarray(p.offset??0,(p.offset??0)+span)),span,0,p.stride);
         }
@@ -346,9 +398,13 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       }
       if(status) throw Error(m.UTF8ToString(m._w_error()) || 'Wasm encode failed (no error detail)');
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
-      stats={colorResolved,warnings,lossless,distance,effort,inputPath:lossless || effort>=8?'standard-rgb':'xyb',sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+m._w_time(6),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
+      stats={...stats,memoryBudgetExceeded:m.HEAPU8.buffer.byteLength>maxMemoryBytes,memoryEstimateExceeded:m.HEAPU8.buffer.byteLength>estimatedMemoryBytes,colorResolved,warnings,lossless,distance,effort,inputPath:lossless || effort>=8?'standard-rgb':'xyb',sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+m._w_time(6),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;
+    } catch (error) {
+      // Reported codec failures retain main's empty stats; admission failures
+      // above keep their structured estimate without entering Wasm.
+      stats={};throw error;
     } finally {if (module) {m._w_free();for(const p of pointers)m._free(p);}}
   }
   function encodeJpeg(jpeg: Uint8Array, options: JpegEncodeOptions = {}): JpegEncoded {
