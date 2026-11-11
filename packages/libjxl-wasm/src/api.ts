@@ -1,4 +1,4 @@
-export type Transfer = 'bt709' | 'smpte170m' | 'bt2020-10' | 'bt2020-12' | 'bt470bg' | 'srgb' | 'iec61966-2-1' | 'linear' | 'pq' | 'hlg' | 'smpte2084' | 'arib-std-b67';
+export type Transfer = 'bt709' | 'smpte170m' | 'bt2020-10' | 'bt2020-12' | 'srgb' | 'iec61966-2-1' | 'linear' | 'pq' | 'hlg' | 'smpte2084' | 'arib-std-b67';
 /** Accepts VideoColorSpace getters and plain objects; null fields use defaults. */
 export interface ColorSpaceInput {
   primaries?: string | null;
@@ -24,6 +24,13 @@ export interface ColorOptions {
   contentLightLevel?: unknown;
 }
 export interface EncodeOptions extends ColorOptions {
+  /** Raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes. Four zero offset bytes are added internally.
+   * IFD0 Orientation (1..8) sets codestream orientation; supply pixels before that transform. */
+  exif?: Uint8Array;
+  /** Opaque XML/XMP bytes, 1 byte..4 MiB, stored as an xml-space box. */
+  xmp?: Uint8Array;
+  /** Brotli-compress metadata boxes (default true). */
+  compressBoxes?: boolean;
   /** Butteraugli distance [0,25], default 1. Zero implies lossless; positive values clamp to >=0.01. */
   distance?: number;
   /** Original-profile modular coding; conflicts with positive distance. */
@@ -57,15 +64,28 @@ export interface PlanarInput extends Dimensions {
   planes: {data: Uint8Array; offset?: number; stride: number}[];
 }
 export interface RgbInput extends Dimensions {depth?: 8 | 16 | 32; bitDepth?: 8 | 16 | 32; storage?: 'u8' | 'u16le-lsb' | 'float32'; data: Float32Array | Uint8Array | Uint8ClampedArray | Uint16Array; format?: 'RGB' | 'RGBA'}
+export interface JpegEncodeOptions {
+  /** Compress metadata boxes with Brotli (default true). EXIF/XMP are always kept. */
+  compressBoxes?: boolean;
+}
+export type JpegEncoded = Uint8Array & {
+  colorResolved: {policy: 'jpeg-lossless'; source: {profile: 'jpeg'}};
+  warnings: string[];
+};
 export interface Encoder {
+  /** Bit-exact JPEG recompression, effort 3. EXIF/XMP kept. Max 64 MiB, 4 MP, 8192 per axis. */
+  encodeJpeg(jpegBytes: Uint8Array, options?: JpegEncodeOptions): JpegEncoded;
   /** HDR: planar BT.2020 NCL, 10/12-bit only; enum PQ/HLG, no tone mapping. */
   encodePlanarYuv(input: PlanarInput, options?: EncodeOptions): Encoded;
   /** SDR RGB only. HDR ICC interpretation is unsupported. */
   encodeRgb(input: RgbInput, options?: EncodeOptions): Encoded;
+  /** Release this instance. Wasm memory cannot shrink; it is reclaimed by GC. */
+  dispose(): void;
   readonly stats: EncoderStats;
 }
 
 import createModule from '../build/wasm/codec.mjs';
+import {metadataOptions} from './metadata.ts';
 
 export type ModuleOptions = Parameters<typeof createModule>[0] & {
   locateFile?: (path: string, prefix: string) => string;
@@ -79,6 +99,8 @@ export interface EncoderStats {
   /** Standard callbacks are selected for lossless or effort >=8. */
   inputPath?: 'standard-rgb' | 'xyb';
   colorResolved?: ColorResolved;
+  /** JPEG coefficient recompression does not resolve pixel colour fields. */
+  jpegColorResolved?: JpegEncoded['colorResolved'];
   warnings?: string[];
   [key: string]: unknown;
 }
@@ -100,11 +122,25 @@ type ColorState = {
 
 // One synchronous call at a time per instance. Returned arrays own their bytes.
 export async function createEncoder(options: ModuleOptions = {}): Promise<Encoder> {
-  const m = await createModule(options);
+  let module: Awaited<ReturnType<typeof createModule>> | undefined = await createModule(options);
   let stats: EncoderStats = {};
+  let state = 'active';
+  // Rust uses panic=abort in Wasm. Any exception escaping a module call is
+  // fatal: never call back into that instance, even for cleanup or ICC fallback.
+  const m = new Proxy({} as NonNullable<typeof module>, {
+    get(_target, key) {
+      const current = module;
+      if (!current) throw Error(`Encoder is ${state}`);
+      const value = Reflect.get(current, key);
+      return typeof value === 'function' ? (...args: unknown[]) => {
+        try { return Reflect.apply(value, current, args); }
+        catch (error) { state = 'poisoned'; module = undefined; stats = {}; throw error; }
+      } : value;
+    }
+  });
   const fail = (message: string): never => { throw new TypeError(message); };
   const integer = (v: number, min: number, max: number) => Number.isSafeInteger(v) && v >= min && v <= max;
-  const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12','bt470bg'];
+  const videoTransfers = ['bt709','smpte170m','bt2020-10','bt2020-12'];
   // Read properties, not Object.entries: VideoColorSpace getters live on its prototype.
   function resolveColor(i: ColorOptions, o: EncodeOptions, rgb: boolean) {
     const metadata = o.colorMetadata ?? i.colorMetadata;
@@ -125,17 +161,17 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     }
     const cs = o.colorSpace ?? i.colorSpace ?? {};
     if (typeof cs !== 'object') fail('colorSpace must be a VideoColorSpace or plain object');
-    const defaults = {matrix:'bt709',primaries:'bt709',transfer:rgb?'iec61966-2-1':'bt709',fullRange:false,chromaSiting:'left'};
+    const defaults = {matrix:rgb?'rgb':'bt709',primaries:'bt709',transfer:rgb?'iec61966-2-1':'bt709',fullRange:rgb,chromaSiting:'left'};
     const colorResolved: ColorState = {...defaults, source:{}}, warnings: string[] = [];
     for (const [key, fallback] of Object.entries(defaults) as [keyof typeof defaults, string | boolean][]) {
       const value = o[key] ?? i[key] ?? cs[key] ?? mc[key];
       (colorResolved as Record<string, unknown>)[key] = value ?? fallback;
       colorResolved.source[key] = o[key] != null || i[key] != null ? 'option' : cs[key] != null ? 'colorSpace' : mc[key] != null ? 'colorMetadata' : 'default';
-      if (value == null) warnings.push(`Defaulted ${key} to ${fallback}`);
+      if (value == null && !(rgb && ['matrix','fullRange','chromaSiting'].includes(key))) warnings.push(`Defaulted ${key} to ${fallback}`);
     }
     const tf = colorResolved.transfer!;
     // Match media-container's CICP name; the encoder has no gamma-2.8 path.
-    if (tf === 'gamma28') fail('unsupported SDR transfer: gamma28 (CICP 5)');
+    if (tf === 'gamma28' || tf === 'bt470bg') fail('unsupported SDR transfer: gamma28 (CICP 5)');
     const hdr = ['pq','hlg','smpte2084','arib-std-b67'].includes(tf);
     if (hdr && (rgb || colorResolved.primaries !== 'bt2020' || colorResolved.matrix !== 'bt2020-ncl')) fail('HDR requires planar BT.2020 primaries and BT.2020 NCL matrix; encodeRgb HDR is unsupported');
     if (hdr && (['bt2020','p3'].includes(o.iccHeader ?? '') || o.iccFallback === 'srgb')) fail('HDR requires enum color encoding; SDR ICC header/fallback is unsupported');
@@ -184,7 +220,10 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     return {distance,effort,lossless};
   }
   function run(i: RuntimeInput, o: EncodeOptions, rgb: boolean): Encoded {
+    if (!module) throw Error(`Encoder is ${state}`);
+    stats = {};
     const start=performance.now();
+    const boxes=metadataOptions(o);
     if(o.iccHeader!==undefined && !['auto','exact','bt2020','p3'].includes(o.iccHeader ?? ''))fail('iccHeader must be auto/exact/bt2020/p3');
     if (o.iccFallback !== undefined && !['error','srgb'].includes(o.iccFallback)) fail('iccFallback must be error/srgb');
     const metadata=o.colorMetadata ?? i.colorMetadata;
@@ -226,6 +265,11 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
         warnings.length=0;
       } else if(metadata?.type==='cicp' && colorResolved.matrix!=='rgb') warnings.push('CICP matrix describes the pre-decoded source; ignored for already-decoded RGB');
     }
+    if (rgb && !icc) {
+      colorResolved.matrix = 'rgb'; colorResolved.fullRange = true;
+      colorResolved.source.matrix = colorResolved.source.fullRange = 'decoded-rgb';
+      delete colorResolved.chromaSiting; delete colorResolved.source.chromaSiting;
+    }
     for (const key of ['masteringDisplay','contentLightLevel'] as const) if (o[key] !== undefined || i[key] !== undefined) warnings.push(`${key} is not stored (MDCV/CLLI unsupported)`);
     if (!rgb && o.validation !== 'strict') warnings.push('Reconstructed RGB outside [0,1] is clipped (validation: clip)');
     if (!rgb && (lossless || effort >= 8)) warnings.push('Standard RGB callbacks bypass fused SIMD; scalar reconstruction may allocate whole-frame float RGB and block the calling thread');
@@ -244,7 +288,7 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
     const bitDepth=o.bitDepth===undefined?defaultDepth:o.bitDepth;
     if(!['preserve','float32',8,10,12,16].includes(bitDepth))fail('bitDepth must be preserve/8/10/12/16/float32');
     if (!rgb && bitDepth === 16) fail('16-bit output is supported only for RGB input');
-    const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb && (!lossless || sourceDepth===32)?0:sourceDepth):bitDepth;
+    const outputDepth=bitDepth==='float32'?0:bitDepth==='preserve'?(rgb && (sourceDepth===32 || (!lossless && sourceDepth!==8))?0:sourceDepth):bitDepth;
     if (['pq','hlg'].includes(i.linearization ?? '') && outputDepth === 8) fail('HDR output must be 10/12-bit or float32; 8-bit HDR is unsupported');
     const format=rgb ? 2 : formats.indexOf(match?match[1]:i.format ?? '');
     const matrix=rgb ? 1 : ({bt709:1,bt601:6,smpte170m:6,bt470bg:6,'bt2020-ncl':9} as Record<string, number>)[i.matrix!];
@@ -256,7 +300,9 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
       pointers.push(p);m.HEAPU8.set(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength),p);return p;
     };
     try {
-      m._w_init(i.width,i.height,format,matrix,+i.fullRange!,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18} as Record<string, number>)[i.linearization!],({left:0,center:1,topleft:2} as Record<string, number>)[i.chromaSiting!],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9} as Record<string, number>)[i.primaries!],colorResolved.intensityTarget);
+      m._w_init(i.width,i.height,format,matrix,+i.fullRange!,distance,effort,sourceDepth,outputDepth,({"gamma2.4":1,srgb:13,"inverse-oetf":1001,linear:8,pq:16,hlg:18} as Record<string, number>)[i.linearization!],({left:0,center:1,topleft:2} as Record<string, number>)[i.chromaSiting ?? 'left'],({bt709:1,smpte170m:6,bt470bg:5,smpte432:11,bt2020:9} as Record<string, number>)[i.primaries!],colorResolved.intensityTarget);
+      m._w_metadata(boxes.exif ? alloc(boxes.exif) : 0, boxes.exif?.length ?? 0,
+        boxes.xmp ? alloc(boxes.xmp) : 0, boxes.xmp?.length ?? 0, boxes.orientation, +boxes.compressBoxes);
       let status;
       if (rgb) {
         const data=i.data!;
@@ -298,20 +344,78 @@ export async function createEncoder(options: ModuleOptions = {}): Promise<Encode
         }
         status=m._w_encode(+(o.rgbViaPlanar??false));
       }
-      if(status) throw Error(m.UTF8ToString(m._w_error()));
+      if(status) throw Error(m.UTF8ToString(m._w_error()) || 'Wasm encode failed (no error detail)');
       const bytes=m.HEAPU8.slice(m._w_data(),m._w_data()+m._w_size());
       stats={colorResolved,warnings,lossless,distance,effort,inputPath:lossless || effort>=8?'standard-rgb':'xyb',sampleCheckMs:m._w_time(5),copyMs:m._w_time(0),preflightMs:m._w_time(1),createMs:m._w_time(2),conversionMs:m._w_time(3)+m._w_time(6),encodeMs:m._w_time(4),totalMs:performance.now()-start,observe:o.observe??false,heapBefore:before,heapAfter:m.HEAPU8.buffer.byteLength,simdLanes:m._w_lanes(),target:m.UTF8ToString(m._w_target())};
       Object.assign(bytes,{colorResolved,warnings});
       return bytes as Encoded;
-    } finally {m._w_free();for(const p of pointers)m._free(p);stats.totalMs=performance.now()-start;}
+    } finally {if (module) {m._w_free();for(const p of pointers)m._free(p);}}
   }
-  return {encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
+  function encodeJpeg(jpeg: Uint8Array, options: JpegEncodeOptions = {}): JpegEncoded {
+    if (!module) throw Error(`Encoder is ${state}`);
+    const start = performance.now();
+    stats = {};
+    let pointer = 0;
+    try {
+      if (!(jpeg instanceof Uint8Array) || jpeg.length === 0) fail('JPEG input must be a nonempty Uint8Array');
+      if (jpeg.length > 64 * 1024 * 1024) fail('JPEG input size limit: 64 MiB');
+      if (options === null || typeof options !== 'object' || Array.isArray(options)) fail('JPEG options must be an object');
+      for (const key of Object.keys(options)) {
+        if (key !== 'compressBoxes') fail(`unsupported JPEG option: ${key}; effort is fixed at 3; lossless recompression preserves EXIF/XMP and does not accept pixel or lossy options`);
+      }
+      if (options.compressBoxes !== undefined && typeof options.compressBoxes !== 'boolean') fail('compressBoxes must be boolean');
+      // Walk bounded marker segments before allocating in WASM. Do not scan
+      // entropy data: the SOF must precede SOS; libjxl validates the full JPEG.
+      const badHeader = () => fail('BAD_INPUT: invalid JPEG header');
+      if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) badHeader();
+      let foundSof = false;
+      for (let pos = 2; pos < jpeg.length;) {
+        if (jpeg[pos++] !== 0xff) badHeader();
+        while (jpeg[pos] === 0xff) pos++;
+        const marker = jpeg[pos++];
+        if (marker === 0xda || marker === 0xd9) break;
+        if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+        if (pos + 2 > jpeg.length) badHeader();
+        const length = jpeg[pos] * 256 + jpeg[pos + 1];
+        if (length < 2 || length > jpeg.length - pos) badHeader();
+        if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+          if (length < 8) badHeader();
+          const height = jpeg[pos + 3] * 256 + jpeg[pos + 4];
+          const width = jpeg[pos + 5] * 256 + jpeg[pos + 6];
+          if (!width || !height) badHeader();
+          if (width > 8192 || height > 8192 || width * height > 4194304) fail('JPEG dimension limit: 4 megapixels, 8192 per axis');
+          foundSof = true;
+        }
+        pos += length;
+      }
+      if (!foundSof) badHeader();
+      pointer = m._malloc(jpeg.length);
+      if (!pointer) throw Error('OOM: WASM allocation failed');
+      m.HEAPU8.set(jpeg, pointer);
+      if (m._w_jpeg(pointer, jpeg.length, +(options.compressBoxes ?? true))) throw Error(m.UTF8ToString(m._w_error()));
+      const bytes = m.HEAPU8.slice(m._w_data(), m._w_data() + m._w_size());
+      const colorResolved: JpegEncoded['colorResolved'] = {policy:'jpeg-lossless', source:{profile:'jpeg'}};
+      const result = Object.assign(bytes, {colorResolved, warnings:[] as string[]});
+      stats = {jpegColorResolved:colorResolved, warnings:result.warnings, encodeMs:m._w_time(4)};
+      return result;
+    } finally {
+      if (module) {
+        if (pointer) {m._w_free();m._free(pointer);}
+        stats.totalMs = performance.now() - start;
+      }
+    }
+  }
+
+  return {encodeJpeg,encodePlanarYuv:(i,o={})=>run(i,o,false),encodeRgb:(i,o={})=>{
     try{return run(i,o,true);}catch(error){
-      if(o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
+      if(!module || o.iccFallback!=='srgb' || !(error instanceof Error) || !error.message.startsWith('ICC:'))throw error;
       const clean=<T extends ColorOptions>(object: T)=>{const {icc,colorMetadata,colorSpace,primaries,transfer,...rest}=object;return rest;};
       const bytes=run(clean(i),clean(o),true);
       bytes.warnings.push(`ICC fallback to untagged sRGB: ${error.message.slice(5)}`);
       return bytes;
     }
+  },dispose(){
+    try { if (module) m._w_free(); }
+    finally { state = 'disposed'; module = undefined; stats = {}; }
   },get stats(){return {...stats};}};
 }

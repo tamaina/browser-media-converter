@@ -1,15 +1,18 @@
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile, writeFile, mkdtemp, rm, mkdir, access} from 'node:fs/promises';
-import {constants} from 'node:fs';
+import {accessSync, statSync, constants} from 'node:fs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-const exec = promisify(execFile);
-import {join} from 'node:path';
+import {join, delimiter, isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {matrixProfile, grayProfile, lutProfile} from './icc.ts';
+import {iccFixture} from './icc-fixture.ts';
+const exec = promisify(execFile);
 import {createEncoder} from '@browser-mc/libjxl-wasm';
 import type {ColorOptions, EncodeOptions, Encoded, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
+
+const runFile = promisify(execFile);
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
@@ -90,7 +93,7 @@ test('partial colorSpace preserves CICP P3/linear and source labels', () => {
     assert.equal(bytes.colorResolved.fullRange, true);
     assert.equal(bytes.colorResolved.source.primaries, 'colorMetadata');
     assert.equal(bytes.colorResolved.source.transfer, 'colorMetadata');
-    assert.equal(bytes.colorResolved.source.fullRange, 'colorSpace');
+    assert.equal(bytes.colorResolved.source.fullRange, 'decoded-rgb');
     assert.ok(!bytes.warnings.some(w => /Defaulted (primaries|transfer|matrix|fullRange)/.test(w)));
   }
 });
@@ -106,7 +109,7 @@ test('prototype colorSpace getters returning null fall through to CICP', () => {
   assert.equal(c.primaries, 'smpte432');
   assert.equal(c.transfer, 'linear');
   assert.equal(c.source.primaries, 'colorMetadata');
-  assert.equal(c.source.fullRange, 'colorSpace');
+  assert.equal(c.source.fullRange, 'decoded-rgb');
 });
 
 test('color fields retain option > input > selected colorSpace > CICP precedence', () => {
@@ -117,8 +120,8 @@ test('color fields retain option > input > selected colorSpace > CICP precedence
   assert.equal(c.transfer, 'linear');
   assert.equal(c.source.primaries, 'option');
   assert.equal(c.source.transfer, 'option'); // documented legacy label for direct fields
-  assert.equal(c.source.fullRange, 'colorSpace');
-  assert.equal(c.source.matrix, 'colorMetadata');
+  assert.equal(c.source.fullRange, 'decoded-rgb');
+  assert.equal(c.source.matrix, 'decoded-rgb');
 });
 
 test('CICP transfer 5 and gamma28 reject identically instead of using gamma2.4', () => {
@@ -175,6 +178,7 @@ const nativeSkip = await access(decoder, constants.X_OK).then(async () => {
   }
 }, () => `native decoder unavailable: ${decoder}; build scripts/build-native.sh or set JXL_DECODE_FLOAT`);
 const tempRoot = process.env.TMPDIR ?? fileURLToPath(new URL('../build/tmp', import.meta.url));
+await mkdir(tempRoot, {recursive:true});
 async function withDecoded(bytes: Uint8Array, mode: string | undefined, check: (raw: Buffer, stdout: string) => void, root = tempRoot) {
   await mkdir(root, {recursive:true});
   const dir = await mkdtemp(join(root, 'lossless-'));
@@ -217,7 +221,7 @@ for (const [name, encode] of [
 
 test('U8 RGB lossless is bit-exact, including zero distance alias and all byte values', async (t) => {
   const data = Uint8Array.from({length:16 * 16 * 3}, (_, i) => (i * 73 + (i >> 8)) & 255);
-  for (const options of [{lossless:true}, {distance:0}, {lossless:true, distance:0}, {lossless:true, bitDepth:'preserve'}]) {
+  for (const options of [{lossless:true}, {distance:0}, {lossless:true, distance:0}, {lossless:true, bitDepth:'preserve'}] satisfies EncodeOptions[]) {
     await decode(t, encoder.encodeRgb({width:16, height:16, data}, options), (values, info) => {
       assert.equal(info.usesOriginalProfile, 1);
       assert.equal(info.bits, 8);
@@ -366,3 +370,287 @@ test('native harness creates missing temporary parent directories', async (t) =>
     } finally {await rm(top,{recursive:true,force:true});}
   });
 });
+
+// Optional independent native verifiers. Keep WASM encoding coverage even in a
+// WASM-only checkout; DJXL/JPEG_INFO may point to executables or PATH commands.
+function nativeTool(override: string | undefined, fallback: string) {
+  const value = override ?? fileURLToPath(new URL(fallback, import.meta.url));
+  const candidates = isAbsolute(value) || value.includes('/') ? [value] : (process.env.PATH ?? '').split(delimiter).map(p => join(p, value));
+  return candidates.find(p => {try {accessSync(p, constants.X_OK); return statSync(p).isFile();} catch {return false;}});
+}
+const djxl = nativeTool(process.env.DJXL, '../build/native/tools/djxl');
+const jpegInfo = nativeTool(process.env.JPEG_INFO, '../build/jpeg-info');
+for (const fixture of ['baseline', 'oriented', 'progressive', 'gray', 'xmp', 'icc-srgb', 'icc-p3', 'large-444', 'restart-422-tail']) {
+  test(`JPEG ${fixture} encodes with either box compression setting`, async t => {
+    const jpeg = new Uint8Array(await readFile(new URL(`./fixtures/${fixture}.jpg`, import.meta.url)));
+    const directory = await mkdtemp(join(tempRoot, 'jpeg-roundtrip-'));
+    try {
+      for (const compressBoxes of [undefined, false, true]) {
+        const padded = new Uint8Array(jpeg.length + 11); padded.set(jpeg, 7);
+        const encoded = encoder.encodeJpeg(padded.subarray(7, 7 + jpeg.length), {compressBoxes});
+        assert.equal(encoded.colorResolved.policy, 'jpeg-lossless');
+        assert.deepEqual(encoded.warnings, []);
+        assert.equal(encoder.stats.colorResolved, undefined);
+        assert.deepEqual(encoder.stats.jpegColorResolved, encoded.colorResolved);
+        if (fixture === 'large-444') assert.ok(encoded.length > 4096, 'forces NEED_MORE_OUTPUT and buffer growth');
+        const input = join(directory, 'input.jxl'), output = join(directory, 'output.jpg');
+        await writeFile(input, encoded);
+        await t.test(`byte-exact reconstruction (compressBoxes=${compressBoxes})`, {
+          skip: djxl ? false : 'djxl absent; build native tools or set DJXL'
+        }, async () => {
+          await runFile(djxl!, [input, output]);
+          assert.deepEqual(new Uint8Array(await readFile(output)), jpeg);
+        });
+        await t.test(`independent header inspection (compressBoxes=${compressBoxes})`, {
+          skip: jpegInfo ? false : 'jpeg-info absent; build native tools or set JPEG_INFO'
+        }, async () => {
+          const {stdout} = await runFile(jpegInfo!, [input]);
+          const dimensions = fixture === 'large-444' ? '160 128' : fixture === 'restart-422-tail' ? '33 17' : '9 7';
+          assert.equal(stdout.trim(), `${dimensions} ${fixture === 'oriented' ? 6 : 1} 1`, 'original-profile, non-XYB header and EXIF orientation');
+        });
+        if (fixture === 'oriented' && compressBoxes === false) {
+          const marker = Buffer.from(encoded).indexOf('Exif');
+          assert.ok(marker > 0, 'Exif box retained');
+          const original = Buffer.from(jpeg).indexOf(Buffer.from('Exif\0\0'));
+          const length = new DataView(jpeg.buffer, jpeg.byteOffset).getUint16(original - 2) - 8;
+          assert.deepEqual(encoded.subarray(marker + 8, marker + 8 + length), jpeg.subarray(original + 6, original + 6 + length));
+        }
+      }
+      assert.ok(encoder.encodeRgb(rgb()).length > 0);
+    } finally {await rm(directory, {recursive:true, force:true});}
+  });
+}
+
+test('pixel metadata and JPEG reconstruction boxes remain independent across calls', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const xmp = new TextEncoder().encode('<xmp>pixel-only</xmp>');
+  const exif = new Uint8Array([73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
+  const pixelBaseline = encoder.encodeRgb(rgb());
+  const jpegBaseline = encoder.encodeJpeg(jpeg, {compressBoxes:false});
+  for (const compressBoxes of [true, false]) {
+    for (const options of [{}, {lossless:true}, {distance:0}, {distance:0.1,effort:8}] satisfies EncodeOptions[]) {
+      const tagged = encoder.encodeRgb(rgb(), {...options,exif,xmp,compressBoxes});
+      assert.notDeepEqual([...tagged], [...pixelBaseline]);
+      assert.equal(encoder.stats.lossless, options.distance === 0 || options.lossless === true);
+      assert.equal(encoder.stats.effort, options.effort ?? 3);
+      for (const rgbViaPlanar of [false,true]) {
+        assert.ok(encoder.encodePlanarYuv(planar('I444A'), {...options,exif,xmp,compressBoxes,rgbViaPlanar}).length > 0);
+      }
+      assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+    }
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+    assert.deepEqual([...encoder.encodeRgb(rgb())], [...pixelBaseline]);
+    assert.throws(() => encoder.encodeRgb(rgb(), {compressBoxes:1} as never), /compressBoxes must be boolean/);
+    assert.deepEqual(encoder.stats, {});
+    assert.deepEqual([...encoder.encodeJpeg(jpeg, {compressBoxes:false})], [...jpegBaseline]);
+  }
+});
+
+test('JPEG rejects corrupt input and recovers for the next call', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  for (const bytes of [new Uint8Array([1,2,3]), jpeg.subarray(0, 32), new Uint8Array([255,216,255,217])]) {
+    assert.throws(() => encoder.encodeJpeg(bytes), /BAD_INPUT/);
+  }
+  assert.throws(() => encoder.encodeJpeg(jpeg.subarray(0, jpeg.length - 20)), /lossless JPEG recompression failed \(BAD_INPUT:/);
+  assert.ok(encoder.encodeJpeg(jpeg).length > 0);
+});
+
+test('JPEG rejects misleading pixel/lossy and metadata removal options', () => {
+  const jpeg = new Uint8Array([255,216]);
+  for (const option of ['distance','effort','lossless','xyb','uses_original_profile','keepExif','keepXmp','bitDepth','icc','exif','xmp']) {
+    assert.throws(() => encoder.encodeJpeg(jpeg, {[option]:false} as never), /unsupported JPEG option/);
+  }
+  for (const input of [null, [], new ArrayBuffer(3), new Uint8Array()]) {
+    assert.throws(() => encoder.encodeJpeg(input as never), /nonempty Uint8Array/);
+  }
+  for (const compressBoxes of [0, null, 'true']) {
+    assert.throws(() => encoder.encodeJpeg(jpeg, {compressBoxes} as never), /compressBoxes must be boolean/);
+  }
+  assert.throws(() => encoder.encodeJpeg(jpeg, null as never), /JPEG options must be an object/);
+});
+
+test('JPEG rejects oversized bytes and SOF dimensions before encoding', async () => {
+  assert.throws(() => encoder.encodeJpeg(new Uint8Array(64 * 1024 * 1024 + 1)), /size limit: 64 MiB/);
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  const sof = jpeg.findIndex((v, i) => v === 0xff && jpeg[i + 1] === 0xc0);
+  assert.ok(sof > 0);
+  for (const [width, height] of [[8193, 1], [1, 8193], [2049, 2048], [65535, 65535]]) {
+    const input = jpeg.slice();
+    const view = new DataView(input.buffer);
+    view.setUint16(sof + 5, height); view.setUint16(sof + 7, width);
+    assert.throws(() => encoder.encodeJpeg(input), /JPEG dimension limit/);
+  }
+  const truncated = jpeg.slice(0, sof + 6);
+  assert.throws(() => encoder.encodeJpeg(truncated), /BAD_INPUT/);
+  assert.ok(encoder.encodeJpeg(jpeg).length > 0);
+});
+
+test('JPEG failures clear previous statistics and refresh totalMs', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+  for (const invalid of [new Uint8Array(), jpeg.subarray(0, jpeg.length - 20)]) {
+    encoder.encodeJpeg(jpeg);
+    assert.ok(encoder.stats.jpegColorResolved);
+    assert.throws(() => encoder.encodeJpeg(invalid));
+    assert.equal(encoder.stats.jpegColorResolved, undefined);
+    assert.equal(encoder.stats.encodeMs, undefined);
+    assert.equal(typeof encoder.stats.totalMs, 'number');
+  }
+});
+
+test('CMYK JPEG reports an unsupported coefficient input and recovers', async () => {
+  const jpeg = new Uint8Array(await readFile(new URL('./fixtures/cmyk.jpg', import.meta.url)));
+  assert.throws(() => encoder.encodeJpeg(jpeg), /BAD_INPUT|NOT_SUPPORTED/);
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
+});
+
+test('ICC matrix/TRC encodes; PQ/HLG CICP ICC rejects or explicitly falls back', () => {
+  assert.ok(encoder.encodeRgb(rgb({icc:iccFixture()})).length > 0);
+  for (const transfer of [16,18] as const) {
+    const input = rgb({icc:iccFixture(transfer)});
+    for (const iccHeader of ['auto','exact','bt2020','p3'] as const) {
+      assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /ICC: HDR PQ\/HLG/);
+    }
+    const bytes = encoder.encodeRgb(input, {iccFallback:'srgb'});
+    assert.equal(bytes.colorResolved.profile, 'none');
+    assert.ok(bytes.warnings.some(w => /ICC fallback/.test(w)));
+  }
+});
+
+test('borrowed RGBA callbacks retain RGB and alpha failure details', () => {
+  for (const data of [new Float32Array([NaN,0.2,0.3,1]), new Float32Array([0.1,0.2,0.3,NaN]), new Float32Array([0.1,0.2,0.3,1.1])]) {
+    assert.throws(() => encoder.encodeRgb(rgb({data})), /(?:RGB|alpha) must be finite nominal-range/);
+    assert.deepEqual(encoder.stats, {});
+  }
+  // A reported validation failure leaves the healthy instance reusable.
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
+});
+
+test('failed validation clears prior statistics without modifying the snapshot', () => {
+  encoder.encodeRgb(rgb());
+  const previous = encoder.stats;
+  assert.ok(previous.colorResolved);
+  assert.throws(() => encoder.encodeRgb(rgb({width:0})), /dimension/);
+  assert.deepEqual(encoder.stats, {});
+  assert.ok(previous.colorResolved);
+  assert.equal(typeof previous.totalMs, 'number');
+});
+
+test('bt470bg transfer alias rejects gamma 2.8 consistently', () => {
+  for (const transfer of ['bt470bg','gamma28']) {
+    assert.throws(() => encoder.encodeRgb(rgb({colorSpace:{transfer}})), /unsupported SDR transfer: gamma28/);
+    assert.throws(() => encoder.encodeRgb(rgb({colorMetadata:cicp(transfer)})), /unsupported SDR transfer: gamma28/);
+  }
+});
+
+test('decoded RGB reports full range and no YUV-only defaults', () => {
+  const bytes = encoder.encodeRgb(rgb());
+  assert.equal(bytes.colorResolved.matrix, 'rgb');
+  assert.equal(bytes.colorResolved.fullRange, true);
+  assert.equal(bytes.colorResolved.chromaSiting, undefined);
+  assert.ok(!bytes.warnings.some(w => /Defaulted (matrix|fullRange|chromaSiting)/.test(w)));
+});
+
+test('RGB preserve selects U8 depth; U16 and float retain float32 output', () => {
+  const input = rgb({data:new Uint8Array([17,128,255])});
+  assert.deepEqual([...encoder.encodeRgb(input, {bitDepth:'preserve'})], [...encoder.encodeRgb(input, {bitDepth:8})]);
+  assert.notDeepEqual([...encoder.encodeRgb(input, {bitDepth:'preserve'})], [...encoder.encodeRgb(input, {bitDepth:'float32'})]);
+  for (const data of [new Uint16Array([100,200,300]), new Float32Array([0.1,0.2,0.3])]) {
+    assert.deepEqual([...encoder.encodeRgb(rgb({data}), {bitDepth:'preserve'})], [...encoder.encodeRgb(rgb({data}), {bitDepth:'float32'})]);
+  }
+});
+
+test('multi-pixel NV12 matches deinterleaved I420; layouts reject bad bounds', () => {
+  const y = {data:new Uint8Array(9).fill(128),stride:3};
+  const u = {data:new Uint8Array([120,121,122,123]),stride:2};
+  const v = {data:new Uint8Array([128,129,130,131]),stride:2};
+  const input: PlanarInput = {width:3,height:3,format:'I420',planes:[y,u,v]};
+  const uv = {data:new Uint8Array([120,128,121,129,122,130,123,131]),stride:4};
+  assert.deepEqual([...encoder.encodePlanarYuv({...input,format:'NV12',planes:[y,uv]})], [...encoder.encodePlanarYuv(input)]);
+  for (const bad of [{...y,stride:2}, {...y,offset:1}, {...y,offset:-1}]) {
+    assert.throws(() => encoder.encodePlanarYuv({...input,planes:[bad,u,v]}), /plane (bounds|data\/offset\/stride)/);
+  }
+  assert.throws(() => encoder.encodePlanarYuv({...input,width:8192,height:8192}), /4 megapixels/);
+});
+
+// Replace selected real exports to inject an escaping Wasm failure without
+// relying on a bug in libjxl/moxcms or exposing a production panic hook.
+async function instrumented(overrides: (exports: WebAssembly.Exports) => Record<string, unknown>) {
+  return createEncoder({instantiateWasm(imports, receive) {
+    WebAssembly.instantiate(wasm, imports).then(({instance,module}) => {
+      receive({exports:{...instance.exports,...overrides(instance.exports)}} as WebAssembly.Instance, module);
+    });
+    return {};
+  }});
+}
+for (const name of ['w_options','w_init','w_metadata','malloc','w_rgb','w_free']) {
+  test(`escaping ${name} exception poisons instance and prevents further cleanup/fallback`, async () => {
+    const original = new WebAssembly.RuntimeError('ICC: injected fatal trap');
+    let cleanup = 0, calls = 0;
+    const instance = await instrumented(exports => ({
+      w_free:() => { cleanup++; return (exports.w_free as () => void)(); },
+      [name]:() => {calls++; throw original;}
+    }));
+    assert.throws(() => instance.encodeRgb(rgb(),{iccFallback:'srgb'}), error => error === original);
+    assert.equal(calls,1);
+    assert.equal(cleanup,0);
+    assert.deepEqual(instance.stats,{});
+    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is poisoned/);
+    assert.deepEqual(instance.stats,{});
+    instance.dispose(); instance.dispose();
+    assert.equal(calls,1); assert.equal(cleanup,0);
+  });
+}
+
+test('dispose releases live module output and permanently rejects encoding', async () => {
+  let cleanup = 0;
+  const instance = await instrumented(exports => ({w_free:() => {cleanup++; (exports.w_free as () => void)();}}));
+  instance.encodeRgb(rgb());
+  instance.dispose(); instance.dispose();
+  assert.equal(cleanup,2); // successful encode cleanup, then dispose
+  assert.deepEqual(instance.stats,{});
+  assert.throws(() => instance.encodeRgb(rgb()), /Encoder is disposed/);
+  assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is disposed/);
+  assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is disposed/);
+  assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is disposed/);
+  assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is disposed/);
+  assert.deepEqual(instance.stats,{});
+});
+
+test('empty codec status messages get a non-empty fallback error', async () => {
+  const instance = await instrumented(() => ({w_encode:() => 1}));
+  for (let attempt=0; attempt<2; attempt++) {
+    assert.throws(() => instance.encodePlanarYuv({...planar('I444'),planes:planar('I444').planes.slice(0,3)}), /Wasm encode failed \(no error detail\)/);
+    assert.deepEqual(instance.stats,{});
+  }
+  instance.dispose();
+});
+
+for (const name of ['malloc','w_jpeg','w_free','free']) {
+  test(`escaping JPEG ${name} exception preserves trap and poisons instance`, async () => {
+    const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+    const original = new WebAssembly.RuntimeError('injected JPEG fatal trap');
+    let calls = 0, cleanup = 0;
+    const instance = await instrumented(exports => ({
+      w_free:() => {cleanup++; (exports.w_free as () => void)();},
+      free:(pointer: number) => {cleanup++; (exports.free as (pointer: number) => void)(pointer);},
+      [name]:() => {calls++; throw original;}
+    }));
+    assert.throws(() => instance.encodeJpeg(jpeg), error => error === original);
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+    assert.throws(() => instance.encodeJpeg(jpeg), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb(), {lossless:true,effort:10}), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444A'), {distance:0,effort:8}), /Encoder is poisoned/);
+    instance.dispose(); instance.dispose();
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+  });
+}

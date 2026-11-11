@@ -1,6 +1,5 @@
 import {
   detectImageMime,
-  readExif,
   stripGpsFromExif,
   writeExif,
   type ExifPayload,
@@ -17,6 +16,7 @@ import {
 } from '@browser-mc/webcodecs-avif';
 import { type ImageColorMetadata } from '@browser-mc/media-container';
 import { readSourceColorMetadata, compatibleOutputColorMetadata } from './source-color-metadata.js';
+import { readSourceExif } from './source-exif.js';
 import {
   copyArrayBuffer,
   decodeFirstImageFrame,
@@ -262,7 +262,8 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
   }
 
   const exifPolicy = options.exif ?? 'keep';
-  const sourceExif = readSourceExif(inputBytes);
+  const exifWarnings: string[] = [];
+  const sourceExif = await readSourceExif(inputBytes, exifWarnings, exifPolicy);
   const frame = await decodeFirstImageFrame(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
   });
@@ -272,6 +273,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
     const resized = await resizeVideoFrame(frame, size, options);
+    resized.warnings.push(...exifWarnings);
     const outputColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
       canvasColorSpace: resized.canvasColorSpace,
       preserveInput: options.colorMetadata !== 'canvas-sdr',
@@ -324,14 +326,6 @@ export async function resizeAnimatedImageToWebp(
 
 export { muxAnimatedWebp, readAvifCicpColor, readAvifColorMetadata, readAvifColorSpace };
 
-
-function readSourceExif(data: Uint8Array) {
-  try {
-    return readExif(data);
-  } catch {
-    return null;
-  }
-}
 
 function detectInputMime(data: Uint8Array, input: Blob | ArrayBuffer | Uint8Array) {
   if (input instanceof Blob && input.type) return input.type;

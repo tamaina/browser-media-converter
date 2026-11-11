@@ -6,13 +6,20 @@ mkdir -p "$TMPDIR"
 export TMP="$TMPDIR" TEMP="$TMPDIR" XDG_CACHE_HOME="$TMPDIR/cache" npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
 apply_once() { # repo patch: apply, or accept an already-applied patch
   if git -C "$1" apply --check "$2" 2>/dev/null; then git -C "$1" apply "$2"
-  else git -C "$1" apply --reverse --check "$2"; fi
+  elif git -C "$1" apply --reverse --check "$2" 2>/dev/null; then :
+  else
+    echo "error: stale/incompatible libjxl patch $2; remove $PWD/build/libjxl and rerun the build script" >&2
+    return 1
+  fi
 }
 fetch_libjxl() {
   if [[ ! -d build/libjxl/.git ]]; then
     git clone --depth 1 --branch v0.11.1 https://github.com/libjxl/libjxl build/libjxl
   fi
-  [[ $(git -C build/libjxl rev-parse HEAD) == "$LIBJXL_REVISION" ]]
+  if [[ $(git -C build/libjxl rev-parse HEAD) != "$LIBJXL_REVISION" ]]; then
+    echo "error: build/libjxl must be at $LIBJXL_REVISION; remove $PWD/build/libjxl and rerun the build script" >&2
+    return 1
+  fi
   # Highway: both builds; Brotli: Wasm (native uses system Brotli).
   # Skip network submodule fetch when trees are already populated (offline/seeded worktrees).
   if [[ ! -f build/libjxl/third_party/highway/CMakeLists.txt || ! -f build/libjxl/third_party/brotli/c/include/brotli/decode.h ]]; then
@@ -20,4 +27,5 @@ fetch_libjxl() {
   fi
   apply_once build/libjxl "$PWD/patches/libjxl-xyb.patch"
   apply_once build/libjxl "$PWD/patches/libjxl-external-cms.patch"
+  apply_once build/libjxl "$PWD/patches/libjxl-jpeg-cms.patch"
 }

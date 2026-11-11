@@ -9,10 +9,40 @@ WebCodecs, Mediabunny, ISOBMFF, and image metadata experiments.
 - `@browser-mc/binary`: shared byte, integer, and ASCII helpers.
 - `@browser-mc/media-container`: ISOBMFF/RIFF helpers plus AVIF and animated WebP muxers.
 - `@browser-mc/mediabunny-scene-keyframes`: samples decoded frames with Mediabunny and derives a key-frame interval from scene changes.
-- `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP, and rewrites AVIF through the `media-container` minimal muxer.
+- `@browser-mc/exif-transplant`: extracts/removes/restores EXIF payloads for JPEG/WebP/JPEG XL, and rewrites AVIF through the `media-container` minimal muxer.
 - `@browser-mc/browser-image-resizer-ex`: browser image resize/convert facade with AVIF output, animated WebP output, limited EXIF policies, and color-aware CPU preserve resize.
 - `@browser-mc/browser-movie-converter`: Mediabunny conversion option builder with WebCodecs color-aware CPU preserve resize, scene-keyframe forcing, and stream-only HLS output.
 - `@browser-mc/libjxl-wasm` (private, experimental): patched libjxl v0.11.1 native/Wasm builds, Rust session/CMS, C++ bridge, and the `createEncoder` TypeScript API.
+
+## JPEG XL metadata
+
+The experimental `@browser-mc/libjxl-wasm` encoder accepts metadata in the
+options of both `encodeRgb` and `encodePlanarYuv`:
+
+```js
+const jxl = encoder.encodeRgb({width, height, data}, {
+  exif: tiffBytes, // Uint8Array: raw TIFF or Exif\0\0 + TIFF, 1..65536 bytes
+  xmp: xmpBytes,   // Uint8Array: opaque XML/XMP, 1 byte..4 MiB
+  compressBoxes: true, // default; Brotli-compress the Exif and xml-space boxes
+});
+```
+
+The encoder strips the optional EXIF prefix and adds the four-byte TIFF offset
+required by a JPEG XL `Exif` box. IFD0 Orientation (1..8) sets the codestream
+orientation; missing Orientation means identity. Supply pixels and dimensions
+**before** that transform: the encoder does not rotate or mirror pixel data.
+Already oriented pixels require EXIF with Orientation removed or set to 1.
+Malformed TIFF headers, IFD0 tables and Orientation entries are rejected;
+other EXIF tags and XMP bytes are preserved without interpreting their contents.
+Metadata is optional and applies only to that encode call. See
+[`libjxl-wasm` README](packages/libjxl-wasm/README.md) for the full API and verification.
+
+EXIF payloads for JPEG XL encoding should come from `(await readExifAsync(source))?.bytes`
+or shared helpers in `@browser-mc/exif-transplant`. The encode-time `exif`
+option sets codestream Orientation from IFD0; supply pixels before that transform.
+Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update
+the Exif box and drop dependent `jbrd` reconstruction data, without changing codestream Orientation. `xmp?: Uint8Array` remains
+an opaque encoder option, with `compressBoxes` controlling both metadata boxes.
 
 ## Commands
 
@@ -76,3 +106,8 @@ Current Electron result for `hdrrec2020.avif`:
 - Input: `I444P10`, `2048x1365`, `primaries: bt2020`, `matrix: bt2020-ncl`, `fullRange: true`
 - Raw resize: `I444P10`, `1024x682`, `primaries: bt2020`, `matrix: bt2020-ncl`
 - Canvas comparison: converts to `BGRA` with `primaries: smpte432`
+
+EXIF is validated strictly before encoding. For camera metadata with invalid
+Orientation (including 0 or non-SHORT entries), sanitize first; for structurally
+truncated TIFF, omit EXIF and report a warning. See the
+[`EXIF sanitation guide`](packages/exif-transplant/README.md#sanitizing-exif-before-encoding).
