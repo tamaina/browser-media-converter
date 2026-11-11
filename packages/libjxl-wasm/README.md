@@ -16,7 +16,7 @@ scripts/                   native and Wasm builds
 tools/                     native decoder and guard-page tool
 test/api.test.ts           API tests against the real Wasm codec
 build/                     ignored libjxl checkout, caches, compiled artifacts
-target/                    ignored Cargo outputs
+build/target/              ignored Cargo outputs
 ```
 
 `patches/libjxl-xyb.patch` adds planar input plumbing and the fused YUV→XYB
@@ -35,9 +35,9 @@ Add an installed TypeScript toolchain to `PATH`; there is no need to install
 dependencies in this package. Node executes the API and tests without `tsc`.
 
 ```sh
-export TMPDIR="$(cd ../.. && pwd)/build/tmp"
+export TMPDIR="$PWD/build/tmp"
 export EM_CACHE="$PWD/build/em-cache"
-export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_TARGET_DIR="$PWD/build/target"
 export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 # Use the host compiler rather than an ambient cc wrapper.
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc
@@ -90,7 +90,7 @@ Shared by `encodeRgb(input, options)` and `encodePlanarYuv(input, options)`:
 | `distance` | finite number [0,25], Butteraugli distance; 0 means lossless | 1 |
 | `lossless` | boolean; true conflicts with positive distance | false |
 | `effort` | integer 1..10 (libjxl v0.11.1 non-expert range) | 3 |
-| `bitDepth` | `'preserve'`, `'float32'`, 8, 10, 12 | planar: preserve; RGB: float32 (lossless U8: 8) |
+| `bitDepth` | `'preserve'`, `'float32'`, 8, 10, 12, 16 (16: RGB only) | planar: preserve; RGB: float32 (lossless U8/U16: 8/16) |
 
 ```js
 encoder.encodeRgb({width, height, data}, {lossless: true, effort: 10});
@@ -99,35 +99,58 @@ encoder.encodePlanarYuv(input, {distance: 0, bitDepth: 'float32'});
 
 Lossless uses original-profile modular coding (`JxlEncoderSetFrameLossless`),
 bypassing the lossy XYB conversion. `lossless: true` and `distance: 0` select the
-same mode; zero wins even with `lossless: false`. A positive explicit distance
-conflicts with `lossless: true`. Without either selector the default stays
+same mode. `lossless: false` conflicts with zero distance; a positive explicit
+distance conflicts with `lossless: true`. Explicit null `distance`, `lossless`,
+or `effort` is rejected.
+Positive distances below 0.01 are clamped to 0.01 before passing to Wasm.
+Without either selector the default stays
 lossy XYB, distance 1, effort 3. Effort accepts integers 1..10, verified in
 v0.11.1 `lib/jxl/encode.cc`; expert-only effort 11 is not exposed.
 Effort 8..10 uses standard RGB callbacks because the fused/row XYB input
 paths cannot supply the linear RGB image required by those effort tiers.
+Lossless uses these standard callbacks too. For planar input this bypasses
+fused SIMD, reconstructs RGB with scalar callbacks, and may allocate whole-frame
+float RGB buffers. These paths emit warnings. Effort 9/10 is limited to 1,048,576
+pixels and emits a warning: encoding can block the calling thread for a long time,
+especially with lossless. Use a Worker for interactive applications. Other modes
+retain the 4,194,304-pixel limit; this is not a memory or latency guarantee.
+`stats.inputPath` names the callback path (`standard-rgb` or `xyb`);
+`stats.lossless`, `distance`, and `effort` report resolved options. Standard
+callbacks report scalar `simdLanes: 1` and measured reconstruction time when
+`observe: true`; they do not measure internal libjxl SIMD work.
 
 U8/U8Clamped RGB defaults to 8-bit output in lossless mode and round-trips
-bit-exactly. U16 and Float32 RGB keep the existing float32 output default;
-integer RGB is normalized to float32 first (U16 recovery rounds decoded values
-back to 16-bit). Float32 round-trip tests allow absolute error 1e-7 for decoder
-float output. Explicit integer output `bitDepth` quantizes reconstructed RGB
+bit-exactly. U16 RGB defaults to 16-bit integer output in lossless mode and
+recovers every integer code exactly. `bitDepth: 'preserve'` uses the same 8/16-bit
+source depth for lossless integer RGB. Float32 RGB keeps float32 output and
+round-trips bit-exactly. Integer input is normalized to float32 before encoding.
+Explicit integer output `bitDepth` quantizes reconstructed RGB
 at that depth; it cannot preserve arbitrary float samples. Planar lossless
 preserves reconstructed RGB at the selected output depth, **not the source
-YUV planes**: chroma interpolation, range conversion, clipping (or strict
+YUV planes** (also reported in a runtime warning): chroma interpolation, range conversion, clipping (or strict
 validation), and optional `rgbViaPlanar` rounding happen before coding.
 Planar defaults to its source integer depth; use `bitDepth: 'float32'` to
 retain the reconstructed floats. Invisible RGB is retained in lossless mode.
 `iccHeader: 'bt2020' | 'p3'` is rejected with lossless because the original
-profile must describe the stored samples. `auto`/`exact` remain available.
+profile must describe the stored samples. `auto`/`exact` remain available and
+both embed the source ICC in lossless mode. `colorResolved.path`/`iccModel`
+describe the parsed CMS capabilities; lossless bypasses pixel color conversion.
 
 The shared native/Wasm C ABI `bridge_encode_options(distance, effort)` selects
 these options (distance zero means lossless). Native callers that do not invoke
 it retain `JXL_EXPERIMENT_DISTANCE` and the default effort 3;
-`JXL_EXPERIMENT_EFFORT` is also supported. Explicit ABI options take precedence.
+`JXL_EXPERIMENT_EFFORT` is also supported. Explicit ABI options take
+precedence until `bridge_encode_options_reset()`
+restores environment-controlled defaults. Invalid native distances/efforts fail
+with a specific validation error rather than silently selecting lossless.
 
-API tests run sequentially with `npm run test:api`. Round-trip cases require
-`build/decode-float` (built by `scripts/build-native.sh`); test temporary files
-use `TMPDIR`, falling back to `build/tmp`. No new dependencies are needed.
+API tests run sequentially with `npm run test:api`. Wasm encoding and validation
+assertions always run. Independent decoder assertions skip with a reason when
+`build/decode-float` or its system libraries are absent (built by
+`scripts/build-native.sh`);
+`JXL_DECODE_FLOAT` overrides its path. Temporary files use `TMPDIR`, falling back
+to package-local `build/tmp`; the harness creates the parent directory. No new
+dependencies are needed.
 
 ## HDR base
 

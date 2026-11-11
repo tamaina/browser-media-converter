@@ -26,6 +26,7 @@ void planar_instrumentation(int enabled);
 // Synchronous per-thread encoder options for native/Wasm; distance 0 selects
 // original-profile lossless. Explicit options supersede native env overrides.
 void bridge_encode_options(float distance,int effort);
+void bridge_encode_options_reset();
 void planar_quantize_rgb(float* rgb,size_t count);
 // Caller supplies depth 8/10/12 and count writable floats.
 void planar_quantize_rgb_depth(float* rgb,size_t count,uint32_t depth);

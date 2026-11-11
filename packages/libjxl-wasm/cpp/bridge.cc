@@ -22,6 +22,7 @@ extern "C" double planar_clock_ms() {
   return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 #endif
 }
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -65,29 +66,47 @@ struct Source {
   size_t capture_width=0,capture_height=0;
   std::vector<uint8_t> captured_pixels;
   std::map<const void*,std::vector<float>> buffers;
+  double fill_ms=0;
 };
 // Shared synchronous ABI for Wasm and native proof callers. Native environment
-// overrides remain active until a caller explicitly supplies options.
+// overrides remain active until a caller explicitly supplies options, or resets them.
 static thread_local bool explicit_options=false;
 static thread_local float encode_distance=1;
 static thread_local int encode_effort=3;
 extern "C" void bridge_encode_options(float distance,int effort) {
   explicit_options=true;encode_distance=distance;encode_effort=effort;
 }
+// Native harnesses can return to environment-controlled defaults explicitly.
+extern "C" void bridge_encode_options_reset() {
+  explicit_options=false;encode_distance=1;encode_effort=3;
+}
 static float frame_distance() {
   const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_DISTANCE");
-  return value?std::strtof(value,nullptr):encode_distance;
+  char* end=nullptr;
+  errno=0;
+  const double distance=value?std::strtod(value,&end):encode_distance;
+  if((value && (end==value || *end || errno==ERANGE)) || !std::isfinite(distance) || distance<0 || distance>25)
+    throw std::runtime_error("distance must be in [0,25] (JXL_EXPERIMENT_DISTANCE)");
+  return distance>0?static_cast<float>(std::max(0.01,distance)):0;
 }
 static int frame_effort() {
   const char* value=explicit_options?nullptr:std::getenv("JXL_EXPERIMENT_EFFORT");
-  return value?std::atoi(value):encode_effort;
+  char* end=nullptr;
+  errno=0;
+  const long effort=value?std::strtol(value,&end,10):encode_effort;
+  if((value && (end==value || *end || errno==ERANGE)) || effort<1 || effort>10)
+    throw std::runtime_error("effort must be an integer in 1..10 (JXL_EXPERIMENT_EFFORT)");
+  return static_cast<int>(effort);
 }
 static void format(void* opaque,JxlPixelFormat* f) { *f={static_cast<Source*>(opaque)->gray?1u:3u,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0}; }
 static const void* get(void* opaque,size_t x,size_t y,size_t w,size_t h,size_t* stride) noexcept {
   auto& s=*static_cast<Source*>(opaque);
   try {
     std::vector<float> pixels(w*h*3);
-    if (s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size())) { s.failed=true; return nullptr; }
+    const double start=instrumentation?planar_clock_ms():0;
+    const int status=s.fill(s.opaque,x,y,w,h,pixels.data(),pixels.size());
+    if(instrumentation)s.fill_ms+=planar_clock_ms()-start;
+    if (status) { s.failed=true; return nullptr; }
     if(s.gray) {for(size_t i=0;i<w*h;i++)pixels[i]=pixels[i*3];pixels.resize(w*h);}
     s.live+=pixels.size()*sizeof(float);
     ++s.result.callbacks;
@@ -153,7 +172,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
     // the experimental fused/row XYB paths cannot provide that image.
     const bool standard_input=lossless || effort>=8;
     if(lossless && header_mode>=2) throw std::runtime_error("lossless requires the original profile");
-    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {}};
+    Source source{opaque,fill,*result,false,0,false,alpha,{},0,0,{}, {},0};
     // Validates/parses the source ICC (errors are "ICC: ..."), always installed
     // so enum inputs also use the Rust transfer/primaries path.
     char cms_error[256]="";
@@ -214,7 +233,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       } else if(JxlEncoderSetICCProfile(enc.get(),source_profile,source_profile_size)!=JXL_ENC_SUCCESS)
         throw std::runtime_error("ICC: libjxl CMS rejected the profile");
       // Exact mode (1) always embeds; auto embeds unless the CMS described it.
-      source_profile_header=header_mode>=2?0:!planar_cms_enum_header(cms.get());
+      source_profile_header=header_mode>=2?0:(lossless || !planar_cms_enum_header(cms.get()));
     } else check(JxlEncoderSetColorEncoding(enc.get(),&color));
     auto* settings=JxlEncoderFrameSettingsCreate(enc.get(),nullptr);
     if(!settings) throw std::runtime_error("frame settings allocation failed");
@@ -286,6 +305,7 @@ static int encode(const Config* c,void* opaque,Fill fill,const float* rgb,const 
       if(status!=JXL_ENC_NEED_MORE_OUTPUT) throw std::runtime_error("libjxl output failed");
       out.resize(out.size()*2);
     }
+    if(standard_input) {result->conversion_ms=source.fill_ms;result->simd_lanes=1;}
     result->data=static_cast<uint8_t*>(std::malloc(used));
     if(!result->data) throw std::runtime_error("output allocation failed");
     std::memcpy(result->data,out.data(),used); result->size=used;
