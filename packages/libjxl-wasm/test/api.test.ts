@@ -7,9 +7,11 @@ import {join, delimiter, isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-const runFile = promisify(execFile);
+import {iccFixture} from './icc-fixture.ts';
 import {createEncoder} from '@browser-mc/libjxl-wasm';
 import type {ColorOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm';
+
+const runFile = promisify(execFile);
 
 // Exercise the real API and codec without a browser or a network server.
 const wasm = await readFile(new URL('../build/wasm/codec.wasm', import.meta.url));
@@ -90,7 +92,7 @@ test('partial colorSpace preserves CICP P3/linear and source labels', () => {
     assert.equal(bytes.colorResolved.fullRange, true);
     assert.equal(bytes.colorResolved.source.primaries, 'colorMetadata');
     assert.equal(bytes.colorResolved.source.transfer, 'colorMetadata');
-    assert.equal(bytes.colorResolved.source.fullRange, 'colorSpace');
+    assert.equal(bytes.colorResolved.source.fullRange, 'decoded-rgb');
     assert.ok(!bytes.warnings.some(w => /Defaulted (primaries|transfer|matrix|fullRange)/.test(w)));
   }
 });
@@ -106,7 +108,7 @@ test('prototype colorSpace getters returning null fall through to CICP', () => {
   assert.equal(c.primaries, 'smpte432');
   assert.equal(c.transfer, 'linear');
   assert.equal(c.source.primaries, 'colorMetadata');
-  assert.equal(c.source.fullRange, 'colorSpace');
+  assert.equal(c.source.fullRange, 'decoded-rgb');
 });
 
 test('color fields retain option > input > selected colorSpace > CICP precedence', () => {
@@ -117,8 +119,8 @@ test('color fields retain option > input > selected colorSpace > CICP precedence
   assert.equal(c.transfer, 'linear');
   assert.equal(c.source.primaries, 'option');
   assert.equal(c.source.transfer, 'option'); // documented legacy label for direct fields
-  assert.equal(c.source.fullRange, 'colorSpace');
-  assert.equal(c.source.matrix, 'colorMetadata');
+  assert.equal(c.source.fullRange, 'decoded-rgb');
+  assert.equal(c.source.matrix, 'decoded-rgb');
 });
 
 test('CICP transfer 5 and gamma28 reject identically instead of using gamma2.4', () => {
@@ -268,3 +270,149 @@ test('CMYK JPEG reports an unsupported coefficient input and recovers', async ()
   assert.throws(() => encoder.encodeJpeg(jpeg), /BAD_INPUT|NOT_SUPPORTED/);
   assert.ok(encoder.encodeRgb(rgb()).length > 0);
 });
+
+test('ICC matrix/TRC encodes; PQ/HLG CICP ICC rejects or explicitly falls back', () => {
+  assert.ok(encoder.encodeRgb(rgb({icc:iccFixture()})).length > 0);
+  for (const transfer of [16,18] as const) {
+    const input = rgb({icc:iccFixture(transfer)});
+    for (const iccHeader of ['auto','exact','bt2020','p3'] as const) {
+      assert.throws(() => encoder.encodeRgb(input, {iccHeader}), /ICC: HDR PQ\/HLG/);
+    }
+    const bytes = encoder.encodeRgb(input, {iccFallback:'srgb'});
+    assert.equal(bytes.colorResolved.profile, 'none');
+    assert.ok(bytes.warnings.some(w => /ICC fallback/.test(w)));
+  }
+});
+
+test('borrowed RGBA callbacks retain RGB and alpha failure details', () => {
+  for (const data of [new Float32Array([NaN,0.2,0.3,1]), new Float32Array([0.1,0.2,0.3,NaN]), new Float32Array([0.1,0.2,0.3,1.1])]) {
+    assert.throws(() => encoder.encodeRgb(rgb({data})), /(?:RGB|alpha) must be finite nominal-range/);
+    assert.deepEqual(encoder.stats, {});
+  }
+  // A reported validation failure leaves the healthy instance reusable.
+  assert.ok(encoder.encodeRgb(rgb()).length > 0);
+});
+
+test('failed validation clears prior statistics without modifying the snapshot', () => {
+  encoder.encodeRgb(rgb());
+  const previous = encoder.stats;
+  assert.ok(previous.colorResolved);
+  assert.throws(() => encoder.encodeRgb(rgb({width:0})), /dimension/);
+  assert.deepEqual(encoder.stats, {});
+  assert.ok(previous.colorResolved);
+  assert.equal(typeof previous.totalMs, 'number');
+});
+
+test('bt470bg transfer alias rejects gamma 2.8 consistently', () => {
+  for (const transfer of ['bt470bg','gamma28']) {
+    assert.throws(() => encoder.encodeRgb(rgb({colorSpace:{transfer}})), /unsupported SDR transfer: gamma28/);
+    assert.throws(() => encoder.encodeRgb(rgb({colorMetadata:cicp(transfer)})), /unsupported SDR transfer: gamma28/);
+  }
+});
+
+test('decoded RGB reports full range and no YUV-only defaults', () => {
+  const bytes = encoder.encodeRgb(rgb());
+  assert.equal(bytes.colorResolved.matrix, 'rgb');
+  assert.equal(bytes.colorResolved.fullRange, true);
+  assert.equal(bytes.colorResolved.chromaSiting, undefined);
+  assert.ok(!bytes.warnings.some(w => /Defaulted (matrix|fullRange|chromaSiting)/.test(w)));
+});
+
+test('RGB preserve selects U8 depth; U16 and float retain float32 output', () => {
+  const input = rgb({data:new Uint8Array([17,128,255])});
+  assert.deepEqual([...encoder.encodeRgb(input, {bitDepth:'preserve'})], [...encoder.encodeRgb(input, {bitDepth:8})]);
+  assert.notDeepEqual([...encoder.encodeRgb(input, {bitDepth:'preserve'})], [...encoder.encodeRgb(input, {bitDepth:'float32'})]);
+  for (const data of [new Uint16Array([100,200,300]), new Float32Array([0.1,0.2,0.3])]) {
+    assert.deepEqual([...encoder.encodeRgb(rgb({data}), {bitDepth:'preserve'})], [...encoder.encodeRgb(rgb({data}), {bitDepth:'float32'})]);
+  }
+});
+
+test('multi-pixel NV12 matches deinterleaved I420; layouts reject bad bounds', () => {
+  const y = {data:new Uint8Array(9).fill(128),stride:3};
+  const u = {data:new Uint8Array([120,121,122,123]),stride:2};
+  const v = {data:new Uint8Array([128,129,130,131]),stride:2};
+  const input: PlanarInput = {width:3,height:3,format:'I420',planes:[y,u,v]};
+  const uv = {data:new Uint8Array([120,128,121,129,122,130,123,131]),stride:4};
+  assert.deepEqual([...encoder.encodePlanarYuv({...input,format:'NV12',planes:[y,uv]})], [...encoder.encodePlanarYuv(input)]);
+  for (const bad of [{...y,stride:2}, {...y,offset:1}, {...y,offset:-1}]) {
+    assert.throws(() => encoder.encodePlanarYuv({...input,planes:[bad,u,v]}), /plane (bounds|data\/offset\/stride)/);
+  }
+  assert.throws(() => encoder.encodePlanarYuv({...input,width:8192,height:8192}), /4 megapixels/);
+});
+
+// Replace selected real exports to inject an escaping Wasm failure without
+// relying on a bug in libjxl/moxcms or exposing a production panic hook.
+async function instrumented(overrides: (exports: WebAssembly.Exports) => Record<string, unknown>) {
+  return createEncoder({instantiateWasm(imports, receive) {
+    WebAssembly.instantiate(wasm, imports).then(({instance,module}) => {
+      receive({exports:{...instance.exports,...overrides(instance.exports)}} as WebAssembly.Instance, module);
+    });
+    return {};
+  }});
+}
+for (const name of ['w_options','w_init','malloc','w_rgb','w_free']) {
+  test(`escaping ${name} exception poisons instance and prevents further cleanup/fallback`, async () => {
+    const original = new WebAssembly.RuntimeError('ICC: injected fatal trap');
+    let cleanup = 0, calls = 0;
+    const instance = await instrumented(exports => ({
+      w_free:() => { cleanup++; return (exports.w_free as () => void)(); },
+      [name]:() => {calls++; throw original;}
+    }));
+    assert.throws(() => instance.encodeRgb(rgb(),{iccFallback:'srgb'}), error => error === original);
+    assert.equal(calls,1);
+    assert.equal(cleanup,0);
+    assert.deepEqual(instance.stats,{});
+    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is poisoned/);
+    assert.deepEqual(instance.stats,{});
+    instance.dispose(); instance.dispose();
+    assert.equal(calls,1); assert.equal(cleanup,0);
+  });
+}
+
+test('dispose releases live module output and permanently rejects encoding', async () => {
+  let cleanup = 0;
+  const instance = await instrumented(exports => ({w_free:() => {cleanup++; (exports.w_free as () => void)();}}));
+  instance.encodeRgb(rgb());
+  instance.dispose(); instance.dispose();
+  assert.equal(cleanup,2); // successful encode cleanup, then dispose
+  assert.deepEqual(instance.stats,{});
+  assert.throws(() => instance.encodeRgb(rgb()), /Encoder is disposed/);
+  assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is disposed/);
+  assert.throws(() => instance.encodeJpeg(new Uint8Array()), /Encoder is disposed/);
+  assert.deepEqual(instance.stats,{});
+});
+
+test('empty codec status messages get a non-empty fallback error', async () => {
+  const instance = await instrumented(() => ({w_encode:() => 1}));
+  for (let attempt=0; attempt<2; attempt++) {
+    assert.throws(() => instance.encodePlanarYuv({...planar('I444'),planes:planar('I444').planes.slice(0,3)}), /Wasm encode failed \(no error detail\)/);
+    assert.deepEqual(instance.stats,{});
+  }
+  instance.dispose();
+});
+
+for (const name of ['malloc','w_jpeg','w_free','free']) {
+  test(`escaping JPEG ${name} exception preserves trap and poisons instance`, async () => {
+    const jpeg = new Uint8Array(await readFile(new URL('./fixtures/baseline.jpg', import.meta.url)));
+    const original = new WebAssembly.RuntimeError('injected JPEG fatal trap');
+    let calls = 0, cleanup = 0;
+    const instance = await instrumented(exports => ({
+      w_free:() => {cleanup++; (exports.w_free as () => void)();},
+      free:(pointer: number) => {cleanup++; (exports.free as (pointer: number) => void)(pointer);},
+      [name]:() => {calls++; throw original;}
+    }));
+    assert.throws(() => instance.encodeJpeg(jpeg), error => error === original);
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+    assert.throws(() => instance.encodeJpeg(jpeg), /Encoder is poisoned/);
+    assert.throws(() => instance.encodeRgb(rgb()), /Encoder is poisoned/);
+    assert.throws(() => instance.encodePlanarYuv(planar('I444')), /Encoder is poisoned/);
+    instance.dispose(); instance.dispose();
+    assert.equal(calls,1);
+    assert.equal(cleanup,name === 'free' ? 1 : 0);
+    assert.deepEqual(instance.stats,{});
+  });
+}
