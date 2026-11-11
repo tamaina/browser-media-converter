@@ -68,10 +68,22 @@ module with its generated declaration. Keep the codec runtime and generated decl
 `typecheck/codec.d.ts` supplies ABI declarations for artifact-free checking;
 keep its signatures aligned with Emscripten's generated declarations.
 `pnpm typecheck:package` checks `src/` without Emscripten, native libjxl or a
-Wasm binary. `test:package` runs that static check, so the main-push release
-workflow includes it. There is no PR test workflow. Real Wasm API tests remain
-local (`pnpm test:api`) and require a rebuilt codec; release CI does not build
-or execute that codec.
+Wasm binary. `test:package` runs that static check, so both the main-push release
+workflow and [pull-request CI](../../.github/workflows/pr-ci.yml) include it, even
+though this package is private. Both workflows use Node 22 for workspace builds
+and `test:package`; neither executes this package's TypeScript source at runtime.
+Real Wasm API tests remain local (`pnpm test:api`), require Node 26 and a rebuilt
+codec, and are not covered by either workflow.
+
+PR CI does not build native libjxl or Wasm, or run `cargo test`. Those checks
+need the patched libjxl checkout and Highway/Brotli sources, a compatible Rust
+toolchain, and (for Wasm) Emscripten with the Rust Emscripten target. Native
+verification also needs system Brotli/LCMS2 and reference libjxl libraries;
+`build-native.sh` defaults to system libjxl 0.11 paths. With unpinned Rust and
+Emscripten versions and no checked-in codec artifacts, that toolchain is left
+to the sequential local instructions above rather than the regular PR job.
+PR CI installs Playwright Chromium and its system dependencies for the other
+packages' `test:package` scripts; Electron-only tests are not included.
 
 For optional native tools, run `bash scripts/build-native.sh` (one job by
 default). This builds the patched encoder library, a separate reference decoder
