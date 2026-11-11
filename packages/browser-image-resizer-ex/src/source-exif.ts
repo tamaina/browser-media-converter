@@ -1,18 +1,23 @@
-import { readExifAsync, type ExifPayload } from '@browser-mc/exif-transplant';
+import { readExifAsync, resetExifOrientation, type ExifPayload } from '@browser-mc/exif-transplant';
 
-/**
- * Reads source EXIF for the still-image EXIF policy.
- *
- * Uses the async reader so JPEG XL `brob` (Brotli-compressed) Exif boxes are
- * decoded instead of being rejected by the sync reader. Malformed, unsupported,
- * or missing EXIF yields `null` so EXIF problems never block a resize.
- *
- * Internal module: not re-exported from the package entry point.
+/** Internal policy reader. Decode failures warn without failing the resize.
+ * JXL pixels are displayed using codestream Orientation by ImageDecoder, so
+ * copied EXIF must describe those already-oriented pixels as Orientation 1.
+ * The drop policy skips metadata reading entirely (source is reported as null).
  */
-export async function readSourceExif(data: Uint8Array): Promise<ExifPayload | null> {
+export async function readSourceExif(
+  data: Uint8Array,
+  warnings: string[] = [],
+  policy: 'keep' | 'drop' | 'drop-gps' = 'keep',
+): Promise<ExifPayload | null> {
+  if (policy === 'drop') return null;
   try {
-    return await readExifAsync(data);
-  } catch {
+    const exif = await readExifAsync(data);
+    return exif?.sourceMime === 'image/jxl'
+      ? { ...exif, bytes: resetExifOrientation(exif.bytes) }
+      : exif;
+  } catch (error) {
+    warnings.push(`Source EXIF could not be preserved: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }

@@ -119,3 +119,22 @@ export function prepareJxlEncodeExif(exif: Uint8Array): { tiff: Uint8Array; orie
   }
   return { tiff, orientation };
 }
+
+/** Copy EXIF for already-oriented pixels; neutralize all IFD0 Orientation entries. */
+export function resetExifOrientation(exif: Uint8Array): Uint8Array {
+  const body = stripExifHeader(exif).slice();
+  const header = parseTiff(body, true);
+  if (!header) invalidEncodeExif();
+  if (header.firstIfdOffset !== 0) {
+    const ifd = readIfd(body, header.firstIfdOffset, header.littleEndian, true);
+    const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    for (const entry of ifd.entries) {
+      if (entry.tag !== 0x112) continue;
+      view.setUint16(entry.entryOffset + 2, 3, header.littleEndian);
+      view.setUint32(entry.entryOffset + 4, 1, header.littleEndian);
+      view.setUint32(entry.valueOffset, 0, header.littleEndian);
+      view.setUint16(entry.valueOffset, 1, header.littleEndian);
+    }
+  }
+  return normalizeJpegExif(body);
+}

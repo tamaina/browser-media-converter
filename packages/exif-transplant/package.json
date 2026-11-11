@@ -10,6 +10,7 @@
     "directory": "packages/exif-transplant"
   },
   "exports": {
+    "./tiff": { "types": "./dist/tiff.d.ts", "import": "./dist/tiff.js" },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

@@ -1,4 +1,4 @@
-import {prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
+import {prepareJxlEncodeExif} from '@browser-mc/exif-transplant/tiff';
 
 export interface MetadataOptions {
   exif?: Uint8Array;

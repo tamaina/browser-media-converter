@@ -9,7 +9,7 @@ import { readWebpExif, rewriteWebpExif } from './webp.js';
 
 export type { ExifPayload, ImageMime } from './types.js';
 export { readJxlExif, readJxlExifAsync, rewriteJxlExif } from './jxl.js';
-export { prepareJxlEncodeExif, hasGpsInExif, stripGpsFromExif } from './tiff.js';
+export { prepareJxlEncodeExif, resetExifOrientation, hasGpsInExif, stripGpsFromExif } from './tiff.js';
 
 export function detectImageMime(data: Uint8Array): ImageMime {
   if (isJxl(data)) return 'image/jxl';
@@ -30,7 +30,7 @@ export function readExif(data: Uint8Array, mime = detectImageMime(data)): ExifPa
   return readAvifExif(data);
 }
 
-/** Reads all supported formats, including JPEG XL brob EXIF in Node and browsers. */
+/** Reads all supported formats. JXL brob requires native Brotli; rejects above 1 MiB output. */
 export async function readExifAsync(data: Uint8Array, mime = detectImageMime(data)): Promise<ExifPayload | null> {
   return mime === 'image/jxl' ? readJxlExifAsync(data) : readExif(data, mime);
 }

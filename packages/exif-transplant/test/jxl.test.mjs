@@ -6,7 +6,7 @@ import { concat, u32 } from '@browser-mc/binary';
 import { box, boxes } from '@browser-mc/media-container';
 import { detectImageMime, readExif, writeExif, removeExif, transplantExif, removeGpsExif,
   readExifAsync, readExifPayloadAsync, readJxlExif, readJxlExifAsync, transplantExifAsync, removeGpsExifAsync,
-  hasGpsInExif, prepareJxlEncodeExif, stripGpsFromExif } from '../dist/index.js';
+  hasGpsInExif, prepareJxlEncodeExif, resetExifOrientation, stripGpsFromExif } from '../dist/index.js';
 
 const signature = box('JXL ', new Uint8Array([13, 10, 135, 10]));
 const ftyp = box('ftyp', new TextEncoder().encode('jxl '), u32(0), new TextEncoder().encode('jxl '));
@@ -57,7 +57,7 @@ test('Orientation 1..8 round-trips without changing the codestream or caller byt
     assert.deepEqual(readExif(result).bytes, input);
     assert.deepEqual(prepareJxlEncodeExif(input), { tiff: body, orientation });
     assert.deepEqual(input, saved);
-    assert.deepEqual(removeExif(result), container());
+    assert.deepEqual(removeExif(result), concat([signature, ftyp, box('jxll', new Uint8Array([10])), box('jxlc', raw)]));
     const codestream = [...boxes(result, 0, result.length)].find(entry => entry.type === 'jxlc');
     assert.deepEqual(result.subarray(codestream.start + codestream.headerSize), raw);
   }
@@ -145,16 +145,15 @@ test('async readers handle plain Exif, offsets, missing Exif and malformed brob'
     for (const unsupported of [undefined, class {
       constructor() { throw new TypeError('Unsupported compression format: brotli'); }
     }]) {
-      // Pure-JS fallback path (as in Chromium).
+      // Unsupported runtimes fail before entering the unbounded JS decoder.
       globalThis.DecompressionStream = unsupported;
-      assert.deepEqual(await readExifAsync(image), expected);
-      assert.deepEqual(await readJxlExifAsync(image), expected);
-      assert.deepEqual(await removeGpsExifAsync(image), writeExif(image, stripGpsFromExif(expected.bytes)));
-      assert.deepEqual(await transplantExifAsync(image, raw), writeExif(raw, expected.bytes));
+      for (const call of [() => readExifAsync(image), () => readJxlExifAsync(image),
+        () => removeGpsExifAsync(image), () => transplantExifAsync(image, raw),
+        () => readExifAsync(malformed)]) {
+        await assert.rejects(call(), /no safe bounded JavaScript decoder/);
+      }
       assert.ok(await readExifAsync(writeExif(raw, tiff())));
-      // Sync must refuse before any Brotli work, so malformed data gets the "use async" error.
       assert.throws(() => readExif(malformed), useAsync);
-      await assert.rejects(readExifAsync(malformed), /Invalid JPEG XL brob/);
     }
     assert.deepEqual(image, savedImage);
     assert.deepEqual(removeExif(image), container());
@@ -215,4 +214,84 @@ test('strict encode helper validates header, IFD0 bounds and Orientation', () =>
   for (const body of invalid) assert.throws(() => prepareJxlEncodeExif(body), TypeError);
   const padded = new Uint8Array(40); padded.set(tiff(7), 5);
   assert.equal(prepareJxlEncodeExif(padded.subarray(5, 31)).orientation, 7);
+});
+
+// 106 compressed bytes expand to 64 MiB of zeros. Store the compressed fixture
+// so the test never allocates the expanded payload to construct its input.
+const bomb = new Uint8Array(Buffer.from('y///P/gnAOKxQCD3/o///3/wTwDEYRGA7v0f////4J8AiMMCAN37P/7//8E/ARCHBQC693/8//+DfwIgDgsAdO//+P//B/8EQBwWAOje//H//w/+CYA4LADQvf/L//8//BMAcVgAoHv/Bw==', 'base64'));
+test('brob decompression bomb rejects on native and unsupported JS paths', async () => {
+  const image = container(box('brob', new TextEncoder().encode('Exif'), bomb));
+  const saved = globalThis.DecompressionStream;
+  try {
+    for (const implementation of [saved, undefined]) {
+      globalThis.DecompressionStream = implementation;
+      for (const call of [() => readExifAsync(image), () => readJxlExifAsync(image),
+        () => removeGpsExifAsync(image), () => transplantExifAsync(image, raw)]) {
+        await assert.rejects(call(), implementation ? /exceeds 1 MiB/ : /no safe bounded JavaScript decoder/);
+      }
+    }
+  } finally { globalThis.DecompressionStream = saved; }
+});
+
+test('native stream cancels as soon as the cumulative output cap is exceeded', async () => {
+  const saved = globalThis.DecompressionStream;
+  let cancelled = false, pulled = 0;
+  try {
+    globalThis.DecompressionStream = class {
+      constructor() {
+        return {
+          writable: new WritableStream(),
+          readable: new ReadableStream({
+            pull(controller) { pulled++; controller.enqueue(new Uint8Array(256 * 1024)); },
+            cancel() { cancelled = true; },
+          }, { highWaterMark: 0 }),
+        };
+      }
+    };
+    await assert.rejects(readExifAsync(container(brob(tiff()))), /exceeds 1 MiB/);
+    assert.equal(cancelled, true);
+    assert.equal(pulled, 5);
+  } finally { globalThis.DecompressionStream = saved; }
+});
+
+test('brob output cap accepts the exact boundary and rejects one byte over', async () => {
+  for (const length of [1024 * 1024, 1024 * 1024 + 1]) {
+    const body = new Uint8Array(length - 4); body.set(tiff());
+    if (length === 1024 * 1024) assert.equal((await readExifAsync(container(brob(body)))).bytes.length, length + 2);
+    else await assert.rejects(readExifAsync(container(brob(body))), /exceeds 1 MiB/);
+  }
+});
+
+test('Exif edits drop plain and Brotli-wrapped JPEG reconstruction data', async () => {
+  for (const reconstruction of [box('jbrd', new Uint8Array([1])),
+    box('brob', new TextEncoder().encode('jbrd'), new Uint8Array([1]))]) {
+    assert.deepEqual(removeExif(container(reconstruction)), container(reconstruction), 'no Exif edit preserves reconstruction');
+    const image = container(exifBox(tiff(6, true, true)), reconstruction);
+    for (const edited of [removeExif(image), writeExif(image, tiff(3)), removeGpsExif(image),
+      await removeGpsExifAsync(image), transplantExif(writeExif(raw, tiff(2)), image),
+      await transplantExifAsync(writeExif(raw, tiff(2)), image)]) {
+      assert.ok(![...boxes(edited, 0, edited.length)].some(b => b.type === 'jbrd' || b.type === 'brob'));
+      assert.deepEqual(removeExif(edited), container());
+    }
+  }
+});
+
+test('explicit Orientation sanitation handles invalid values/types, endian and view offsets', () => {
+  for (const little of [true, false]) for (const orientation of [0, 6, 9, 65535]) {
+    const body = tiff(orientation, little, true);
+    new DataView(body.buffer).setUint16(12, 4, little); // non-SHORT tag
+    const padded = concat([new Uint8Array([99]), prefix, body, new Uint8Array([99])]);
+    const source = padded.subarray(1, padded.length - 1), saved = source.slice();
+    const sanitized = resetExifOrientation(source);
+    assert.equal(prepareJxlEncodeExif(sanitized).orientation, 1);
+    assert.equal(hasGpsInExif(sanitized), true);
+    assert.deepEqual(source, saved);
+  }
+  assert.throws(() => resetExifOrientation(tiff().subarray(0, 24)), TypeError);
+  const duplicate = new Uint8Array(38); duplicate.set(tiff()); duplicate[8] = 2;
+  duplicate.set(duplicate.slice(10, 22), 22);
+  const sanitized = resetExifOrientation(duplicate);
+  const view = new DataView(sanitized.buffer, sanitized.byteOffset + 6);
+  assert.equal(view.getUint16(18, true), 1);
+  assert.equal(view.getUint16(30, true), 1);
 });

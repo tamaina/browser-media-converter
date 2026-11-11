@@ -1,6 +1,7 @@
-import {test} from 'node:test';
+import {test as nodeTest} from 'node:test';
+import {existsSync} from 'node:fs';
 import assert from 'node:assert/strict';
-import {readFile, writeFile, mkdtemp, rm, open} from 'node:fs/promises';
+import {readFile, writeFile, mkdtemp, mkdir, rm, open} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {brotliDecompressSync} from 'node:zlib';
 import {join, resolve} from 'node:path';
@@ -10,15 +11,27 @@ import type {EncodeOptions, PlanarInput, RgbInput} from '@browser-mc/libjxl-wasm
 import {readExif, readExifAsync, writeExif, removeExif, transplantExif, prepareJxlEncodeExif} from '@browser-mc/exif-transplant';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-if (!process.env.TMPDIR) throw Error('Set TMPDIR to the repository build/tmp before tests');
-const dir = await mkdtemp(join(process.env.TMPDIR, 'metadata-test-'));
+const tempRoot = process.env.TMPDIR ?? join(root, 'build/tmp');
+await mkdir(tempRoot, {recursive:true});
+const dir = await mkdtemp(join(tempRoot, 'metadata-test-'));
 const inspector = join(root, 'build/inspect-metadata');
 const library = resolve(process.env.JXL_LIBRARY ?? join(root, 'build/native/lib/libjxl.so'));
-execFileSync(process.env.CXX ?? 'c++', ['-std=c++17', '-O2',
-  '-I', process.env.JXL_INCLUDE ?? join(root, 'build/libjxl/lib/include'),
-  '-I', join(root, 'build/native/lib/include'),
+const include = process.env.JXL_INCLUDE ?? join(root, 'build/libjxl/lib/include');
+let nativeSkip: string | undefined;
+if (!existsSync(library) || !existsSync(join(include, 'jxl/decode.h'))) {
+  nativeSkip = 'Native libjxl headers/library unavailable; run scripts/build-native.sh or set JXL_INCLUDE/JXL_LIBRARY';
+} else {
+  try { execFileSync(process.env.CXX ?? 'c++', ['--version'], {stdio:'ignore'}); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    nativeSkip = 'C++ compiler unavailable; install it or set CXX';
+  }
+}
+if (!nativeSkip) execFileSync(process.env.CXX ?? 'c++', ['-std=c++17', '-O2',
+  '-I', include, '-I', join(root, 'build/native/lib/include'),
   join(root, 'tools/inspect_metadata.cc'), library, `-Wl,-rpath,${resolve(library, '..')}`, '-o', inspector],
   {stdio:'inherit'});
+const test = (name: string, fn: () => unknown) => nodeTest(name, {skip:nativeSkip}, fn);
 const wasm = await readFile(join(root, 'build/wasm/codec.wasm'));
 const encoder = await createEncoder({instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({instance, module}) => receive(instance, module));
@@ -145,7 +158,8 @@ test('shared JPEG EXIF payload encodes; post-encode EXIF edits preserve codestre
   const raw = encoder.encodeRgb(rgb);
   assert.equal(raw[0], 255);
   const wrapped = writeExif(raw, exif(8));
+  assert.deepEqual(boxes(wrapped).find(b=>b.type==='jxll')?.payload, new Uint8Array([10]));
   assert.deepEqual(await inspect(wrapped), {width:2,height:3,orientation:1});
   assert.deepEqual(await inspect(removeExif(wrapped)), {width:2,height:3,orientation:1});
 });
-test.after(async()=>{await rm(dir,{recursive:true,force:true});});
+nodeTest.after(async()=>{await rm(dir,{recursive:true,force:true});});

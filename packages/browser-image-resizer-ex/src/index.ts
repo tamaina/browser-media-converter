@@ -262,7 +262,8 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
   }
 
   const exifPolicy = options.exif ?? 'keep';
-  const sourceExif = await readSourceExif(inputBytes);
+  const exifWarnings: string[] = [];
+  const sourceExif = await readSourceExif(inputBytes, exifWarnings, exifPolicy);
   const frame = await decodeFirstImageFrame(inputBytes, inputMime, {
     colorSpaceConversion: options.colorSpaceConversion ?? 'none',
   });
@@ -272,6 +273,7 @@ export async function resizeAndConvertImage(options: BrowserImageResizerOptions)
     const color = classifyFrameColor(inputInspection);
     const size = resolveTargetSize(frame.displayWidth, frame.displayHeight, options);
     const resized = await resizeVideoFrame(frame, size, options);
+    resized.warnings.push(...exifWarnings);
     const outputColorMetadata = compatibleOutputColorMetadata(inputColorMetadata, outputMime, {
       canvasColorSpace: resized.canvasColorSpace,
       preserveInput: options.colorMetadata !== 'canvas-sdr',

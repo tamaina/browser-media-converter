@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { build } from 'esbuild';
 import { chromium } from 'playwright';
 import { createEncoder } from '../../libjxl-wasm/src/api.ts';
 
-if (!process.env.TMPDIR) throw Error('Set TMPDIR to the repository build/tmp before browser tests');
 
 // Bundle the published entry with browser resolution: node: imports and TLA fail here.
 const { outputFiles } = await build({
@@ -12,6 +12,11 @@ const { outputFiles } = await build({
   bundle: true, platform: 'browser', format: 'iife', globalName: 'exifApi',
   target: 'es2020', write: false,
 });
+const chrome = process.env.CHROME_EXECUTABLE_PATH ?? chromium.executablePath();
+if (!existsSync(chrome)) {
+  console.log(`SKIP browser EXIF tests: Chromium executable unavailable (${chrome}); install Playwright Chromium or set CHROME_EXECUTABLE_PATH`);
+  process.exit(0);
+}
 const wasm = await readFile(new URL('../../libjxl-wasm/build/wasm/codec.wasm', import.meta.url));
 const encoder = await createEncoder({ instantiateWasm(imports, receive) {
   WebAssembly.instantiate(wasm, imports).then(({ instance, module }) => receive(instance, module));
@@ -52,6 +57,24 @@ try {
         at += size === 1 ? Number(view.getBigUint64(8)) : size || image.length - at;
       }
       check(types.includes(i === 0 ? 'Exif' : 'brob'), 'encoder fixture box compression');
+      let nativeBrotli = false;
+      try { new DecompressionStream('brotli'); nativeBrotli = true; } catch {}
+      if (i === 1 && !nativeBrotli) {
+        for (const call of [() => api.readExifAsync(image), () => api.readJxlExifAsync(image),
+          () => api.transplantExifAsync(image, image), () => api.removeGpsExifAsync(image)]) {
+          let message = '';
+          try { await call(); } catch (error) { message = String(error?.message); }
+          check(/no safe bounded JavaScript decoder/.test(message), `unsupported brob: ${message}`);
+        }
+        // Box-only operations and the sync reader's guidance still work.
+        let syncMessage = '';
+        try { api.readExif(image); } catch (error) { syncMessage = error.message; }
+        check(/brob.*readExifAsync/.test(syncMessage), 'sync brob guidance');
+        check(await api.readExifAsync(api.removeExif(image)) === null, 'remove brob without decode');
+        check(api.prepareJxlEncodeExif(api.readExif(api.writeExif(image, new Uint8Array(replacement))).bytes).orientation === 3, 'rewrite brob without decode');
+        check(equal(image, saved), 'caller bytes preserved');
+        continue;
+      }
       const payload = await api.readExifAsync(image);
       check(api.prepareJxlEncodeExif(payload.bytes).orientation === 6, 'Orientation 6 read');
       check(equal((await api.readJxlExifAsync(image)).bytes, payload.bytes), 'low-level reader');
@@ -93,7 +116,7 @@ try {
     return { fixtures: fixtures.length, brotliStream, orientation: '6 → 3 tag edit; codestream bytes unchanged' };
   }, { fixtures, replacement: Array.from(tiff(3)) });
   assert.equal(result.fixtures, 2);
-  console.log(`Chromium ${browser.version()}: plain EXIF sync+async, brob EXIF async (sync throws) read/write/remove/transplant/GPS passed (Brotli DS: ${result.brotliStream}); ${result.orientation}`);
+  console.log(`Chromium ${browser.version()}: plain EXIF sync+async, brob EXIF native decode or explicit unsupported rejection passed (Brotli DS: ${result.brotliStream}); ${result.orientation}`);
 } finally {
   await browser?.close();
 }

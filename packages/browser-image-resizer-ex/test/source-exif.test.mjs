@@ -28,25 +28,48 @@ test('JXL brob Exif is read instead of dropped (sync readExif would throw)', asy
   const body = tiff(6, true), image = container(brob(body));
   assert.throws(() => readExif(image), /readExifAsync/);
   const payload = await readSourceExif(image);
-  assert.deepEqual(payload, { bytes: concat([prefix, body]), sourceMime: 'image/jxl' });
-  // The payload feeds the keep / drop-gps policies unchanged.
+  assert.deepEqual(payload, { bytes: concat([prefix, tiff(1, true)]), sourceMime: 'image/jxl' });
+  // Orientation is identity for already-oriented pixels; GPS remains available.
   assert.equal(hasGpsInExif(payload.bytes), true);
   assert.equal(hasGpsInExif(stripGpsFromExif(payload.bytes)), false);
 });
 
-test('JXL brob Exif is read with the pure-JS Brotli fallback (no DecompressionStream)', async () => {
+test('unsupported Brotli runtime warns instead of running unsafe JavaScript decode', async () => {
   const saved = globalThis.DecompressionStream;
   try {
     globalThis.DecompressionStream = undefined;
     const body = tiff(3);
-    assert.deepEqual(await readSourceExif(container(brob(body))), { bytes: concat([prefix, body]), sourceMime: 'image/jxl' });
+    const warnings = [];
+    assert.equal(await readSourceExif(container(brob(body)), warnings), null);
+    assert.match(warnings[0], /no safe bounded JavaScript decoder/);
   } finally { globalThis.DecompressionStream = saved; }
 });
 
 test('plain JXL Exif still reads; missing, malformed and unsupported EXIF yield null', async () => {
-  assert.deepEqual((await readSourceExif(writeExif(raw, tiff(8)))).bytes, concat([prefix, tiff(8)]));
+  assert.deepEqual((await readSourceExif(writeExif(raw, tiff(8)))).bytes, concat([prefix, tiff(1)]));
   assert.equal(await readSourceExif(container()), null);
   assert.equal(await readSourceExif(container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255])))), null);
   assert.equal(await readSourceExif(container(brob(new Uint8Array()))), null);
   assert.equal(await readSourceExif(new Uint8Array([1, 2, 3, 4])), null);
+});
+
+test('drop skips malformed compressed EXIF entirely; missing EXIF does not warn', async () => {
+  const warnings = [];
+  assert.equal(await readSourceExif(container(box('brob', new TextEncoder().encode('Exif'), new Uint8Array([255]))), warnings, 'drop'), null);
+  assert.equal(await readSourceExif(container(), warnings), null);
+  assert.deepEqual(warnings, []);
+  assert.equal(await readSourceExif(container(box('Exif', new Uint8Array([0]))), warnings), null);
+  assert.match(warnings[0], /Source EXIF could not be preserved/);
+});
+
+test('keep and drop-gps normalize every JXL orientation without mutating the source', async () => {
+  for (const policy of ['keep', 'drop-gps']) for (let orientation = 1; orientation <= 8; orientation++) {
+    const image = writeExif(raw, tiff(orientation, true)), saved = image.slice();
+    const warnings = [];
+    const payload = await readSourceExif(image, warnings, policy);
+    assert.deepEqual(payload.bytes, concat([prefix, tiff(1, true)]));
+    assert.equal(hasGpsInExif(payload.bytes), true);
+    assert.deepEqual(image, saved);
+    assert.deepEqual(warnings, []);
+  }
 });

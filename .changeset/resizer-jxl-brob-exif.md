@@ -2,4 +2,4 @@
 "@browser-mc/browser-image-resizer-ex": patch
 ---
 
-Keep source EXIF for JPEG XL inputs whose Exif is stored in a Brotli-compressed `brob` box. Source EXIF is now read with the asynchronous `readExifAsync` from `@browser-mc/exif-transplant`, so the `keep` and `drop-gps` EXIF policies no longer silently drop it. Malformed or unsupported source EXIF is still ignored.
+Read source EXIF asynchronously for `keep` and `drop-gps`, including JPEG XL brob when native Brotli is available. Decoder failures and malformed metadata add result warnings instead of silently dropping EXIF. Skip EXIF reading for `drop`. Reset JXL Exif Orientation to 1 for already-oriented decoded pixels. Untyped JXL bytes are recognized and default to AVIF output; browser JXL ImageDecoder support is still required.

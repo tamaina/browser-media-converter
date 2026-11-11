@@ -35,13 +35,13 @@ Already oriented pixels require EXIF with Orientation removed or set to 1.
 Malformed TIFF headers, IFD0 tables and Orientation entries are rejected;
 other EXIF tags and XMP bytes are preserved without interpreting their contents.
 Metadata is optional and applies only to that encode call. See
-[`WASM.md`](experiments/jxl-planar-xyb/WASM.md) for the full API and verification.
+[`libjxl-wasm` README](packages/libjxl-wasm/README.md) for the full API and verification.
 
-EXIF payloads for JPEG XL encoding should come from `readExif(source)?.bytes`
+EXIF payloads for JPEG XL encoding should come from `(await readExifAsync(source))?.bytes`
 or shared helpers in `@browser-mc/exif-transplant`. The encode-time `exif`
 option sets codestream Orientation from IFD0; supply pixels before that transform.
-Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update only
-the Exif box and do not change codestream Orientation. `xmp?: Uint8Array` remains
+Post-encode `writeExif` / `transplantExif` / `removeExif` on JPEG XL update
+the Exif box and drop dependent `jbrd` reconstruction data, without changing codestream Orientation. `xmp?: Uint8Array` remains
 an opaque encoder option, with `compressBoxes` controlling both metadata boxes.
 
 ## Commands
@@ -106,3 +106,8 @@ Current Electron result for `hdrrec2020.avif`:
 - Input: `I444P10`, `2048x1365`, `primaries: bt2020`, `matrix: bt2020-ncl`, `fullRange: true`
 - Raw resize: `I444P10`, `1024x682`, `primaries: bt2020`, `matrix: bt2020-ncl`
 - Canvas comparison: converts to `BGRA` with `primaries: smpte432`
+
+EXIF is validated strictly before encoding. For camera metadata with invalid
+Orientation (including 0 or non-SHORT entries), sanitize first; for structurally
+truncated TIFF, omit EXIF and report a warning. See the
+[`EXIF sanitation guide`](packages/exif-transplant/README.md#sanitizing-exif-before-encoding).

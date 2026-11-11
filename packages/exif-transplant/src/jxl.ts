@@ -26,9 +26,9 @@ function* jxlBoxes(data: Uint8Array): Generator<IsobmffBox> {
   }
 }
 
-function isExifBox(data: Uint8Array, entry: IsobmffBox): boolean {
-  return entry.type === 'Exif' || (entry.type === 'brob' && entry.end - entry.start - entry.headerSize >= 4
-    && readAscii(data, entry.start + entry.headerSize, 4) === 'Exif');
+function isMetadataBox(data: Uint8Array, entry: IsobmffBox, type: string): boolean {
+  return entry.type === type || (entry.type === 'brob' && entry.end - entry.start - entry.headerSize >= 4
+    && readAscii(data, entry.start + entry.headerSize, 4) === type);
 }
 
 function parseExif(payload: Uint8Array): ExifPayload {
@@ -40,18 +40,9 @@ function parseExif(payload: Uint8Array): ExifPayload {
 
 const BROB_ERROR = 'Invalid JPEG XL brob EXIF Brotli data';
 
-/** Async-only fallback when DecompressionStream('brotli') is unavailable (e.g. Chromium). Loaded lazily. */
-async function decompressBrobPureJs(compressed: Uint8Array): Promise<Uint8Array> {
-  const { decompress } = await import('brotli/decompress.js');
-  try {
-    const result = decompress(compressed);
-    // Pure-JS decode may return a short buffer for garbage; keep the public error stable.
-    if (!(result instanceof Uint8Array) || result.length < 4) throw new Error('Brotli decoder returned truncated EXIF payload');
-    return result;
-  } catch (cause) {
-    throw new Error(BROB_ERROR, { cause });
-  }
-}
+// 16 times the encoder's 64 KiB EXIF limit, including the four-byte TIFF offset.
+// A brob stream must never accumulate unbounded output, even for non-EXIF data.
+export const MAX_JXL_EXIF_BYTES = 1024 * 1024;
 
 async function decompressBrob(payload: Uint8Array): Promise<Uint8Array> {
   const compressed = payload.subarray(4);
@@ -62,11 +53,29 @@ async function decompressBrob(payload: Uint8Array): Promise<Uint8Array> {
   } catch {
     // Chromium and older runtimes lack Brotli DecompressionStream support.
   }
-  if (!decompressor) return decompressBrobPureJs(compressed);
+  // brotli@2.1.0's output_size is only an initial allocation: it grows without
+  // limit. Fail closed rather than run that synchronous, unbounded fallback.
+  if (!decompressor) throw new Error('JPEG XL brob EXIF requires DecompressionStream(brotli); no safe bounded JavaScript decoder is available');
   try {
     const stream = new Blob([new Uint8Array(compressed)]).stream().pipeThrough(decompressor);
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        length += value.byteLength;
+        if (length > MAX_JXL_EXIF_BYTES) {
+          await reader.cancel('JPEG XL Exif exceeds 1 MiB');
+          throw new RangeError('JPEG XL brob EXIF exceeds 1 MiB decompressed limit');
+        }
+        chunks.push(value);
+      }
+      return concat(chunks);
+    } finally { reader.releaseLock(); }
   } catch (cause) {
+    if (cause instanceof RangeError) throw cause;
     throw new Error(BROB_ERROR, { cause });
   }
 }
@@ -78,7 +87,7 @@ async function decompressBrob(payload: Uint8Array): Promise<Uint8Array> {
 export function readJxlExif(data: Uint8Array): ExifPayload | null {
   if (rawCodestream(data)) return null;
   for (const entry of jxlBoxes(data)) {
-    if (!isExifBox(data, entry)) continue;
+    if (!isMetadataBox(data, entry, 'Exif')) continue;
     if (entry.type === 'brob') {
       throw new Error('JPEG XL Exif is Brotli-compressed (brob) and synchronous readers do not decompress it; '
         + 'use readExifAsync, readJxlExifAsync, transplantExifAsync or removeGpsExifAsync');
@@ -88,28 +97,31 @@ export function readJxlExif(data: Uint8Array): ExifPayload | null {
   return null;
 }
 
-/** Reads plain or Brotli-wrapped Exif, preferring platform Brotli when available. */
+/** Reads plain or Brotli-wrapped Exif. brob requires native Brotli and is capped at 1 MiB. */
 export async function readJxlExifAsync(data: Uint8Array): Promise<ExifPayload | null> {
   if (rawCodestream(data)) return null;
   for (const entry of jxlBoxes(data)) {
-    if (!isExifBox(data, entry)) continue;
+    if (!isMetadataBox(data, entry, 'Exif')) continue;
     const payload = data.subarray(entry.start + entry.headerSize, entry.end);
     return parseExif(entry.type === 'brob' ? await decompressBrob(payload) : payload);
   }
   return null;
 }
 
-/** Update only the Exif box. Codestream Orientation and pixels are preserved. */
+/** Update Exif and drop dependent JPEG reconstruction (jbrd). Preserve codestream Orientation and pixels. */
 export function rewriteJxlExif(data: Uint8Array, exifBody: Uint8Array | null): Uint8Array {
   const replacement = exifBody === null ? null : box('Exif', u32(0), stripExifHeader(exifBody));
   if (rawCodestream(data)) {
     if (!replacement) return data.slice();
-    return concat([SIGNATURE, box('ftyp', new TextEncoder().encode('jxl '), u32(0), new TextEncoder().encode('jxl ')), replacement, box('jxlc', data)]);
+    return concat([SIGNATURE, box('ftyp', new TextEncoder().encode('jxl '), u32(0), new TextEncoder().encode('jxl ')), box('jxll', new Uint8Array([10])), replacement, box('jxlc', data)]);
   }
+  const entries = [...jxlBoxes(data)];
+  const editsExif = replacement !== null || entries.some(entry => isMetadataBox(data, entry, 'Exif'));
   const chunks: Uint8Array[] = [];
   let inserted = false;
-  for (const entry of jxlBoxes(data)) {
-    if (isExifBox(data, entry)) continue;
+  for (const entry of entries) {
+    // Exif edits invalidate the original JPEG reconstruction metadata.
+    if (isMetadataBox(data, entry, 'Exif') || (editsExif && isMetadataBox(data, entry, 'jbrd'))) continue;
     // Insert before the first codestream box (including a size-zero final box).
     if (replacement && !inserted && (entry.type === 'jxlc' || entry.type === 'jxlp')) {
       chunks.push(replacement);

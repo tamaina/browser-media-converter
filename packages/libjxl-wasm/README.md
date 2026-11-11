@@ -34,21 +34,29 @@ source trees are reused without a network fetch.
 Run from this package, sequentially. Emscripten defaults to
 `~/emsdk/emsdk_env.sh` (`EMSDK_ENV` overrides it); `CMAKE` overrides CMake.
 Emscripten's `--emit-tsd` also requires an existing `tsc` executable on `PATH`.
-Add an installed TypeScript toolchain to `PATH`; there is no need to install
-dependencies in this package. Node executes the API and tests without `tsc`.
+Install workspace dependencies with `pnpm install --frozen-lockfile` from the
+repository root, then build the EXIF validator and its workspace dependencies:
+`pnpm --filter @browser-mc/exif-transplant build`. This is required even for
+metadata-free encodes. The encoder imports the narrow `@browser-mc/exif-transplant/tiff`
+entry, which does not load container rewriters or a Brotli decoder.
+Add the installed TypeScript toolchain to `PATH`. Node executes the API and tests
+without compiling them with `tsc`.
 
 ```sh
-export TMPDIR="$(cd ../.. && pwd)/build/tmp"
+export TMPDIR="$PWD/build/tmp" TMP="$PWD/build/tmp" TEMP="$PWD/build/tmp"
+export XDG_CACHE_HOME="$TMPDIR/cache" npm_config_cache="$TMPDIR/npm" EMCC_TEMP_DIR="$TMPDIR/emcc"
 export EM_CACHE="$PWD/build/em-cache"
-export CARGO_TARGET_DIR="$PWD/target"
+export CARGO_TARGET_DIR="$PWD/build/target"
 export EMCC_CORES=1 CMAKE_BUILD_PARALLEL_LEVEL=1
 # Use the host compiler rather than an ambient cc wrapper.
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/gcc
-mkdir -p "$TMPDIR" "$EM_CACHE"
-cargo test --lib --locked --jobs 1
+mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$npm_config_cache" "$EMCC_TEMP_DIR" "$EM_CACHE"
 bash scripts/build-wasm.sh
 bash scripts/build-native.sh   # for test/metadata.test.ts (inspect_metadata)
+export JXL_INCLUDE="$PWD/build/libjxl/lib/include" JXL_LIBRARY="$PWD/build/native/lib/libjxl.so"
+export LD_LIBRARY_PATH="$PWD/build/native/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 node --test --test-isolation=none --test-concurrency=1 test/api.test.ts test/metadata.test.ts
+cargo test --lib --locked --jobs 1
 ```
 
 For a bridge-only change, `LINK_ONLY=1 bash scripts/build-wasm.sh` reruns Cargo
@@ -129,9 +137,9 @@ including TIFF with no IFD0, means identity. If the pixels have already been
 oriented, remove Orientation or set it to 1 before encoding to avoid applying
 the transform twice. XMP orientation is not interpreted or reconciled with EXIF.
 
-EXIF payloads for JPEG XL encoding should come from `readExif(source)?.bytes`
+EXIF payloads for JPEG XL encoding should come from `(await readExifAsync(source))?.bytes`
 or shared helpers in `@browser-mc/exif-transplant`. Post-encode `writeExif` /
-`transplantExif` / `removeExif` on JPEG XL update only the Exif box and do
+`transplantExif` / `removeExif` on JPEG XL update the Exif box and drop dependent `jbrd` reconstruction data. They do
 **not** change codestream Orientation.
 
 `test/metadata.test.ts` compiles `tools/inspect_metadata.cc` into
@@ -140,7 +148,11 @@ or shared helpers in `@browser-mc/exif-transplant`. Post-encode `writeExif` /
 It checks EXIF/XMP payloads independently (including Brotli decompression),
 all eight orientations with retained and displayed dimensions, RGB and planar
 paths, per-call reset, payload caps, malformed metadata rejection, and that
-post-encode Exif edits keep codestream Orientation. It requires `TMPDIR`.
+post-encode Exif edits keep codestream Orientation. It uses `TMPDIR` or the package's `build/tmp`. If the native library, headers,
+or C++ compiler are absent, metadata tests skip with an explicit reason; the
+Wasm API suite still runs. Override `CXX`, `JXL_INCLUDE`, and `JXL_LIBRARY` for
+other native installations. Compilation failures with present prerequisites
+remain test failures.
 
 ## HDR base
 
@@ -188,3 +200,8 @@ and the repository's webcodecs-color descriptors. In tested Chrome 156, raw
 VideoFrame alpha formats accept 8/10-bit but reject AP12 enum values; direct
 12-bit plane encoding works. WebCodecs alpha association semantics are
 **unconfirmed** in this work; callers must supply straight samples.
+
+EXIF is validated strictly before encoding. For camera metadata with invalid
+Orientation (including 0 or non-SHORT entries), sanitize first; for structurally
+truncated TIFF, omit EXIF and report a warning. See the
+[`EXIF sanitation guide`](../exif-transplant/README.md#sanitizing-exif-before-encoding).
